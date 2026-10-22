@@ -20,8 +20,12 @@ if args.verified_root_bundle and not args.verified_root:
     parser.error('A policy bundle requires verified block mode')
 if args.verified_root_bundle and args.negative_verified_block:
     parser.error('Select either bundle policy qualification or the isolated DMA snapshot fault')
-if (args.verified_root or args.negative_verified_block) and args.component != 'NativeVirtioBlock':
+if args.negative_verified_block and args.component != 'NativeVirtioBlock':
+    parser.error('The isolated DMA snapshot fault exists only in the concrete virtio block transport')
+if args.verified_root and args.component not in ('NativeVirtioBlock', 'NativeMsdc'):
     parser.error('Verified block mode requires the concrete read-only block transport')
+if args.verified_root_bundle and args.component != 'NativeVirtioBlock':
+    parser.error('A policy bundle is selected only by NativeVirtioBlock')
 if args.negative_verified_block and not args.verified_root:
     parser.error('The isolated input fault requires verified block mode')
 component = args.component
@@ -33,7 +37,7 @@ out = ROOT / 'build' / {'ArmVirtPlatform': 'armvirt-platform', 'ArmDTPlatform': 
                         'NativeMobileDisplay': 'native-mobile-display', 'NativeVirtioConsole': 'native-virtio-console',
                         'NativeLegacyDisplay': 'native-legacy-display', 'NativeGOPPresenter': 'native-gop-presenter', 'NativeOfflineGPU':'native-offline-gpu','NativeOfflineAccelerator':'native-offline-accelerator','NativeIOGPUProviderProbe':'native-original-provider', 'NativeUfs':'native-ufs', 'NativeHidInput':'native-hid-input', 'NativeKeyStoreEvents':'native-keystore-events', 'NativeAdreno':'native-adreno',
                         'NativeMsdc': 'native-msdc'}[component]
-if args.verified_root:
+if args.verified_root and component == 'NativeVirtioBlock':
     out = ROOT / ('build/native-virtio-block-verified-fault' if args.negative_verified_block else 'build/native-virtio-block-verified')
     if args.verified_root_bundle:
         out = ROOT / 'build/native-virtio-block-verified-bundle'
@@ -96,11 +100,19 @@ if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_GICV2') == '1':
 # IOBlockStorageDevice subclasses; their kernel link needs the audited storage aliases (board.toml, the NativeMsdc bindings
 # entry). Without it the driver serves the persistent store only and links on its own. With the RAM block linked and no
 # NativeUfs, the store is also exported under the native_ufs_store_* names that NativeRamBlock imports.
+# --verified-root (window block devices required) builds the windows verified against the owner-signed policy region in
+# userdata and defines native_ufs_block_authenticates for NativeVirtioBlock's root authorization; the kernel link then
+# needs verified_root_key, vr_open, vr_verify_block and vr_xnu_crypto (libA04BR3RootKey.a). The object stays in
+# build/native-msdc.
 if component == 'NativeMsdc':
     block_devices = os.environ.get('XNU_NATIVE_MSDC_BLOCK') == '1'
     command += ['-DNATIVE_MSDC_BLOCK_DEVICES=' + ('1' if block_devices else '0')]
     if block_devices:
         command += ['-I', str(ROOT / 'build/storage-abi/include')]
+    if args.verified_root:
+        if not block_devices:
+            parser.error('NativeMsdc --verified-root needs the window block devices (XNU_NATIVE_MSDC_BLOCK=1)')
+        command += ['-I', str(ROOT / 'kits/VerifiedRoot/include'), '-DNATIVE_VERIFIED_BLOCK=1']
     if os.environ.get('XNU_NATIVE_RAM_BLOCK') == '1' and os.environ.get('XNU_NATIVE_UFS') != '1':
         command += ['-DNATIVE_MSDC_UFS_STORE_ABI=1']
     # Bindings of an earlier build describe an older object; build-native-virtio-bindings.py writes them again.
