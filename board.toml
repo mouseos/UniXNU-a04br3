@@ -132,6 +132,8 @@ kernel_args = [
   "kt_fixed_zones=120",
   "-apfs_shared_datavolume",
   "-no_slto_panic",
+  # eMMC: publish the userdata windows (OS, SystemOS) read-only; nothing is written to the eMMC.
+  "native-msdc-root=1",
   # Bring-up: every reset returns to LK fastboot for the unattended cycle (package/A04BR3AutoReset.cpp). Remove for a
   # release image.
   "a04br3-autoreset=900",
@@ -141,6 +143,8 @@ kernel_args = [
 tool = "scripts/make-a04br3-adt.py"
 chip_id = "8167"
 owned_memory_size = "0x40000000"
+# The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
+root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 cpu_regs = "0"
 psci_method = "smc"
 packed_data_ramdisk = true
