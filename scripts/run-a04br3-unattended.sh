@@ -66,10 +66,10 @@ for round in $(seq 1 "$ROUNDS"); do
     grep -aq 'A04BR3TestCycleDxe: fastboot flag' "$log" && stage=dxe
     grep -aq 'no ExitBootServices within' "$log" && stage=firmware-timeout
     grep -aq 'A04BR3TestCycleDxe: ExitBootServices' "$log" && stage=exit-boot-services
-    grep -aq 'a04br3-autoreset' "$log" && stage=bsd_init
+    grep -aq 'a04br3-autoreset: fastboot flag' "$log" && stage=bsd_init
     {
       echo "stage: $stage"
-      grep -am1 -i 'panic' "$log" | sed 's/^/first panic: /'
+      grep -am1 -E 'panic\(|Panicked|PANIC|Kernel panic' "$log" | sed 's/^/first panic: /'
       grep -a -i 'boot_reason\|reboot to boot loader' "$log" | tail -3 | sed 's/^/lk: /'
     } > "$RUN/stage.txt"
   }

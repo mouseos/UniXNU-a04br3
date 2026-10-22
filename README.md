@@ -57,12 +57,25 @@ copies. Later images go through fastboot (below).
 
 ## Unattended test cycle
 
-The stock LK enters fastboot when bit 13 of the PMIC RTC register RTC_PDN1 (0x802C) is set and clears it (REA of the
-stock LK). With the boot argument `a04br3-autoreset=<seconds>` the kernel (`package/A04BR3AutoReset.cpp`, called through
-the board hook `unixnu_board_init`) sets that bit, arms the TOPRGU watchdog and resets after the given time. A panic, a
-hang or the timer therefore brings the tablet back to fastboot, and `scripts/run-a04br3-unattended.sh` writes the next
-image with fastboot, reboots it and cuts the UART log of the run (UART0, 921600 8N1). No mtkclient is needed after the
-first installation. Without the boot argument nothing is changed.
+After the first installation with mtkclient, every later image goes through the stock LK fastboot mode without
+mtkclient and without touching the tablet:
+
+- The stock LK enters fastboot when bit 13 of the PMIC RTC register RTC_PDN1 (0x802C) is set and clears it (REA of the
+  stock LK).
+- Firmware (uefi-a04br3, `A04BR3_TEST_CYCLE = "1"` in `[firmware.defines]`): the SEC hook A04BR3PlatformSecBoardLib
+  arms the TOPRGU watchdog for 31 s and sets that bit; A04BR3TestCycleDxe kicks the watchdog until ExitBootServices
+  (at most 120 s) and arms it again there. A hang in the firmware or a missing payload resets into fastboot.
+- Kernel (boot argument `a04br3-autoreset=<seconds>`, `package/A04BR3AutoReset.cpp`, called from bsd_init through the
+  board hook `unixnu_board_init`): sets the bit again, keeps kicking the watchdog and resets after the given time. A
+  panic or a hang before or after bsd_init therefore also returns to fastboot.
+- Host: `scripts/run-a04br3-unattended.sh BOOT_IMAGE` writes the image with fastboot, reboots, waits for the return to
+  fastboot and keeps the UART log of each round (UART0, 921600 8N1; `UART=/dev/ttyUSB0`, or `UART_LOG=` of a running
+  collector). `ROUNDS=` and `NEXT_IMAGE_CMD=` chain rounds. Each round writes `result.txt` and `stage.txt` (last stage
+  reached: sec, dxe, firmware-timeout, exit-boot-services, bsd_init; first panic; LK reason) under
+  `out/a04br3/unattended/`.
+
+Both parts are on in this board file for bring-up. For an image that boots normally, set `A04BR3_TEST_CYCLE = "0"`
+and remove `a04br3-autoreset` from `kernel_args`; nothing else changes.
 
 ## Credits
 

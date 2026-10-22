@@ -98,7 +98,8 @@ void watchdogArm(unsigned seconds)
 {
   wr(gToprgu, kWdtLength, ((seconds << 6) << 5) | 0x08);
   wr(gToprgu, kWdtRestart, 0x1971);
-  const uint32_t mode = (rd(gToprgu, kWdtMode) & 0x00ffffffU & ~0x08U & ~0x40U) | 0x22000001U;  // EN; no IRQ, no dual mode
+  // EN with EXRST_EN and AUTO_START as resetNow (and uefi-a04br3 A04BR3TestCycleLib); no IRQ, no dual mode.
+  const uint32_t mode = (rd(gToprgu, kWdtMode) & 0x00ffffffU & ~0x48U) | 0x22000015U;
   wr(gToprgu, kWdtMode, mode);
 }
 

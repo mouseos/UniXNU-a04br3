@@ -144,10 +144,12 @@ kernel_args = [
 [payload.adt]
 tool = "scripts/make-a04br3-adt.py"
 chip_id = "8167"
-# The XNU window (DarwinBoot AllocateWindow): one contiguous run of conventional memory. LK places the boot ramdisk at
-# 0x80000000 (uefi-a04br3 MemoryMapLib "Boot Ramdisk", 0x80000000-0x88000000), so the largest runs are 0x4E240000-
-# 0x80000000 and 0x88000000-0xBE9C0000 (873 MiB) before the firmware's own allocations; 768 MiB leaves room for them.
-owned_memory_size = "0x30000000"
+# The XNU window (DarwinBoot AllocateWindow, first fit from low addresses): one contiguous run of conventional memory.
+# LK places the boot ramdisk at 0x80000000 (uefi-a04br3 MemoryMapLib "Boot Ramdisk", 0x80000000-0x88000000) and PrePi
+# takes DxeCore and page tables from the top of "DXE Heap", so "DDR Mid 2" (0x52000000-0x80000000, 736 MiB) is the
+# largest run the firmware leaves untouched. The window start adds the low bits of the kernel base (0x4000), so
+# 0x2DE00000 (734 MiB) always fits there; "DDR High" (873 MiB) is shared with firmware allocations and the payload files.
+owned_memory_size = "0x2DE00000"
 # The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 cpu_regs = "0"
