@@ -26,6 +26,15 @@ fork [mouseos/UniXNU](https://github.com/mouseos/UniXNU) until they are merged, 
     ./unixnu build package
     ./unixnu build firmware --uefi ../uefi-a04br3
 
+The first complete image was built from these revisions (Actions run 39827239172 of mouseos/UniXNU, firmware built
+locally with the same command); check them out to reproduce it:
+
+| Repository | Commit |
+| --- | --- |
+| mouseos/UniXNU | 3441f4ead9ab6e12e9b02cfb683ca8f2a5337fe7 |
+| mouseos/UniXNU-a04br3 | 4044d2d382ee183dae2f6960dc999cf0ed43255a |
+| mouseos/uefi-a04br3 | 45a04ea93e99e587c5c01f93e2b6b14e443679b3 |
+
 The kernel, userdata and payload steps need macOS. They run in the macOS build workflow of the fork with
 device_repository = mouseos/UniXNU-a04br3, defconfig = a04br3_defconfig, steps = kernel userdata payload and
 pre_build = bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh" (trust cache bundle and Data seed from the IPSW). The
