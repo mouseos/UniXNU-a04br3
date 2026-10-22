@@ -49,6 +49,7 @@ archives = [
   "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",
+  "build-a04br3-board.py",
 ]
 
 [kernel.prelink]
