@@ -92,7 +92,11 @@ def main():
         with zipfile.ZipFile(work / 'refer' / ipsw_name, 'w') as archive:
             for name in names:
                 archive.writestr(name, remote.read(name))
-        static_name = 'Firmware/' + next(iter(board['ipsw']['sha256'])) + '.trustcache'
+        # The StaticTrustCache member of the board's identity in the BuildManifest (not the order of [ipsw.sha256]).
+        import plistlib
+        manifest = plistlib.loads(remote.read('BuildManifest.plist'))
+        identity = next(i for i in manifest['BuildIdentities'] if i['Info']['DeviceClass'] == board['ipsw']['device_class'])
+        static_name = identity['Manifest']['StaticTrustCache']['Info']['Path']
         tag, sequence, _ = der(remote.read(static_name), 0)
         fields, cursor = [], 0
         while cursor < len(sequence):

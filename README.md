@@ -11,19 +11,27 @@ Apple device tree generator and GPT layout. No hardware run with UniXNU is docum
 
 ## Build
 
-```sh
-git clone --recurse-submodules https://github.com/UniXNU/UniXNU
-git clone --recurse-submodules https://github.com/mouseos/UniXNU-a04br3
-git clone --recurse-submodules https://github.com/mouseos/uefi-a04br3
-cd UniXNU
-./unixnu defconfig a04br3_defconfig -D ../UniXNU-a04br3
-./unixnu fetch
-./unixnu build package
-./unixnu build firmware --uefi ../uefi-a04br3
-```
+The board needs changes to the UniXNU base that are not upstream yet (all behind default-off flags, prepared as pull
+requests): the 16550 console (XNU_NS16550_UART), the board hook (XNU_BOARD_INIT), the MSDC personality
+(XNU_NATIVE_MSDC), MediaTek image headers in bootimg (mtk_header) and an authenticated DriverKit header listing. Use the
+fork [mouseos/UniXNU](https://github.com/mouseos/UniXNU) until they are merged, and the ArmCpu fork with the GICv2 path
+(submodule drivers/ArmCpu of this repository).
 
-The kernel, userdata and payload steps need macOS; they run in the macOS build workflow of a UniXNU fork
-with `device_repository = mouseos/UniXNU-a04br3` and `defconfig = a04br3_defconfig`.
+    git clone --recurse-submodules https://github.com/mouseos/UniXNU
+    git clone --recurse-submodules https://github.com/mouseos/UniXNU-a04br3
+    git clone --recurse-submodules https://github.com/mouseos/uefi-a04br3
+    cd UniXNU
+    ./unixnu defconfig a04br3_defconfig -D ../UniXNU-a04br3
+    ./unixnu fetch
+    ./unixnu build package
+    ./unixnu build firmware --uefi ../uefi-a04br3
+
+The kernel, userdata and payload steps need macOS. They run in the macOS build workflow of the fork with
+device_repository = mouseos/UniXNU-a04br3, defconfig = a04br3_defconfig, steps = kernel userdata payload and
+pre_build = bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh" (trust cache bundle and Data seed from the IPSW). The
+repository secret UNIXNU_UNIQUE_CHIP_ID holds the platform seed. Then, with the downloaded payload:
+
+    ./unixnu bootimg --uefi ../uefi-a04br3 --dtb ../uefi-a04br3/Resources/DTBs/a04br3.dtb
 
 ## Partition layout
 
