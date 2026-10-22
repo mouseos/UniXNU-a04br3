@@ -11,10 +11,9 @@
 # usage: [SERIAL=<fastboot serial>] [MODE=auto|boot|flash] [ROUNDS=1] [NEXT_IMAGE_CMD='<command printing a boot image path>']
 #        [USERDATA=<userdata image, first round only>] [UART=/dev/ttyUSB0 | UART_LOG=<file appended by another collector>]
 #        run-a04br3-unattended.sh BOOT_IMAGE [wait_seconds=1200]
-# MODE=auto (default) boots the image from RAM with fastboot boot and falls back to flash when LK refuses that;
-# MODE=boot only boots from RAM; MODE=flash writes the boot partition and reboots. Booting from RAM keeps the last
-# written image in the boot partition, so an image that stops even before the firmware sets the fastboot flag only
-# costs one round: the next reset boots the partition image, whose test cycle returns to fastboot. Every image is
+# MODE=flash (default) writes the boot partition and reboots. MODE=boot uses fastboot boot and MODE=auto tries it first,
+# but the stock LK does not hand a fastboot-booted ramdisk to the kernel slot at its header address (observed: /chosen
+# initrd 0x1FE7-0x80001FE7, BootRamdiskDxe refuses it and no payload volume appears), so they do not boot a04br3. Every image is
 # checked first (scripts/check-a04br3-bootimg.py). With UART= this script reads the port itself; stop other readers
 # or use UART_LOG= with the file of a running collector. Each round writes result.txt and stage.txt (last stage reached from the
 # UART log: sec, dxe, firmware-timeout (includes a DarwinBoot failure), exit-boot-services, bsd_init; first panic; LK reason). Exit status: 0 when every round returned to fastboot by itself, 2 when a round
@@ -23,7 +22,7 @@ set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 IMG=${1:?boot image}
 LIMIT=${2:-1200}
-MODE=${MODE:-auto}
+MODE=${MODE:-flash}
 ROUNDS=${ROUNDS:-1}
 listed() { fastboot devices 2>/dev/null | awk '{print $1}' | grep -qx "$SERIAL"; }
 echo "waiting for a fastboot device"
