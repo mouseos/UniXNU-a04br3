@@ -38,8 +38,14 @@ def main():
     gpt = json.loads((args.out / 'gpt.json').read_text())
     lines, report = [], {'inputs': {}, 'writes': []}
 
+    # The stock LK cannot boot a malformed image and nothing would set the fastboot flag: refuse it here.
+    subprocess.run([sys.executable, HERE / 'check-a04br3-bootimg.py', args.boot], check=True)
+
     def write(name, path, offset, capacity):
         size = path.stat().st_size
+        if ' ' in str(path.resolve()):
+            # mtkclient script splits each line at spaces.
+            raise SystemExit(f'{path.resolve()}: mtkclient scripts cannot take paths with spaces')
         if size > capacity:
             raise SystemExit(f'{path}: {size} bytes do not fit {name} ({capacity} bytes)')
         lines.append(f'wo {offset:#x} {size:#x} {path.resolve()}')
@@ -52,6 +58,8 @@ def main():
         report['inputs']['userdata'] = {'path': str(args.userdata.resolve()), 'sha256': sha256(args.userdata)}
     write('gpt-secondary', args.out / 'gpt-secondary.bin', gpt['secondary_byte_offset'], (args.out / 'gpt-secondary.bin').stat().st_size)
     write('gpt-primary', args.out / 'gpt-primary.bin', 0, (args.out / 'gpt-primary.bin').stat().st_size)
+    # Reboot when the writes are done, so the first boot starts without touching the tablet.
+    lines.append('reset')
     (args.out / 'write.mtk').write_text('\n'.join(lines) + '\n')
     (args.out / 'flash.json').write_text(json.dumps(report, indent=2) + '\n')
     print(f'mtk script {args.out / "write.mtk"}')

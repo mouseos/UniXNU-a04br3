@@ -8,18 +8,22 @@
 # brings the tablet back to LK fastboot. Each round this script writes the image with fastboot, reboots it, checks that
 # the tablet left fastboot, waits for it to come back and keeps the UART log of that round.
 #
-# usage: [SERIAL=<fastboot serial>] [MODE=flash|boot] [ROUNDS=1] [NEXT_IMAGE_CMD='<command printing a boot image path>']
+# usage: [SERIAL=<fastboot serial>] [MODE=auto|boot|flash] [ROUNDS=1] [NEXT_IMAGE_CMD='<command printing a boot image path>']
 #        [USERDATA=<userdata image, first round only>] [UART=/dev/ttyUSB0 | UART_LOG=<file appended by another collector>]
 #        run-a04br3-unattended.sh BOOT_IMAGE [wait_seconds=1200]
-# MODE=flash writes the boot partition and reboots (default); MODE=boot uses fastboot boot (RAM only, leaves the
-# partition untouched; needs LK support). Each round writes result.txt and stage.txt (last stage reached from the
+# MODE=auto (default) boots the image from RAM with fastboot boot and falls back to flash when LK refuses that;
+# MODE=boot only boots from RAM; MODE=flash writes the boot partition and reboots. Booting from RAM keeps the last
+# written image in the boot partition, so an image that stops even before the firmware sets the fastboot flag only
+# costs one round: the next reset boots the partition image, whose test cycle returns to fastboot. Every image is
+# checked first (scripts/check-a04br3-bootimg.py). With UART= this script reads the port itself; stop other readers
+# or use UART_LOG= with the file of a running collector. Each round writes result.txt and stage.txt (last stage reached from the
 # UART log: sec, dxe, firmware-timeout (includes a DarwinBoot failure), exit-boot-services, bsd_init; first panic; LK reason). Exit status: 0 when every round returned to fastboot by itself, 2 when a round
 # did not leave fastboot, 3 when it did not come back within wait_seconds. Logs: out/a04br3/unattended/<time>/round-N/.
 set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 IMG=${1:?boot image}
 LIMIT=${2:-1200}
-MODE=${MODE:-flash}
+MODE=${MODE:-auto}
 ROUNDS=${ROUNDS:-1}
 listed() { fastboot devices 2>/dev/null | awk '{print $1}' | grep -qx "$SERIAL"; }
 echo "waiting for a fastboot device"
@@ -45,11 +49,24 @@ for round in $(seq 1 "$ROUNDS"); do
   elif [ -n "${UART_LOG:-}" ]; then
     START=$(stat -c %s "$UART_LOG")
   fi
+  python3 "$ROOT/scripts/check-a04br3-bootimg.py" "$IMG" > "$RUN/check.log" 2>&1 \
+    || { cat "$RUN/check.log"; echo "boot image check failed" | tee "$RUN/result.txt"; exit 1; }
+  if [ "$MODE" = auto ]; then
+    if fastboot -s "$SERIAL" boot "$IMG" > "$RUN/fastboot.log" 2>&1; then
+      echo "mode: boot" >> "$RUN/fastboot.log"
+    else
+      echo "fastboot boot refused; writing the boot partition" >> "$RUN/fastboot.log"
+      { fastboot -s "$SERIAL" flash boot "$IMG" && fastboot -s "$SERIAL" reboot; } >> "$RUN/fastboot.log" 2>&1 \
+        || { echo "fastboot flash failed" | tee "$RUN/result.txt"; exit 1; }
+      echo "mode: flash" >> "$RUN/fastboot.log"
+    fi
+  else
   case "$MODE" in
     flash) fastboot -s "$SERIAL" flash boot "$IMG" > "$RUN/fastboot.log" 2>&1 && fastboot -s "$SERIAL" reboot >> "$RUN/fastboot.log" 2>&1 ;;
     boot)  fastboot -s "$SERIAL" boot "$IMG" > "$RUN/fastboot.log" 2>&1 ;;
-    *) echo "MODE must be flash or boot"; exit 1 ;;
+    *) echo "MODE must be auto, boot or flash"; exit 1 ;;
   esac || { echo "fastboot $MODE failed" | tee "$RUN/result.txt"; exit 1; }
+  fi
   # The tablet must leave fastboot within 60 s, otherwise the round did not start.
   left=0
   for _ in $(seq 1 60); do if ! listed; then left=1; break; fi; sleep 1; done

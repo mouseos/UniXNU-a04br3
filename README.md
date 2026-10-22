@@ -60,9 +60,14 @@ kernelcache pinned in `board.toml` and the public IOStorageFamily source.
 
 ## Flashing
 
-`scripts/make-a04br3-flash.py --boot out/a04br3/boot/boot.img --userdata out/a04br3/userdata/userdata-root.img --out DIR`
-writes `DIR/write.mtk` for `mtk script DIR/write.mtk` (mtkclient, first installation): boot, userdata, then both GPT
-copies. Later images go through fastboot (below).
+The tablet must be bootloader-unlocked (LK shows "Orange State"); a locked LK refuses the unsigned boot image and
+fastboot writes.
+
+`scripts/make-a04br3-flash.py --boot <out>/a04br3/boot/boot.img --userdata <userdata-root.img> --out DIR` checks the
+boot image (`scripts/check-a04br3-bootimg.py`) and writes `DIR/write.mtk`: boot, userdata, both GPT copies, then a
+reset. Run it once with mtkclient (`mtk script DIR/write.mtk`, tablet powered off and connected in BROM/preloader
+mode); paths must not contain spaces. `<out>` is the `--out` of `unixnu bootimg`, the userdata image is the
+`unixnu-userdata-a04br3_defconfig` artifact of the macOS workflow. Later images go through fastboot (below).
 
 ## Unattended test cycle
 
