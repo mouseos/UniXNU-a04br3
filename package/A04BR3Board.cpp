@@ -17,6 +17,8 @@
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
+#include <kern/thread.h>
+#include <libkern/libkern.h>
 
 extern "C" {
 void a04br3_autoreset_init(void);
@@ -29,9 +31,68 @@ extern volatile int native_keyevents_status;
 __attribute__((weak)) char boot_progress_ext[8][48];
 }
 
+// a04br3-proclog=<seconds>: every <seconds>, one UART line per batch of processes ("a04br3 procs: pid:name ..."). Without a
+// display this is the only view of userland progress after launchd; off by default.
+extern "C" {
+typedef struct proc *proc_t;
+typedef int (*proc_iterate_fn_t)(proc_t, void *);
+void proc_iterate(unsigned int flags, proc_iterate_fn_t callout, void *arg, proc_iterate_fn_t filterfn, void *filterarg);
+int proc_pid(proc_t);
+void proc_name(int pid, char *buf, int size);
+}
+namespace {
+constexpr unsigned kProcAll = 0x1;       // PROC_ALLPROCLIST
+constexpr int kProcReturned = 0;         // PROC_RETURNED
+struct ProcLine { char text[480]; unsigned used; unsigned count; };
+unsigned gProcLogSeconds;
+
+void procFlush(ProcLine &line)
+{
+  if (line.used) IOLog("a04br3 procs:%s\n", line.text);
+  line.used = 0;
+  line.text[0] = 0;
+}
+
+int procCallout(proc_t p, void *arg)
+{
+  ProcLine &line = *static_cast<ProcLine *>(arg);
+  char name[32] = {};
+  int pid = proc_pid(p);
+  proc_name(pid, name, sizeof(name));
+  char entry[48];
+  int n = snprintf(entry, sizeof(entry), " %d:%s", pid, name);
+  if (n <= 0) return kProcReturned;
+  if (line.used + unsigned(n) >= sizeof(line.text)) procFlush(line);
+  strlcpy(line.text + line.used, entry, sizeof(line.text) - line.used);
+  line.used += unsigned(n) < sizeof(entry) ? unsigned(n) : sizeof(entry) - 1;
+  line.count++;
+  return kProcReturned;
+}
+
+void procLogThread(void *, wait_result_t)
+{
+  for (unsigned round = 1;; ++round) {
+    IOSleep(gProcLogSeconds * 1000);
+    static ProcLine line;
+    line = {};
+    proc_iterate(kProcAll, procCallout, &line, nullptr, nullptr);
+    procFlush(line);
+    IOLog("a04br3 procs: round %u, %u processes\n", round, line.count);
+  }
+}
+}
+
+static void a04br3_proclog_init(void)
+{
+  if (!PE_parse_boot_argn("a04br3-proclog", &gProcLogSeconds, sizeof(gProcLogSeconds)) || !gProcLogSeconds) return;
+  thread_t thread;
+  if (kernel_thread_start(procLogThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+}
+
 extern "C" void unixnu_board_init(void)
 {
   a04br3_autoreset_init();
+  a04br3_proclog_init();
   unsigned events = 0;
   if (PE_parse_boot_argn("offline-key-events", &events, sizeof(events)) && events == 1) {
     native_keystore_probe();

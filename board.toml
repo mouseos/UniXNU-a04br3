@@ -152,6 +152,8 @@ kernel_args = [
   "native-msdc-root=1",
   # Publish the original PMGR nub through the bridge (build-platform-power.py); it reads and writes no hardware.
   "sheng-pmgr=2",
+  # Bring-up: the process list on UART every 20 s (package/A04BR3Board.cpp); remove for a release image.
+  "a04br3-proclog=20",
   # Bring-up: every reset returns to LK fastboot for the unattended cycle (package/A04BR3AutoReset.cpp). Remove for a
   # release image.
   "a04br3-autoreset=900",
