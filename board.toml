@@ -53,7 +53,7 @@ archives = [
   "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
   # NativeMsdc: the eMMC (MSDC0) driver. Without CONFIG_XNU_NATIVE_MSDC_BLOCK it builds the persistent store only.
   "build-arm-driver.py NativeMsdc",
-  "build-native-virtio-bindings.py --component NativeMsdc --directory build/native-msdc",
+  "build-native-virtio-bindings.py --component NativeMsdc --block-class NativeMsdcBlock --directory build/native-msdc",
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",
   "build-a04br3-board.py",
