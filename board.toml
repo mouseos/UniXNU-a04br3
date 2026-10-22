@@ -121,6 +121,9 @@ kernel_args = [
   "kt_fixed_zones=120",
   "-apfs_shared_datavolume",
   "-no_slto_panic",
+  # Bring-up: every reset returns to LK fastboot for the unattended cycle (package/A04BR3AutoReset.cpp). Remove for a
+  # release image.
+  "a04br3-autoreset=900",
 ]
 
 [payload.adt]

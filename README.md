@@ -31,6 +31,20 @@ with `device_repository = mouseos/UniXNU-a04br3` and `defconfig = a04br3_defconf
 layout, the Android partitions `factory`, `metadata`, `system` and `cache` are removed, `boot` grows to
 128 MiB and `userdata` runs from LBA 557056 to the start of `flashinfo`. The bootloader partitions,
 `logo` (the LK splash) and the calibration partitions keep their stock positions.
+## Flashing
+
+`scripts/make-a04br3-flash.py --boot out/a04br3/boot/boot.img --userdata out/a04br3/userdata/userdata-root.img --out DIR`
+writes `DIR/write.mtk` for `mtk script DIR/write.mtk` (mtkclient, first installation): boot, userdata, then both GPT
+copies. Later images go through fastboot (below).
+
+## Unattended test cycle
+
+The stock LK enters fastboot when bit 13 of the PMIC RTC register RTC_PDN1 (0x802C) is set and clears it (REA of the
+stock LK). With the boot argument `a04br3-autoreset=<seconds>` the kernel (`package/A04BR3AutoReset.cpp`, called through
+the board hook `unixnu_board_init`) sets that bit, arms the TOPRGU watchdog and resets after the given time. A panic, a
+hang or the timer therefore brings the tablet back to fastboot, and `scripts/run-a04br3-unattended.sh` writes the next
+image with fastboot, reboots it and cuts the UART log of the run (UART0, 921600 8N1). No mtkclient is needed after the
+first installation. Without the boot argument nothing is changed.
 
 ## Credits
 
