@@ -26,13 +26,14 @@ fork [mouseos/UniXNU](https://github.com/mouseos/UniXNU) until they are merged, 
     ./unixnu build package
     ./unixnu build firmware --uefi ../uefi-a04br3
 
-The first complete image was built from these revisions (Actions run 39827239172 of mouseos/UniXNU, firmware built
-locally with the same command); check them out to reproduce it:
+The current image was built from these revisions (Actions run 39850069847 of mouseos/UniXNU, firmware built locally
+with the same command); check them out to reproduce it. The fork main is upstream UniXNU with the pull request branches
+`pr/*` of mouseos/UniXNU merged; the first image (tag `a04br3-image-1`) predates that rebase.
 
 | Repository | Commit |
 | --- | --- |
-| mouseos/UniXNU | 3441f4ead9ab6e12e9b02cfb683ca8f2a5337fe7 |
-| mouseos/UniXNU-a04br3 | 4044d2d382ee183dae2f6960dc999cf0ed43255a |
+| mouseos/UniXNU | fe43c40 (main) |
+| mouseos/UniXNU-a04br3 | 2eef74107d26890d22da00a7e14df22ab897c848 |
 | mouseos/uefi-a04br3 | 45a04ea93e99e587c5c01f93e2b6b14e443679b3 |
 
 The kernel, userdata and payload steps need macOS. They run in the macOS build workflow of the fork with
