@@ -104,6 +104,10 @@ packages = [
 [firmware.defines]
 DEVICE_MODEL = "a04br3"
 BUILDID_STRING = "a04br3-bringup"
+# Bring-up: A04BR3TestCycleDxe (uefi-a04br3 a04br3Pkg) sets the LK fastboot flag and arms the 31 s watchdog at
+# ExitBootServices, so a kernel that stops before a04br3-autoreset (package/A04BR3AutoReset.cpp) takes over still
+# resets into fastboot. Remove together with a04br3-autoreset for a release image.
+A04BR3_TEST_CYCLE = "1"
 
 # The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
 # trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
