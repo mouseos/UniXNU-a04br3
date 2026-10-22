@@ -1,6 +1,3 @@
 [submodule "drivers/ArmCpu"]
 	path = drivers/ArmCpu
 	url = https://github.com/mouseos/ArmCpu
-[submodule "drivers/NativeMsdc"]
-	path = drivers/NativeMsdc
-	url = https://github.com/mouseos/NativeMsdc

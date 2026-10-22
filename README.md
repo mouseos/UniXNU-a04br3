@@ -32,7 +32,7 @@ with the same command); check them out to reproduce it. The fork main is upstrea
 
 | Repository | Commit |
 | --- | --- |
-| mouseos/UniXNU | fe43c40 (main) |
+| mouseos/UniXNU | fe43c401ef5e0d29f2d8b88945017e4b1a65421b (main) |
 | mouseos/UniXNU-a04br3 | 2eef74107d26890d22da00a7e14df22ab897c848 |
 | mouseos/uefi-a04br3 | 45a04ea93e99e587c5c01f93e2b6b14e443679b3 |
 
@@ -52,7 +52,7 @@ layout, the Android partitions `factory`, `metadata`, `system` and `cache` are r
 
 ## eMMC
 
-[NativeMsdc](https://github.com/mouseos/NativeMsdc) (`drivers/NativeMsdc`, `CONFIG_XNU_NATIVE_MSDC=y`) drives the eMMC on
+[NativeMsdc](https://github.com/mouseos/NativeMsdc) (`drivers/NativeMsdc` of the UniXNU base, `CONFIG_XNU_NATIVE_MSDC=y`) drives the eMMC on
 MSDC0 (`/arm-io/mmc0`). It does nothing unless `native-msdc-root` or `native-msdc-persist` is set. The userdata windows
 of the root image (`native-msdc-root`, `CONFIG_XNU_NATIVE_MSDC_BLOCK=y`) and NativeRamBlock (the Data RAM disk) subclass
 the original `IOBlockStorageDevice`. Without the full storage audit, `build-native-virtio-bindings.py` binds them with
