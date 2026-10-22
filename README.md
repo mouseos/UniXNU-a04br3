@@ -31,6 +31,13 @@ with `device_repository = mouseos/UniXNU-a04br3` and `defconfig = a04br3_defconf
 layout, the Android partitions `factory`, `metadata`, `system` and `cache` are removed, `boot` grows to
 128 MiB and `userdata` runs from LBA 557056 to the start of `flashinfo`. The bootloader partitions,
 `logo` (the LK splash) and the calibration partitions keep their stock positions.
+
+## eMMC
+
+[NativeMsdc](https://github.com/mouseos/NativeMsdc) (`drivers/NativeMsdc`, `CONFIG_XNU_NATIVE_MSDC=y`) drives the eMMC on
+MSDC0 (`/arm-io/mmc0`). It does nothing unless `native-msdc-root` or `native-msdc-persist` is set. The userdata windows
+of the root image (`native-msdc-root`) need `CONFIG_XNU_NATIVE_MSDC_BLOCK=y` and the storage ABI audit described in
+`board.toml`, the same input that NativeRamBlock waits for.
 ## Flashing
 
 `scripts/make-a04br3-flash.py --boot out/a04br3/boot/boot.img --userdata out/a04br3/userdata/userdata-root.img --out DIR`

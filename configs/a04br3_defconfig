@@ -25,3 +25,7 @@ CONFIG_XNU_ARMVIRT_PLATFORM=n
 CONFIG_XNU_ARMCPU_GICV2=y
 CONFIG_XNU_NS16550_UART=y
 CONFIG_XNU_BOARD_INIT=y
+# eMMC (MSDC0) driver, github.com/mouseos/NativeMsdc. Inert unless native-msdc-root or native-msdc-persist is set.
+# CONFIG_XNU_NATIVE_MSDC_BLOCK=y adds the userdata windows as block devices; it needs the storage ABI audit (board.toml).
+CONFIG_XNU_NATIVE_MSDC=y
+CONFIG_XNU_NATIVE_MSDC_BLOCK=n
