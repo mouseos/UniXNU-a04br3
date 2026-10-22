@@ -107,6 +107,20 @@ mtkclient and without touching the tablet:
 Both parts are on in this board file for bring-up. For an image that boots normally, set `A04BR3_TEST_CYCLE = "0"`
 and remove `a04br3-autoreset` from `kernel_args`; nothing else changes.
 
+## launchd without a display
+
+The launchd-side parts of UniXNU-tb128fu and UniXNU-sheng that do not need a display or a boot-progress page:
+
+- AppleKeyStore stand-in (`offline-key-events=1`, `sheng-aks=1`): `package/KeyStoreProbe.cpp` (from UniXNU-tb128fu) and
+  UniXNU `drivers/NativeKeyStoreEvents`, linked in `libA04BR3Board.a` and started from `unixnu_board_init`
+  (`package/A04BR3Board.cpp`). The other boards start it from their display probe.
+- launchd disabled jobs (`sheng-disable-watchdogd=1`, `sheng-disable-jobs=...`): `scripts/a04br3-seed-launch-policy.py`
+  writes `/private/var/db/com.apple.xpc.launchd/disabled.plist` into the Data seed at build time with the bytes of
+  `package/BootWatchdogPolicy.c` (from UniXNU-tb128fu). The kernel form, `unixnu_board_launch` with
+  `CONFIG_XNU_BOARD_LAUNCH=y`, needs the UniXNU change in `upstream/UniXNU/0001-native-board-launch-hook.patch`; UniXNU
+  calls the policy today only from its boot-progress page.
+- `-no_corpses` and `ml-timeout-lock-panic-scale=40`: stock XNU boot arguments.
+
 ## Credits
 
 - [UniXNU](https://github.com/UniXNU/UniXNU) and [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng): build

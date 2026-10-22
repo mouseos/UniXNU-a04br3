@@ -2,7 +2,7 @@
 // a04br3 (Benesse TAB-A04-BR3, MediaTek MT8167) unattended test cycle: boot argument a04br3-autoreset=<seconds>.
 // Default off: without the argument nothing in this file touches hardware.
 //
-// unixnu_board_init() is called once from bsd_init (CONFIG_XNU_BOARD_INIT=y, patch native-board-init-hook). With the
+// a04br3_autoreset_init() is called once from unixnu_board_init() (package/A04BR3Board.cpp) in bsd_init. With the
 // argument it does:
 //  1. Set bit 13 of the PMIC RTC register RTC_PDN1 (0x802C). The stock LK checks that bit first and, when set, prints
 //     "[FASTBOOT] reboot to boot loader", enters fastboot mode and clears it (REA of the stock LK, FUN_41e032e4,
@@ -132,7 +132,7 @@ void cycleThread(void *, wait_result_t)
 
 }  // namespace
 
-extern "C" void unixnu_board_init(void)
+extern "C" void a04br3_autoreset_init(void)
 {
   unsigned seconds = 0;
   if (!PE_parse_boot_argn("a04br3-autoreset", &seconds, sizeof(seconds)) || seconds == 0) { return; }

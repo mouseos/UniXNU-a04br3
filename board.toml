@@ -63,6 +63,9 @@ archives = [
   "build-native-virtio-bindings.py --component NativeMsdc --block-class NativeMsdcBlock --directory build/native-msdc",
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",
+  # The AppleKeyStore stand-in of UniXNU (drivers/NativeKeyStoreEvents); build-a04br3-board.py stages it into the board
+  # archive with KeyStoreProbe.cpp (offline-key-events=1, sheng-aks=1).
+  "build-arm-driver.py NativeKeyStoreEvents",
   "build-a04br3-board.py",
   # The original-PMGR bridge (CONFIG_XNU_SHENG_PMGR, kernel argument sheng-pmgr=2): AMFI requires a published PMGR
   # ("AMFI: No PMGR?" without it). Generic and hardware-free; from UniXNU-tb128fu/UniXNU-sheng.
@@ -152,6 +155,24 @@ kernel_args = [
   # Bring-up: every reset returns to LK fastboot for the unattended cycle (package/A04BR3AutoReset.cpp). Remove for a
   # release image.
   "a04br3-autoreset=900",
+  # After the PMGR bridge: the launchd-side arguments of UniXNU-tb128fu (board.toml) and UniXNU-sheng that need no display.
+  # No corpses for crashing processes (stock XNU osfmk/corpses/corpse.c): on tb128fu each corpse's footprint walk took half
+  # of all CPU samples while daemons without a GPU crashed in loops; a04br3 has one Cortex-A35.
+  "-no_corpses",
+  # Stock XNU lock-panic timeout (osfmk/arm/locks_arm.c, 0xc00000 timebase ticks) times 40, as on tb128fu and sheng.
+  "ml-timeout-lock-panic-scale=40",
+  # The AppleKeyStore stand-in (package/KeyStoreProbe.cpp, UniXNU drivers/NativeKeyStoreEvents), started from
+  # unixnu_board_init(): the notification service and the state answers (no passcode, nothing locked). It holds no keys.
+  "offline-key-events=1",
+  "sheng-aks=1",
+  # launchd's disabled jobs (package/BootWatchdogPolicy.c labels; written into the Data seed by
+  # scripts/a04br3-seed-launch-policy.py, and by unixnu_board_launch() once CONFIG_XNU_BOARD_LAUNCH reaches UniXNU).
+  # watchdogd: no AppleARMWatchdogTimer here (not in [kernel.prelink] roots); on tb128fu it trapped about 5 minutes in
+  # and its exit is fatal. The jobs are tb128fu's set without a GPU: the SpringBoard wait cycle (identityservicesd,
+  # locationd), radios (CommCenter, bluetoothd) and the respawn/crash loops (PerfPowerServices, iomfb_fdr_loader,
+  # iconservicesagent).
+  "sheng-disable-watchdogd=1",
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader,com.apple.iconservices.iconservicesagent",
 ]
 
 [payload.adt]
