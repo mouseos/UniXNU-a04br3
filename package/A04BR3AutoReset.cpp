@@ -24,6 +24,8 @@
 
 extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
 extern "C" void thread_deallocate(thread_t);
+// Not exported to the IOKit compile context (as in BootReset.c of UniXNU-sheng, which declares ml_io_map_unmappable).
+extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 namespace {
 
