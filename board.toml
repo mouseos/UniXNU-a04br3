@@ -150,6 +150,9 @@ kernel_args = [
   "-no_slto_panic",
   # eMMC: publish the userdata windows (OS, SystemOS) read-only; nothing is written to the eMMC.
   "native-msdc-root=1",
+  # Data: the seed is grown to 4 GiB (a04br3-pre-build.sh); its changed pages persist in the NativeMsdc store window at the
+  # end of userdata, as sheng-data-persist=2 does on UFS. A 32 MiB volatile Data ran out of space (ENOSPC) under launchd.
+  "native-msdc-persist=2",
   # Publish the original PMGR nub through the bridge (build-platform-power.py); it reads and writes no hardware.
   "sheng-pmgr=2",
   # Bring-up: the process list on UART every 20 s (package/A04BR3Board.cpp); remove for a release image.
