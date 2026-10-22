@@ -106,9 +106,10 @@ packages = [
 [firmware.defines]
 DEVICE_MODEL = "a04br3"
 BUILDID_STRING = "a04br3-bringup"
-# Bring-up: A04BR3TestCycleDxe (uefi-a04br3 a04br3Pkg) sets the LK fastboot flag and arms the 31 s watchdog at
-# ExitBootServices, so a kernel that stops before a04br3-autoreset (package/A04BR3AutoReset.cpp) takes over still
-# resets into fastboot. Remove together with a04br3-autoreset for a release image.
+# Bring-up: uefi-a04br3 a04br3Pkg sets the LK fastboot flag and arms the 31 s watchdog from SEC on
+# (A04BR3PlatformSecBoardLib), A04BR3TestCycleDxe kicks it until ExitBootServices (at most 120 s) and re-arms it there,
+# so firmware or a kernel that stops before a04br3-autoreset (package/A04BR3AutoReset.cpp) takes over still resets
+# into fastboot. Remove together with a04br3-autoreset for a release image.
 A04BR3_TEST_CYCLE = "1"
 
 # The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
@@ -119,7 +120,8 @@ size_mib = 96
 loader = "firmware"
 title = "Boot"
 dram_size = "0x80000000"             # 2 GiB at 0x40000000 (MT8167 EMI, LK memory node)
-panic_screen = true
+# panic_screen needs a device scripts/patch-xnu-entry-probe.py (UniXNU-sheng); a04br3 reports panics on UART.
+panic_screen = false
 skip_setup_tool = "scripts/seed-data-skip-setup.py"
 trust_cache_sha256 = [
   "7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7",
@@ -142,7 +144,10 @@ kernel_args = [
 [payload.adt]
 tool = "scripts/make-a04br3-adt.py"
 chip_id = "8167"
-owned_memory_size = "0x40000000"
+# The XNU window (DarwinBoot AllocateWindow): one contiguous run of conventional memory. LK places the boot ramdisk at
+# 0x80000000 (uefi-a04br3 MemoryMapLib "Boot Ramdisk", 0x80000000-0x88000000), so the largest runs are 0x4E240000-
+# 0x80000000 and 0x88000000-0xBE9C0000 (873 MiB) before the firmware's own allocations; 768 MiB leaves room for them.
+owned_memory_size = "0x30000000"
 # The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 cpu_regs = "0"

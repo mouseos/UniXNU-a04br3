@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Unattended a04br3 test cycle without mtkclient (after scripts/run-sheng-unattended.sh of UniXNU-sheng).
 #
-# The test image boots with the board's test cycle on: uefi-a04br3 A04BR3TestCycleDxe (A04BR3_TEST_CYCLE=1) sets the
-# LK fastboot flag (PMIC RTC_PDN1 bit 13) and keeps the TOPRGU watchdog running until XNU, and XNU (a04br3-autoreset,
+# The test image boots with the board's test cycle on: uefi-a04br3 (A04BR3_TEST_CYCLE=1) sets the LK fastboot flag
+# (PMIC RTC_PDN1 bit 13) and arms the TOPRGU watchdog from SEC on (A04BR3PlatformSecBoardLib), A04BR3TestCycleDxe keeps
+# it running until XNU, and XNU (a04br3-autoreset,
 # package/A04BR3AutoReset.cpp) keeps kicking it and resets after the given time. A panic, a hang or the timer therefore
 # brings the tablet back to LK fastboot. Each round this script writes the image with fastboot, reboots it, checks that
 # the tablet left fastboot, waits for it to come back and keeps the UART log of that round.
@@ -11,7 +12,8 @@
 #        [USERDATA=<userdata image, first round only>] [UART=/dev/ttyUSB0 | UART_LOG=<file appended by another collector>]
 #        run-a04br3-unattended.sh BOOT_IMAGE [wait_seconds=1200]
 # MODE=flash writes the boot partition and reboots (default); MODE=boot uses fastboot boot (RAM only, leaves the
-# partition untouched; needs LK support). Exit status: 0 when every round returned to fastboot by itself, 2 when a round
+# partition untouched; needs LK support). Each round writes result.txt and stage.txt (last stage reached from the
+# UART log: sec, dxe, firmware-timeout (includes a DarwinBoot failure), exit-boot-services, bsd_init; first panic; LK reason). Exit status: 0 when every round returned to fastboot by itself, 2 when a round
 # did not leave fastboot, 3 when it did not come back within wait_seconds. Logs: out/a04br3/unattended/<time>/round-N/.
 set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -54,6 +56,22 @@ for round in $(seq 1 "$ROUNDS"); do
   finish() {
     [ -n "$CAPTURE" ] && kill "$CAPTURE" 2>/dev/null
     if [ -n "${UART_LOG:-}" ]; then tail -c +$((START + 1)) "$UART_LOG" > "$RUN/uart.log"; fi
+    classify
+  }
+  # Where the round ended, from the UART log: the last stage reached, the first panic and the LK reason (stage.txt).
+  classify() {
+    local log=$RUN/uart.log stage=none
+    [ -s "$log" ] || { echo "stage: no UART output" > "$RUN/stage.txt"; return; }
+    grep -aq 'A04BR3 SEC: test cycle' "$log" && stage=sec
+    grep -aq 'A04BR3TestCycleDxe: fastboot flag' "$log" && stage=dxe
+    grep -aq 'no ExitBootServices within' "$log" && stage=firmware-timeout
+    grep -aq 'A04BR3TestCycleDxe: ExitBootServices' "$log" && stage=exit-boot-services
+    grep -aq 'a04br3-autoreset' "$log" && stage=bsd_init
+    {
+      echo "stage: $stage"
+      grep -am1 -i 'panic' "$log" | sed 's/^/first panic: /'
+      grep -a -i 'boot_reason\|reboot to boot loader' "$log" | tail -3 | sed 's/^/lk: /'
+    } > "$RUN/stage.txt"
   }
   if [ "$left" = 0 ]; then finish; echo "round $round: still in fastboot after $MODE" | tee "$RUN/result.txt"; exit 2; fi
   echo "round $round: running, waiting up to ${LIMIT}s for the return to fastboot"
@@ -63,6 +81,6 @@ for round in $(seq 1 "$ROUNDS"); do
     sleep 2
   done
   finish
-  echo "round $round: returned to fastboot by itself after $((SECONDS - end + LIMIT))s" | tee "$RUN/result.txt"
+  echo "round $round: returned to fastboot by itself after $((SECONDS - end + LIMIT))s; $(head -1 "$RUN/stage.txt")" | tee "$RUN/result.txt"
 done
 echo "logs: $RUNS"
