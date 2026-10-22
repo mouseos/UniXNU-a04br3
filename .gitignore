@@ -1,0 +1,4 @@
+local.toml
+.cache/
+out/
+__pycache__/
