@@ -24,3 +24,8 @@ echo "XNU_OWNER_DATA_VOLUME_UUID=$DATA_UUID" >> "${GITHUB_ENV:-/dev/null}"
 export XNU_OWNER_DATA_VOLUME_UUID=$DATA_UUID
 echo "Data seed volume UUID $DATA_UUID"
 ls -l "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/data.dbr"
+# First kernel pass: the PMGR bridge (scripts/build-platform-power.py) checks itself against a previous kernel of this
+# tree and links a no-op on a new tree, as UniXNU-tb128fu documents; the workflow's kernel step then links the bridge.
+hdiutil detach "$MOUNT" || true
+trap - EXIT
+./unixnu build kernel

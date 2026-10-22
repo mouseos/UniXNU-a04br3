@@ -64,6 +64,9 @@ archives = [
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",
   "build-a04br3-board.py",
+  # The original-PMGR bridge (CONFIG_XNU_SHENG_PMGR, kernel argument sheng-pmgr=2): AMFI requires a published PMGR
+  # ("AMFI: No PMGR?" without it). Generic and hardware-free; from UniXNU-tb128fu/UniXNU-sheng.
+  "build-platform-power.py",
 ]
 
 [kernel.prelink]
@@ -76,6 +79,7 @@ roots = [
   "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
   "com.apple.driver.AppleARMPlatform",
   "com.apple.driver.AppleMobileFileIntegrity",
+  "com.apple.driver.ApplePMGR",
   "com.apple.filesystems.apfs",
   "com.apple.iokit.CoreAnalyticsFamily",
   "com.apple.iokit.IOCryptoAcceleratorFamily",
@@ -143,6 +147,8 @@ kernel_args = [
   "-no_slto_panic",
   # eMMC: publish the userdata windows (OS, SystemOS) read-only; nothing is written to the eMMC.
   "native-msdc-root=1",
+  # Publish the original PMGR nub through the bridge (build-platform-power.py); it reads and writes no hardware.
+  "sheng-pmgr=2",
   # Bring-up: every reset returns to LK fastboot for the unattended cycle (package/A04BR3AutoReset.cpp). Remove for a
   # release image.
   "a04br3-autoreset=900",
