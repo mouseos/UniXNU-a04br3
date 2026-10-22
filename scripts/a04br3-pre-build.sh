@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pre_build of the UniXNU macOS workflow for a04br3 (runs in the UniXNU checkout, DEVICE_DIR = this repository):
 #  1. the original trust cache bundle -> $RUNNER_TEMP/trustcache (scripts/build-a04br3-trust-cache.py, pinned hashes);
-#  2. a Data seed -> $RUNNER_TEMP/data.dbr: the base scripts/prepare-owner-data-fixture.py seeds a 32 MiB APFS volume from the
+#  2. a Data seed -> $RUNNER_TEMP/data.dbr (its volume UUID -> XNU_OWNER_DATA_VOLUME_UUID of the kernel step): the base scripts/prepare-owner-data-fixture.py seeds a 32 MiB APFS volume from the
 #     IPSW OS volume's private/var (attached read-only with hdiutil), drivers/DarwinBoot/Test/packed_ramdisk.py packs it as DBRDISK1.
 # Workflow input: pre_build = bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
 set -euo pipefail
@@ -17,4 +17,10 @@ hdiutil attach -readonly -nobrowse -owners on -mountpoint "$MOUNT" "$OS_DMG"
 trap 'hdiutil detach "$MOUNT" || true' EXIT
 python3 "$TREE/scripts/prepare-owner-data-fixture.py" --output "$RUNNER_TEMP/owner-data"
 python3 "$TREE/drivers/DarwinBoot/Test/packed_ramdisk.py" "$RUNNER_TEMP/owner-data/owner-data-32.cdr" "$RUNNER_TEMP/data.dbr"
+# The kernel's owner Data mount (CONFIG_XNU_OWNER_DATA_MOUNT) selects this seed's volume by UUID.
+DATA_UUID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["volume_uuid"])' "$RUNNER_TEMP/owner-data/seed.json")
+test -n "$DATA_UUID"
+echo "XNU_OWNER_DATA_VOLUME_UUID=$DATA_UUID" >> "${GITHUB_ENV:-/dev/null}"
+export XNU_OWNER_DATA_VOLUME_UUID=$DATA_UUID
+echo "Data seed volume UUID $DATA_UUID"
 ls -l "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/data.dbr"

@@ -28,6 +28,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--boot', type=Path, required=True)
     parser.add_argument('--userdata', type=Path, help='userdata-root.img; omitted: boot and GPT only')
+    parser.add_argument('--root-policy', type=Path,
+                        help='directory of scripts/make-a04br3-root-policy.py (rootpolicy.img, rootpolicy.json): written into '
+                             'userdata right after the image')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     layout = json.loads((HERE / 'a04br3-gpt.json').read_text())
@@ -56,6 +59,18 @@ def main():
     if args.userdata:
         write('userdata', args.userdata, parts['userdata']['first_lba'] * sector, parts['userdata']['sectors'] * sector)
         report['inputs']['userdata'] = {'path': str(args.userdata.resolve()), 'sha256': sha256(args.userdata)}
+    if args.root_policy:
+        policy = json.loads((args.root_policy / 'rootpolicy.json').read_text())
+        image = args.root_policy / 'rootpolicy.img'
+        if sha256(image) != policy['sha256'] or image.stat().st_size != policy['bytes']:
+            raise SystemExit(f'{image} does not match rootpolicy.json')
+        if args.userdata and policy['userdata_offset'] < args.userdata.stat().st_size:
+            raise SystemExit('the root policy would overlap the userdata image')
+        first = parts['userdata']['first_lba'] * sector
+        write('rootpolicy', image, first + policy['userdata_offset'],
+              parts['userdata']['sectors'] * sector - policy['userdata_offset'])
+        report['inputs']['rootpolicy'] = {'path': str(image.resolve()), 'sha256': policy['sha256'],
+                                          'userdata_offset': policy['userdata_offset']}
     write('gpt-secondary', args.out / 'gpt-secondary.bin', gpt['secondary_byte_offset'], (args.out / 'gpt-secondary.bin').stat().st_size)
     write('gpt-primary', args.out / 'gpt-primary.bin', 0, (args.out / 'gpt-primary.bin').stat().st_size)
     # Reboot when the writes are done, so the first boot starts without touching the tablet.

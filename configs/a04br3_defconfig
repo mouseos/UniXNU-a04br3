@@ -9,6 +9,19 @@ CONFIG_XNU_ARM_DT_PLATFORM=y
 CONFIG_XNU_ARMCPU=y
 CONFIG_XNU_NATIVE_AES=y
 CONFIG_XNU_NATIVE_RAM_BLOCK=y
+# Owner root chain of UniXNU-sheng and UniXNU-tb128fu: the root is accepted when NativeMsdc has verified it against the
+# owner-signed policy (board.toml archives, scripts/make-a04br3-root-policy.py).
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK=y
+CONFIG_XNU_VERIFIED_ROOT_PROBE=y
+CONFIG_XNU_OWNER_ROOT_AUDIT=y
+CONFIG_XNU_OWNER_ROOT_TRUST=y
+# After the root: the SystemOS cryptex (dyld cache) and the Data volume of the payload's Data seed, as on sheng. The Data
+# volume UUID changes with every seed, so a04br3-pre-build.sh exports XNU_OWNER_DATA_VOLUME_UUID of the seed it makes.
+CONFIG_XNU_OWNER_CACHE_MOUNT=y
+CONFIG_XNU_OWNER_CACHE_STARTUP=y
+CONFIG_XNU_OWNER_BOOT_MANIFEST=y
+CONFIG_XNU_OWNER_DATA_MOUNT=y
+CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
 CONFIG_XNU_TRUST_CACHE_RUNTIME=y
 CONFIG_XNU_SOURCE_MOCKFS=y
 CONFIG_XNU_NATIVE_CS_HASH_CACHE=y
@@ -16,6 +29,8 @@ CONFIG_XNU_DT_PANIC_REGION=y
 CONFIG_XNU_NATIVE_ARCH_TIMER=y
 
 CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/native-virtio-block-verified/libNativeVirtioBlock.a"
+CONFIG_XNU_VERIFIED_ROOT_ARCHIVE="{tree}/build/a04br3-root-key/libA04BR3RootKey.a"
 CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/a04br3-board/libA04BR3Board.a"
 CONFIG_XNU_NATIVE_PAN=n
 CONFIG_XNU_NATIVE_UFS=n

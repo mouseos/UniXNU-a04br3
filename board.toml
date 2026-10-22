@@ -49,10 +49,17 @@ archives = [
   # IOBlockStorageDevice. build-native-virtio-bindings.py binds them with build/storage-abi/interface-audit.json when present,
   # otherwise with UniXNU scripts/data/native-storage-interface-audit.json (scripts/record-storage-interface.py), the static record
   # of the kernelcache and slide of [kernel.prelink] below.
+  # Owner root chain (CONFIG_XNU_OWNER_ROOT_TRUST): iPadOS mounts the root only when it is authenticated. The verified
+  # NativeVirtioBlock carries native_verified_block_root_authorized(), which asks NativeMsdc about its windows; NativeMsdc
+  # verifies every block against the owner-signed envelopes in userdata (scripts/make-a04br3-root-policy.py); the root key
+  # archive carries the owner anchor, VerifiedRoot and the anchor self-test (CONFIG_XNU_VERIFIED_ROOT_ARCHIVE).
+  "build-arm-driver.py NativeVirtioBlock --verified-root",
+  "build-native-virtio-bindings.py --component NativeVirtioBlock --directory build/native-virtio-block-verified",
+  "build-a04br3-root-key.py",
   "build-arm-driver.py NativeRamBlock",
   "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
   # NativeMsdc: the eMMC (MSDC0) driver. Without CONFIG_XNU_NATIVE_MSDC_BLOCK it builds the persistent store only.
-  "build-arm-driver.py NativeMsdc",
+  "build-arm-driver.py NativeMsdc --verified-root",
   "build-native-virtio-bindings.py --component NativeMsdc --block-class NativeMsdcBlock --directory build/native-msdc",
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",

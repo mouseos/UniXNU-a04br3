@@ -61,6 +61,21 @@ kernelcache pinned in `board.toml` and the public IOStorageFamily source.
 
 ## Flashing
 
+## Root authentication
+
+iPadOS mounts its root only when the volume is authenticated. a04br3 uses the owner root chain of UniXNU-sheng and
+UniXNU-tb128fu (`CONFIG_XNU_OWNER_ROOT_AUDIT`, `CONFIG_XNU_OWNER_ROOT_TRUST`): NativeMsdc (built `--verified-root`)
+checks every 4096-byte block of the OS and SystemOS windows against an envelope signed with the owner key and answers
+the root authorization query of the verified NativeVirtioBlock for windows whose signed volume UUID matches.
+
+- `package/root-key/owner-public.pem` is the owner anchor; `scripts/build-a04br3-root-key.py` puts it into the kernel
+  (`CONFIG_XNU_VERIFIED_ROOT_ARCHIVE`) with VerifiedRoot and a self-test on `package/root-key/selftest.json`.
+- `scripts/make-a04br3-root-policy.py --userdata userdata-root.img --private-key owner.pem --out DIR` signs the
+  envelopes (about 73 MiB) from the windows of the userdata image; `make-a04br3-flash.py --root-policy DIR` writes them
+  into userdata right after the image. They change only with the IPSW or the key, so fastboot rounds never rewrite them.
+- The private key stays with its owner. To build with another key, generate an RSA-3072 key pair (exponent 65537),
+  replace `package/root-key/owner-public.pem` and run `make-a04br3-root-policy.py --selftest` once.
+
 The tablet must be bootloader-unlocked (LK shows "Orange State"); a locked LK refuses the unsigned boot image and
 fastboot writes.
 
