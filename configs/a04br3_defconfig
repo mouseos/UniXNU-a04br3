@@ -8,7 +8,7 @@ CONFIG_XNU_SOURCE_PTHREAD=y
 CONFIG_XNU_ARM_DT_PLATFORM=y
 CONFIG_XNU_ARMCPU=y
 CONFIG_XNU_NATIVE_AES=y
-CONFIG_XNU_NATIVE_RAM_BLOCK=n
+CONFIG_XNU_NATIVE_RAM_BLOCK=y
 CONFIG_XNU_TRUST_CACHE_RUNTIME=y
 CONFIG_XNU_SOURCE_MOCKFS=y
 CONFIG_XNU_NATIVE_CS_HASH_CACHE=y
@@ -26,6 +26,6 @@ CONFIG_XNU_ARMCPU_GICV2=y
 CONFIG_XNU_NS16550_UART=y
 CONFIG_XNU_BOARD_INIT=y
 # eMMC (MSDC0) driver, github.com/mouseos/NativeMsdc. Inert unless native-msdc-root or native-msdc-persist is set.
-# CONFIG_XNU_NATIVE_MSDC_BLOCK=y adds the userdata windows as block devices; it needs the storage ABI audit (board.toml).
+# CONFIG_XNU_NATIVE_MSDC_BLOCK=y adds the userdata windows as block devices, bound to the original IOBlockStorageDevice (board.toml).
 CONFIG_XNU_NATIVE_MSDC=y
-CONFIG_XNU_NATIVE_MSDC_BLOCK=n
+CONFIG_XNU_NATIVE_MSDC_BLOCK=y

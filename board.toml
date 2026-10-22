@@ -45,13 +45,15 @@ archives = [
   "build-arm-driver.py ArmCpu",
   "build-arm-driver.py NativeAES",
   "build-native-aes-bindings.py",
-  # NativeRamBlock (the Data RAM disk) needs build/storage-abi/interface-audit.json from scripts/audit-storage-interface.py, whose
-  # inputs (KDK reference, debugger snapshot) the public workflow does not have; it returns with a reproducible Data path.
-  # NativeMsdc: the eMMC (MSDC0) driver. Without CONFIG_XNU_NATIVE_MSDC_BLOCK it builds the persistent store only and needs no
-  # storage audit. Its userdata windows (CONFIG_XNU_NATIVE_MSDC_BLOCK=y) subclass the original IOBlockStorageDevice and need the
-  # same audit as NativeRamBlock, then also:
-  #   "build-native-virtio-bindings.py --component NativeMsdc --directory build/native-msdc",
+  # NativeRamBlock (the Data RAM disk) and the NativeMsdc userdata windows (CONFIG_XNU_NATIVE_MSDC_BLOCK=y) subclass the original
+  # IOBlockStorageDevice. build-native-virtio-bindings.py binds them with build/storage-abi/interface-audit.json when present,
+  # otherwise with UniXNU scripts/data/native-storage-interface-audit.json (scripts/record-storage-interface.py), the static record
+  # of the kernelcache and slide of [kernel.prelink] below.
+  "build-arm-driver.py NativeRamBlock",
+  "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
+  # NativeMsdc: the eMMC (MSDC0) driver. Without CONFIG_XNU_NATIVE_MSDC_BLOCK it builds the persistent store only.
   "build-arm-driver.py NativeMsdc",
+  "build-native-virtio-bindings.py --component NativeMsdc --directory build/native-msdc",
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",
   "build-a04br3-board.py",

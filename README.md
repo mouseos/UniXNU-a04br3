@@ -44,8 +44,11 @@ layout, the Android partitions `factory`, `metadata`, `system` and `cache` are r
 
 [NativeMsdc](https://github.com/mouseos/NativeMsdc) (`drivers/NativeMsdc`, `CONFIG_XNU_NATIVE_MSDC=y`) drives the eMMC on
 MSDC0 (`/arm-io/mmc0`). It does nothing unless `native-msdc-root` or `native-msdc-persist` is set. The userdata windows
-of the root image (`native-msdc-root`) need `CONFIG_XNU_NATIVE_MSDC_BLOCK=y` and the storage ABI audit described in
-`board.toml`, the same input that NativeRamBlock waits for.
+of the root image (`native-msdc-root`, `CONFIG_XNU_NATIVE_MSDC_BLOCK=y`) and NativeRamBlock (the Data RAM disk) subclass
+the original `IOBlockStorageDevice`. Without the full storage audit, `build-native-virtio-bindings.py` binds them with
+`scripts/data/native-storage-interface-audit.json` of UniXNU, which `scripts/record-storage-interface.py` derives from the
+kernelcache pinned in `board.toml` and the public IOStorageFamily source.
+
 ## Flashing
 
 `scripts/make-a04br3-flash.py --boot out/a04br3/boot/boot.img --userdata out/a04br3/userdata/userdata-root.img --out DIR`
