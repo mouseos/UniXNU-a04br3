@@ -200,7 +200,10 @@ def main():
                                                 GIC_DIST - ARMIO_BASE, GIC_DIST_SIZE,
                                                 GIC_CPU - ARMIO_BASE, GIC_CPU_SIZE))]),
               node('uart0', [('device_type', b'serial\0'),
-                             ('compatible', b'mediatek,mt8167-uart\0mediatek,mt6577-uart\0'),
+                             # 16550 registers at 32-bit spacing (native-ns16550-serial patch, XNU_NS16550_UART).
+                             ('compatible', b'mediatek,mt8167-uart\0mediatek,mt6577-uart\0ns16550a\0'),
+                             ('reg-shift', struct.pack('<I', 2)),
+                             ('reg-io-width', struct.pack('<I', 4)),
                              ('reg', struct.pack('<2Q', UART0 - ARMIO_BASE, UART0_SIZE))]),
               node('mmc0', [('compatible', b'mediatek,mt8167-mmc\0'),
                             ('reg', struct.pack('<2Q', MSDC0 - ARMIO_BASE, MSDC0_SIZE))])]),
