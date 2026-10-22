@@ -35,7 +35,10 @@ for name in SOURCES:
         elif not value.startswith('-W'):
             command.append(value)
         index += 1
-    command += ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter']
+    # The warning set of build-arm-driver.py: the XNU IOKit headers need these exceptions under -Werror.
+    command += ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter',
+                '-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion',
+                '-Wno-unnecessary-virtual-specifier', '-I', str(ROOT / '.cache/xnu-work/osfmk')]
     (out / (destination.stem + '.command.json')).write_text(json.dumps(command, indent=2) + '\n')
     result = subprocess.run(command, cwd=record['directory'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     (out / (destination.stem + '.log')).write_text(result.stdout)
