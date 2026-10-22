@@ -12,7 +12,7 @@ Envelope: kits/VerifiedRoot/tools/manifest.py of UniXNU (VROOT01: 160-byte heade
 SHA-256 of every 4096-byte block). Region (little endian), read by NativeMsdc:
     0      "A04RPOL1", u32 version = 1, u32 count (<= 16), u64 total_bytes (header included)
     24     count entries {u64 offset (from the region start, 4096 aligned), u64 bytes}
-    4064   SHA-256 of bytes 0..4063
+    4064   SHA-256 of the 4096-byte header with these 32 bytes zero (NativeMsdc policyDigest)
     4096.. the envelopes
 The region starts at the SHNGROOT image_bytes offset of userdata (the image end, 1 MiB aligned).
 
@@ -90,7 +90,7 @@ def region(envelopes):
     struct.pack_into('<IIQ', header, 8, 1, len(envelopes), cursor)
     for index, entry in enumerate(entries):
         struct.pack_into('<QQ', header, 24 + 16 * index, *entry)
-    header[4064:] = hashlib.sha256(bytes(header[:4064])).digest()
+    header[4064:] = hashlib.sha256(bytes(header[:4064]) + bytes(32)).digest()
     body = bytearray(cursor)
     body[:HEADER] = header
     for (offset, length), envelope in zip(entries, envelopes):
@@ -129,6 +129,10 @@ def main():
     envelopes, records = [], []
     with args.userdata.open('rb') as stream:
         image_bytes, windows = shngroot(stream)
+        # NativeMsdc places the region at the end of the farthest window, rounded up to 1 MiB; it must be image_bytes.
+        farthest = max((offset + size + (1 << 20) - 1) >> 20 << 20 for offset, size, _ in windows.values())
+        if farthest != image_bytes:
+            raise SystemExit(f'the farthest window ends at {farthest:#x}, not at image_bytes {image_bytes:#x}')
         for name, uuid in CONFIG['windows'].items():
             if name not in windows:
                 raise SystemExit(f'window {name} missing from the SHNGROOT manifest')
