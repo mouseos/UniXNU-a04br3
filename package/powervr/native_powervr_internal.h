@@ -26,6 +26,8 @@ int native_powervr_vm_map(uint64_t device_addr, uint64_t phys, uint64_t size, in
 /* NativePowerVRQueue.cpp: create a compute context in the kernel VM context and run one NULL command with a fence
  * update through it (the pvr_context / pvr_cccb / pvr_queue path). Returns 0 when the firmware wrote the fence. */
 int native_powervr_queue_selftest(void);
+/* The last last_words words of the firmware trace (thread 0) as "powervr trace" rows, then the firmware state. */
+void native_powervr_dump_firmware(const char *when, uint32_t last_words);
 /* Log through IOLog with the powervr: prefix convention. */
 void native_powervr_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #ifdef __cplusplus

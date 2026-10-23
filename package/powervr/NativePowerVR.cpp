@@ -693,6 +693,16 @@ void dumpFirmware(const char *when, uint32_t from)
   }
 }
 
+}  // namespace
+extern "C" void native_powervr_dump_firmware(const char *when, uint32_t last_words)
+{
+  if (!gTc) return;
+  clean(gTc, sizeof(*gTc));
+  const uint32_t ring = ROGUE_FW_TRACE_BUF_DEFAULT_SIZE_IN_DWORDS;
+  if (last_words > ring - 8) last_words = ring - 8;
+  dumpFirmware(when, (gTc->tracebuf[0].trace_pointer + ring - last_words) % ring);
+}
+namespace {
 void vmAndQueueBringUp(void)
 {
   if (gTc) clean(gTc, sizeof(*gTc));
@@ -739,7 +749,8 @@ void vmAndQueueBringUp(void)
         pagePhys == bufPhys ? "MATCH" : "MISMATCH", (clean(gMmuSync->o.cpu, 4), *static_cast<volatile uint32_t *>(gMmuSync->o.cpu)));
   const int q = native_powervr_queue_selftest();
   IOLog("powervr: queue self-test %d\n", q);
-  dumpFirmware("after MMU and queue tests", traceStart);
+  (void)traceStart;
+  native_powervr_dump_firmware("after the queue test", 1500);
   native_powervr_stage = q ? 9 : 10;
 }
 }  // namespace

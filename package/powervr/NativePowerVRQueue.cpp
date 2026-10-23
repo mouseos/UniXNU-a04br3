@@ -263,6 +263,7 @@ int native_powervr_queue_selftest(void)
   err = native_powervr_kccb_submit(&cmd_kick, kKccbTimeoutMs);
   native_powervr_log("queue selftest: KICK (woff %u, wrap mask %x) %s (%d)\n", k.client_woff_update, k.client_wrap_mask_update,
                      err ? "not executed" : "executed", err);
+  native_powervr_dump_firmware("right after the KICK", 1500);   // the MTS loop overwrites the ring within seconds
 
   // The job's done fence: the firmware writes the UFO value once it has processed the UPDATE command.
   uint32_t value = 0;
