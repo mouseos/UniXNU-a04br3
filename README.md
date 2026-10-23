@@ -106,6 +106,7 @@ mtkclient and without touching the tablet:
 
 Both parts are on in this board file for bring-up. For an image that boots normally, set `A04BR3_TEST_CYCLE = "0"`
 and remove `a04br3-autoreset` from `kernel_args`; nothing else changes.
+
 ### Reset on request
 
 With `a04br3-autoreset` the kernel also polls UART0 receive and resets into LK fastboot when the host sends the line

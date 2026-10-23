@@ -4,4 +4,5 @@
 # usage: [UART=/dev/ttyUSB0] scripts/a04br3-reset.sh
 set -eu
 UART=${UART:-/dev/ttyUSB0}
+stty -F "$UART" 921600 cs8 -cstopb -parenb raw -echo clocal
 printf '\nA04BR3!RST\n' > "$UART"

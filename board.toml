@@ -170,7 +170,8 @@ trust_cache_sha256 = [
 ]
 kernel_args = [
   "-v",
-  "serial=3",
+  "serial=1",  # output only: with the input bit (2) XNU's serial keyboard thread drains UART0 receive every 16 ms and
+  # would take the reset request of package/A04BR3AutoReset.cpp
   "debug=0x14e",
   "kt_fixed_zones=120",
   "-apfs_shared_datavolume",

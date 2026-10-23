@@ -12,8 +12,9 @@
 //  3. After <seconds>, reset through TOPRGU.
 //  4. Reset on request: the same thread polls UART0 receive (16550 LSR.DR, 0x11005000) every 100 ms and resets into
 //     fastboot as soon as the host sends the line "A04BR3!RST" (scripts/a04br3-reset.sh), so a round ends when the
-//     evidence is in, without waiting for the timer. The kernel console reads UART0 only for the debugger (serial
-//     getc), which this board does not use; other received bytes are dropped.
+//     evidence is in, without waiting for the timer. This needs serial=1 (output only) in the boot arguments: with
+//     serial=3 XNU's serial keyboard thread (osfmk/console/serial_general.c) drains the receive FIFO every 16 ms.
+//     Other received bytes are dropped.
 // Register sequences:
 //  - PWRAP WACS2 (0x1000F000 +0xA0 CMD, +0xA4 RDATA, +0xA8 VLDCLR) and the RTC unlock/write-trigger order are those of
 //    the stock LK (FUN_41e0588c, FUN_41e06280, FUN_41e06254).
@@ -168,6 +169,7 @@ extern "C" void a04br3_autoreset_init(void)
   gPwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPwrap, 0x1000));
   gToprgu = reinterpret_cast<volatile uint8_t *>(ml_io_map(kToprgu, 0x1000));
   gUart = reinterpret_cast<volatile uint8_t *>(ml_io_map(kUart0, 0x1000));
+  if (gUart == nullptr) { IOLog("a04br3-autoreset: UART0 mapping failed; no reset on request\n"); }
   if (gPwrap == nullptr || gToprgu == nullptr) {
     IOLog("a04br3-autoreset: register mapping failed; cycle disabled\n");
     return;
