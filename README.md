@@ -106,6 +106,12 @@ mtkclient and without touching the tablet:
 
 Both parts are on in this board file for bring-up. For an image that boots normally, set `A04BR3_TEST_CYCLE = "0"`
 and remove `a04br3-autoreset` from `kernel_args`; nothing else changes.
+### Reset on request
+
+With `a04br3-autoreset` the kernel also polls UART0 receive and resets into LK fastboot when the host sends the line
+`A04BR3!RST`: `scripts/a04br3-reset.sh` (`UART=/dev/ttyUSB0`). A round can end as soon as its evidence is on the log
+instead of waiting for the timer.
+
 ### Fast rebuilds over SSH
 
 A full Actions build takes about 25 minutes. The base workflow `.github/workflows/a04br3-ssh.yml` of UniXNU builds once,

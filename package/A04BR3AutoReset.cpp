@@ -10,6 +10,10 @@
 //     host flashes or boots the next image with fastboot: no mtkclient.
 //  2. Arm the MT8167 TOPRGU hardware watchdog and kick it from a kernel thread, so a hung kernel also resets.
 //  3. After <seconds>, reset through TOPRGU.
+//  4. Reset on request: the same thread polls UART0 receive (16550 LSR.DR, 0x11005000) every 100 ms and resets into
+//     fastboot as soon as the host sends the line "A04BR3!RST" (scripts/a04br3-reset.sh), so a round ends when the
+//     evidence is in, without waiting for the timer. The kernel console reads UART0 only for the debugger (serial
+//     getc), which this board does not use; other received bytes are dropped.
 // Register sequences:
 //  - PWRAP WACS2 (0x1000F000 +0xA0 CMD, +0xA4 RDATA, +0xA8 VLDCLR) and the RTC unlock/write-trigger order are those of
 //    the stock LK (FUN_41e0588c, FUN_41e06280, FUN_41e06254).
@@ -29,14 +33,33 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 namespace {
 
-constexpr uint64_t kPwrap = 0x1000F000, kToprgu = 0x10007000;
+constexpr uint64_t kPwrap = 0x1000F000, kToprgu = 0x10007000, kUart0 = 0x11005000;
+constexpr unsigned kUartRbr = 0x00, kUartLsr = 0x14;   // 32-bit register spacing
+constexpr char kResetRequest[] = "A04BR3!RST";
 constexpr unsigned kWacsCmd = 0xA0, kWacsRdata = 0xA4, kWacsVldclr = 0xA8;
 constexpr uint32_t kRtcBbpu = 0x8000, kRtcPdn1 = 0x802C, kRtcProt = 0x8036, kRtcWrtgr = 0x803C;
 constexpr uint32_t kRtcPdn1Fastboot = 1U << 13;
 constexpr unsigned kWdtMode = 0x00, kWdtLength = 0x04, kWdtRestart = 0x08, kWdtSwrst = 0x14;
 constexpr unsigned kWatchdogSeconds = 31;   // TOPRGU LENGTH holds at most 31 s (Linux mtk_wdt max_timeout)
 
-volatile uint8_t *gPwrap, *gToprgu;
+uint32_t rd(volatile uint8_t *base, unsigned offset);
+volatile uint8_t *gPwrap, *gToprgu, *gUart;
+unsigned gRequestMatched;
+
+// True once the received bytes end with kResetRequest.
+bool resetRequested(void)
+{
+  if (gUart == nullptr) { return false; }
+  for (unsigned n = 0; n < 64 && (rd(gUart, kUartLsr) & 1U); n++) {
+    const char c = static_cast<char>(rd(gUart, kUartRbr) & 0xff);
+    if (c == kResetRequest[gRequestMatched]) {
+      if (++gRequestMatched == sizeof(kResetRequest) - 1) { return true; }
+    } else {
+      gRequestMatched = (c == kResetRequest[0]) ? 1 : 0;
+    }
+  }
+  return false;
+}
 unsigned gResetSeconds;
 
 uint32_t rd(volatile uint8_t *base, unsigned offset) { return *reinterpret_cast<volatile uint32_t *>(base + offset); }
@@ -119,14 +142,19 @@ void cycleThread(void *, wait_result_t)
   const uint64_t started = mach_absolute_time();
   uint64_t limit = 0;
   nanoseconds_to_absolutetime(static_cast<uint64_t>(gResetSeconds) * NSEC_PER_SEC, &limit);
-  for (;;) {
-    watchdogKick();
+  for (unsigned tick = 0;; tick++) {
+    if (tick % 10 == 0) { watchdogKick(); }
     if (mach_absolute_time() - started >= limit) {
       IOLog("a04br3-autoreset: %u s elapsed, resetting into fastboot\n", gResetSeconds);
       IOSleep(200);  // let the console drain
       resetNow();
     }
-    IOSleep(1000);
+    if (resetRequested()) {
+      IOLog("a04br3-autoreset: reset requested on UART, resetting into fastboot\n");
+      IOSleep(200);
+      resetNow();
+    }
+    IOSleep(100);
   }
 }
 
@@ -139,6 +167,7 @@ extern "C" void a04br3_autoreset_init(void)
   gResetSeconds = seconds;
   gPwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPwrap, 0x1000));
   gToprgu = reinterpret_cast<volatile uint8_t *>(ml_io_map(kToprgu, 0x1000));
+  gUart = reinterpret_cast<volatile uint8_t *>(ml_io_map(kUart0, 0x1000));
   if (gPwrap == nullptr || gToprgu == nullptr) {
     IOLog("a04br3-autoreset: register mapping failed; cycle disabled\n");
     return;
