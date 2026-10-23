@@ -188,6 +188,8 @@ kernel_args = [
   # boot-ui-focus3, role 2): SpringBoard's main thread, runningboardd and backboardd wait on synchronous XPC replies from lsd;
   # boot-ui-follow=1 did not pick it (the main thread's peer carries a reply code). Remove for a release image.
   "boot-ui-focus3=lsd",
+  # lsd in turn waits on a synchronous reply from containermanagerd (role 3).
+  "boot-ui-focus4=containermanagerd",
   # Bring-up: every reset returns to LK fastboot for the unattended cycle (package/A04BR3AutoReset.cpp). Remove for a
   # release image.
   # 2700 s: the first boot of a new Data seed builds the LaunchServices database in lsd (InstalledContentLibrary, one
