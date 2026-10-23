@@ -92,6 +92,12 @@ pvr_device gPvr;         // what pvr_mmu.c reads of struct pvr_device
 pvr_fw_object *gMmuSync; // fw_dev.mem.mmucache_sync_obj
 uint32_t gFwMemCtx;      // FW address of the VM context's rogue_fwif_fwmemcontext
 pvr_mmu_context *gMmuCtx;
+rogue_fwif_tracebuf *gTc;     // trace control, thread 0 buffer and the FW state objects for the dumps after boot
+uint32_t *gTrace0;
+rogue_fwif_sysdata *gSysdata;
+rogue_fwif_hwrinfobuf *gHwrInfo;
+rogue_fwif_ccb_ctl *gFwccbCtl;
+rogue_fwif_fwccb_cmd *gFwccb;
 
 uint32_t rd32(uint32_t off) { uint32_t v = *reinterpret_cast<volatile uint32_t *>(gRegs + off); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
 uint64_t rd64(uint32_t off) { uint64_t v = *reinterpret_cast<volatile uint64_t *>(gRegs + off); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
@@ -448,6 +454,8 @@ bool boot(void)
     if (!(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED)) started = false;
     // Hand the KCCB to native_powervr_kccb_submit() for every later command.
     gKctl = kctl; gKccb = cmds; gKccbRtn = rtn; gOsdata = od;
+    gTc = tc; gTrace0 = static_cast<uint32_t *>(trace[0].cpu()); gSysdata = sd; gHwrInfo = hw; gFwccbCtl = fctl;
+    gFwccb = static_cast<rogue_fwif_fwccb_cmd *>(fwccb.cpu());
   }
   gFwStarted = started;
   native_powervr_stage = started ? 8 : -8;
@@ -650,8 +658,39 @@ namespace {
 // Linux has no kernel VM context, and contexts always point at a user VM context's FW memory context). Then a check that
 // the GPU page tables translate as built, the MMU cache flush through the firmware (ROGUE_FWIF_KCCB_CMD_MMUCACHE), and
 // the queue self-test of NativePowerVRQueue.cpp.
+// The thread 0 trace written since the pointer 'from' (ring of ROGUE_FW_TRACE_BUF_DEFAULT_SIZE_IN_DWORDS words), as
+// "powervr trace" rows numbered from 0 for scripts/decode-powervr-trace.py, then the firmware state the host can see.
+void dumpFirmware(const char *when, uint32_t from)
+{
+  if (!gTc) return;
+  clean(gTc, sizeof(*gTc));
+  const uint32_t ring = ROGUE_FW_TRACE_BUF_DEFAULT_SIZE_IN_DWORDS, to = gTc->tracebuf[0].trace_pointer;
+  uint32_t n = (to + ring - from) % ring;
+  if (n > 2048) { from = (to + ring - 2048) % ring; n = 2048; }
+  clean(gTrace0, ring * 4);
+  IOLog("powervr: firmware trace %s: %u words from %u\n", when, n, from);
+  uint32_t row[8];
+  for (uint32_t w = 0; w < n; w += 8) {
+    for (uint32_t k = 0; k < 8; k++) row[k] = (w + k < n) ? gTrace0[(from + w + k) % ring] : 0;
+    IOLog("powervr trace %03u: %08x %08x %08x %08x %08x %08x %08x %08x\n", w, row[0], row[1], row[2], row[3], row[4], row[5],
+          row[6], row[7]);
+  }
+  clean(gSysdata, sizeof(*gSysdata)); clean(gHwrInfo, sizeof(*gHwrInfo)); clean(gFwccbCtl, sizeof(*gFwccbCtl));
+  IOLog("powervr: %s: pow_state %u faults %u hwr %u; FWCCB read %u write %u; assert %.64s:%u %.64s; fault0 %.64s:%u\n", when,
+        unsigned(gSysdata->pow_state), gSysdata->fw_faults, gHwrInfo->hwr_counter, gFwccbCtl->read_offset, gFwccbCtl->write_offset,
+        gTc->tracebuf[0].assert_buf.path, gTc->tracebuf[0].assert_buf.line_num, gTc->tracebuf[0].assert_buf.info,
+        gSysdata->fault_info[0].fault_buf.path, gSysdata->fault_info[0].fault_buf.line_num);
+  for (uint32_t i = gFwccbCtl->read_offset; i != gFwccbCtl->write_offset; i = (i + 1) & gFwccbCtl->wrap_mask) {
+    clean(&gFwccb[i], sizeof(gFwccb[i]));
+    const uint32_t *raw = reinterpret_cast<const uint32_t *>(&gFwccb[i]);
+    IOLog("powervr: FWCCB %u: type %x data %x %x %x %x %x %x\n", i, gFwccb[i].cmd_type, raw[1], raw[2], raw[3], raw[4], raw[5], raw[6]);
+  }
+}
+
 void vmAndQueueBringUp(void)
 {
+  if (gTc) clean(gTc, sizeof(*gTc));
+  const uint32_t traceStart = gTc ? gTc->tracebuf[0].trace_pointer : 0;
   gPvr.fw_dev.initialised = true;
   gPvr.fw_dev.mem.mmucache_sync_obj = gMmuSync;
   gMmuCtx = pvr_mmu_context_create(&gPvr);
@@ -694,6 +733,7 @@ void vmAndQueueBringUp(void)
         pagePhys == bufPhys ? "MATCH" : "MISMATCH", (clean(gMmuSync->o.cpu, 4), *static_cast<volatile uint32_t *>(gMmuSync->o.cpu)));
   const int q = native_powervr_queue_selftest();
   IOLog("powervr: queue self-test %d\n", q);
+  dumpFirmware("after MMU and queue tests", traceStart);
   native_powervr_stage = q ? 9 : 10;
 }
 }  // namespace
