@@ -465,10 +465,12 @@ void native_legacy_display_probe(void) {
 }
 void native_legacy_display_late_probe(void);
 extern void native_hid_input_probe(void);
+extern "C" void a04br3_input_start(void);
 // a04br3: the HID input only. native_keystore_probe() runs earlier from unixnu_board_init() (A04BR3Board.cpp); tb128fu's touch
 // and GPU probes drive Qualcomm hardware this board does not have.
 void native_legacy_display_late_probe(void) {
     native_hid_input_probe();
+    a04br3_input_start();   // package/A04BR3Input.cpp: touch panel and keys (a04br3-input=1)
     IOService *display=pendingLegacyDisplay;if(!display)return;pendingLegacyDisplay=nullptr;
     native_legacy_surface_status=OSKextLoadKextWithIdentifier("com.apple.iokit.IOSurface");
     OSDictionary *matching=IOService::nameMatching("IOCoreSurfaceRoot");

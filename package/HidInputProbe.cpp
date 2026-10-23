@@ -203,5 +203,5 @@ void native_hid_input_probe(void) {
 }
 }
 // NativeHidInput (UniXNU drivers/NativeHidInput) registers a button sink through this weak import when the board has a button
-// driver (UniXNU-sheng ButtonProbe.cpp). a04br3 has none: a weak no-op, so a real provider linked later takes precedence.
+// driver (UniXNU-sheng ButtonProbe.cpp). a04br3's is package/A04BR3Input.cpp; this weak no-op stays for a link without it.
 extern "C" __attribute__((weak)) void native_buttons_set_sink(void (*)(void *, uint32_t), void *) {}

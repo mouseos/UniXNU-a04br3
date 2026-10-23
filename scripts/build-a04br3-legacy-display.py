@@ -279,6 +279,8 @@ def compile_like_probe(other_source,other_obj):
         cwd=r['directory'])
 hid_source=KIT/'HidInputProbe.cpp';hid_obj=OUT/'HidInputProbe.o';compile_like_probe(hid_source,hid_obj)
 touch_source=KIT/'TouchState.cpp';touch_obj=OUT/'TouchState.o';compile_like_probe(touch_source,touch_obj)
+# The board's touch panel and keys (package/A04BR3Input.cpp, a04br3-input=1), from the iOS 16 bring-up of this tablet.
+input_source=KIT/'A04BR3Input.cpp';input_obj=OUT/'A04BR3Input.o';compile_like_probe(input_source,input_obj)
 # NativeHidInput against the original IOHIDDevice (UniXNU scripts/build-native-hid-input.py), with the staged candidate.
 print(run(['python3',ROOT/'scripts/build-native-hid-input.py'],text=True),end='')
 hid_dir=ROOT/'build/native-hid-input'
@@ -288,7 +290,7 @@ run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-
      gop/'NativeGOPPresenter.o',gop_late])
 require(code((gop/'NativeGOPPresenter.o').read_bytes(),macho((gop/'NativeGOPPresenter.o').read_bytes()))==
         code(gop_late.read_bytes(),macho(gop_late.read_bytes())),'Owned presenter instructions unchanged by late init staging')
-members=[late,OUT/'original-bindings.o',OUT/'LegacyDisplayProbe.o',hid_obj,touch_obj,hid_dir/'NativeHidInput.late.o',
+members=[late,OUT/'original-bindings.o',OUT/'LegacyDisplayProbe.o',hid_obj,touch_obj,input_obj,hid_dir/'NativeHidInput.late.o',
          hid_dir/'hid-original-bindings.o',gop_late]
 archive.unlink(missing_ok=True)
 run(['xcrun','ar','rcs',archive,*members])

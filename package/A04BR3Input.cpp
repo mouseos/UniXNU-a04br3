@@ -1,0 +1,231 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// a04br3 touch panel and keys for NativeHidInput (boot argument a04br3-input=1, default off).
+//
+// Ported from github.com/mouseos/xnu_kernel_benesse_a04br3 bsd/dev/a04br3_touch.c, a04br3_touch_protocol.h and
+// a04br3_keys.c (the iOS 16 bring-up of this tablet, where they ran on hardware with calibrated corners), whose register
+// facts come from the board Linux BU21025 driver (SANYO TST, 2017), MT8167 i2c-mt65xx, the MT6392 regulator and
+// mtk-pmic-wrap tables and a04br3.dts. No Linux code is linked.
+//  - Touch: ROHM BU21025 resistive controller at I2C0 (0x11009000) address 0x48, powered from MT6392 VGP1 1.8 V through
+//    PWRAP WACS2, polled PIO with the pen interrupt on GPIO8. Each contact is published as one finger to the finger set of
+//    package/TouchState.cpp (x 0..30480, y 0..20320 over the 800x1280 portrait panel) and NativeHidInput is notified.
+//  - Keys: the MT8167 keypad (0x10002000), bit 0 volume up, bit 1 Home. Home goes through NativeHidInput's Home path
+//    (native_hid_input_command, HidInputProbe.cpp), volume up through the button sink (report 2 bit 2).
+// The only other PWRAP user, package/A04BR3AutoReset.cpp, finishes its WACS2 transactions in bsd_init before this starts.
+#include <IOKit/IOLib.h>
+#include <kern/thread.h>
+#include <pexpert/pexpert.h>
+#include <stdint.h>
+
+extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
+extern "C" void thread_deallocate(thread_t);
+extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+
+extern "C" {
+// package/TouchState.cpp
+extern volatile uint32_t native_touch_seq, native_touch_count;
+extern volatile int native_touch_xs[12], native_touch_ys[12], native_touch_ids[12];
+void native_touch_published(void);
+// package/HidInputProbe.cpp: 1 asks NativeHidInput for one Home press and release.
+extern volatile uint32_t native_hid_input_command;
+void a04br3_input_start(void);
+void native_buttons_set_sink(void (*sink)(void *, uint32_t), void *context);
+volatile uint32_t a04br3_input_stage, a04br3_touch_contacts, a04br3_key_presses;
+volatile int a04br3_touch_error = -1;
+}
+
+namespace {
+
+volatile uint8_t *gI2c, *gGpio, *gTop, *gInfra, *gPwrap, *gKeypad;
+void (*volatile gButtonSink)(void *, uint32_t);
+void *volatile gButtonContext;
+
+uint32_t rd(volatile uint8_t *b, unsigned o) { uint32_t v = *reinterpret_cast<volatile uint32_t *>(b + o); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
+void wr(volatile uint8_t *b, unsigned o, uint32_t v) { *reinterpret_cast<volatile uint32_t *>(b + o) = v; __asm__ volatile("dsb oshst" ::: "memory"); }
+uint16_t ird(unsigned o) { uint16_t v = *reinterpret_cast<volatile uint16_t *>(gI2c + o); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
+void iwr(unsigned o, uint16_t v) { *reinterpret_cast<volatile uint16_t *>(gI2c + o) = v; __asm__ volatile("dsb oshst" ::: "memory"); }
+uint16_t krd(unsigned o) { uint16_t v = *reinterpret_cast<volatile uint16_t *>(gKeypad + o); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
+void kwr(unsigned o, uint16_t v) { *reinterpret_cast<volatile uint16_t *>(gKeypad + o) = v; __asm__ volatile("dsb oshst" ::: "memory"); }
+
+int pwWait(unsigned fsm) { for (unsigned n = 0; n < 1000; n++) { if (((rd(gPwrap, 0xa4) >> 16) & 7) == fsm) return 0; IODelay(10); } return -1; }
+int pwRead(unsigned addr, uint16_t *value)
+{
+  if (pwWait(0)) return -1;
+  wr(gPwrap, 0xa0, (addr >> 1) << 16);
+  if (pwWait(6)) return -1;
+  *value = uint16_t(rd(gPwrap, 0xa4));
+  wr(gPwrap, 0xa8, 1);
+  return pwWait(0);
+}
+int pwWrite(unsigned addr, uint16_t value) { if (pwWait(0)) return -1; wr(gPwrap, 0xa0, 0x80000000U | ((addr >> 1) << 16) | value); return pwWait(0); }
+
+// MT6392 VGP1 to 1.8 V (voltage select 0x530 bits 5..7 = 3) and enabled (0x50a bit 15).
+int powerOn(void)
+{
+  if (!(rd(gPwrap, 0x9c) & 1)) return -2;
+  uint16_t v = 0;
+  if (pwRead(0x530, &v) || pwWrite(0x530, uint16_t((v & ~0xe0) | 0x60))) return -3;
+  if (pwRead(0x50a, &v) || pwWrite(0x50a, uint16_t(v | 0x8000))) return -4;
+  IOSleep(20);
+  if (pwRead(0x530, &v)) return -5;
+  return (v & 0xe0) == 0x60 ? 0 : -6;
+}
+
+int transfer(bool read, uint8_t *data, unsigned len)
+{
+  if (!len || len > 2) return -1;
+  iwr(0x0c, 7); iwr(0x38, 1); iwr(0x08, 0); iwr(0x10, 0x28);   // ACK error and clock extension, PIO
+  iwr(0x04, uint16_t((0x48 << 1) | (read ? 1 : 0))); iwr(0x14, uint16_t(len)); iwr(0x18, 1); iwr(0x1c, 2);
+  if (!read) for (unsigned i = 0; i < len; i++) iwr(0, data[i]);
+  iwr(0x24, 1);
+  for (unsigned n = 0; n < 2000; n++) {
+    const unsigned status = ird(0x0c);
+    if (status & 6) { iwr(0x0c, 7); return -2; }
+    if (status & 1) { if (read) for (unsigned i = 0; i < len; i++) data[i] = uint8_t(ird(0)); iwr(0x0c, 7); return 0; }
+    IODelay(5);
+  }
+  iwr(0x50, 1);
+  return -3;
+}
+int command(uint8_t c) { return transfer(false, &c, 1); }
+// 12-bit, MSB aligned ADC reply.
+int measure(uint8_t set, uint8_t op, unsigned waitUs, unsigned *value)
+{
+  uint8_t b[2];
+  int e = command(set); if (e) return e;
+  IODelay(waitUs);
+  e = command(op); if (e) return e;
+  e = transfer(true, b, 2);
+  if (!e) *value = (unsigned(b[0]) << 4) | (b[1] >> 4);
+  return e;
+}
+// 1 contact, 0 release, -1 invalid or noisy sample (keep the previous state). Corner bounds measured on this tablet
+// (2026-10-21, two passes); the landscape horizontal axis is portrait Y and inverted.
+int point(unsigned x, unsigned y, unsigned z, unsigned *px, unsigned *py)
+{
+  if (x > 4095 || y > 4095 || z > 4095) return -1;
+  if (z <= 5 || z == 4095) return 0;
+  const int64_t resistance = int64_t((730 * x) / 4096) * ((4096000 / z) - 1000) - int64_t(1000 - (y * 1000) / 4096) * 305;
+  if (resistance > 900000) return -1;
+  int cx = int(x) - 150, cy = int(y) - 320;
+  if (cx < 0) cx = 0; else if (cx > 3800) cx = 3800;
+  if (cy < 0) cy = 0; else if (cy > 3510) cy = 3510;
+  *px = unsigned(((3510 - cy) * 799) / 3510);
+  *py = unsigned(1279 - (cx * 1279) / 3800);
+  return 1;
+}
+
+void publish(bool down, unsigned px, unsigned py)
+{
+  native_touch_seq = native_touch_seq + 1;   // odd: writing
+  __asm__ volatile("dmb ish" ::: "memory");
+  native_touch_count = down ? 1 : 0;
+  native_touch_ids[0] = 0;
+  native_touch_xs[0] = int((px * 30479U) / 799U);
+  native_touch_ys[0] = int((py * 20319U) / 1279U);
+  __asm__ volatile("dmb ish" ::: "memory");
+  native_touch_seq = native_touch_seq + 1;   // even: published
+  native_touch_published();
+}
+
+void touchThread(void *, wait_result_t)
+{
+  int e = powerOn();
+  if (e) { a04br3_touch_error = e; IOLog("a04br3 input: touch VGP1 1.8 V failed (%d)\n", e); return; }
+  // GPIO58/59 ALT1 (I2C0), GPIO8 input (pen interrupt); only these fields change.
+  for (unsigned pin = 58; pin <= 59; pin++) {
+    const unsigned off = 0x300 + (pin / 5) * 0x10, shift = (pin % 5) * 3;
+    wr(gGpio, off, (rd(gGpio, off) & ~(7U << shift)) | (1U << shift));
+  }
+  wr(gGpio, 0x310, rd(gGpio, 0x310) & ~(7U << 9));
+  wr(gGpio, 0x08, 1U << 8);
+  wr(gGpio, 0x904, (1U << 3) | (1U << 15));
+  wr(gTop, 0x84, 1U << 3);
+  wr(gInfra, 0x80, rd(gInfra, 0x80) & ~(1U << 1));
+  iwr(0x50, 1); iwr(0x40, 3); iwr(0x54, 0); iwr(0x70, 4); iwr(0x20, 0x73f); iwr(0x48, 0); iwr(0x28, 0x8001);
+  e = command(0x50); if (!e) e = command(0xb0); if (!e) e = command(0);
+  a04br3_touch_error = e;
+  IOLog("a04br3 input: BU21025 i2c0@48 init %d\n", e);
+  if (e) return;
+  a04br3_input_stage |= 1;
+  unsigned lastx = 0, lasty = 0, failures = 0;
+  bool down = false;
+  for (;;) {
+    if (!down && (rd(gGpio, 0x200) & (1U << 8))) { IOSleep(20); continue; }   // pen up
+    unsigned x = 0, y = 0, z = 0;
+    e = measure(0x80, 0xc4, 1500, &x);
+    if (!e) e = measure(0x90, 0xd4, 800, &y);
+    if (!e) e = measure(0xa0, 0xe4, 600, &z);
+    if (e) {
+      if (down) { publish(false, lastx, lasty); down = false; }
+      if (++failures <= 3) IOLog("a04br3 input: touch transfer error %d\n", e);
+      IOSleep(100);
+      continue;
+    }
+    failures = 0;
+    const int active = point(x, y, z, &lastx, &lasty);
+    if (active < 0) { (void)command(0); IOSleep(20); continue; }
+    if (active || down) publish(active != 0, lastx, lasty);
+    if ((active != 0) != down) {
+      if (active) a04br3_touch_contacts = a04br3_touch_contacts + 1;
+      if (a04br3_touch_contacts <= 32) IOLog("a04br3 input: touch %s %u,%u\n", active ? "down" : "up", lastx, lasty);
+    }
+    down = active != 0;
+    (void)command(0);
+    IOSleep(20);
+  }
+}
+
+void keyThread(void *, wait_result_t)
+{
+  kwr(0x18, 1024); kwr(0x24, 1);   // as LK leaves the scan: debounce and enable
+  a04br3_input_stage |= 2;
+  unsigned previous = 0, candidate = 0, stable = 0;
+  for (;;) {
+    const unsigned value = (~krd(4)) & 3;
+    if (value == candidate) stable++; else { candidate = value; stable = 0; }
+    if (stable >= 2 && candidate != previous) {
+      const unsigned changed = candidate ^ previous;
+      if ((changed & 2) && (candidate & 2)) { native_hid_input_command = 1; a04br3_key_presses = a04br3_key_presses + 1; }
+      if (changed & 1) {
+        void (*sink)(void *, uint32_t) = gButtonSink;
+        if (sink) sink(gButtonContext, (candidate & 1) ? (1U << 2) : 0);   // report 2 bit 2: Volume Increment
+      }
+      IOLog("a04br3 input: keys volup %u home %u\n", candidate & 1, (candidate >> 1) & 1);
+      previous = candidate;
+    }
+    IOSleep(10);
+  }
+}
+
+void start(void (*fn)(void *, wait_result_t))
+{
+  thread_t thread = nullptr;
+  if (kernel_thread_start(fn, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+}
+
+}  // namespace
+
+// NativeHidInput registers its button sink here (HidInputProbe.cpp keeps a weak no-op for boards without buttons).
+void native_buttons_set_sink(void (*sink)(void *, uint32_t), void *context)
+{
+  gButtonSink = nullptr;
+  __asm__ volatile("dmb ish" ::: "memory");
+  gButtonContext = context;
+  __asm__ volatile("dmb ish" ::: "memory");
+  gButtonSink = sink;
+}
+
+void a04br3_input_start(void)
+{
+  unsigned enabled = 0;
+  if (!PE_parse_boot_argn("a04br3-input", &enabled, sizeof(enabled)) || enabled != 1) return;
+  gI2c = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x11009000, 0x1000));
+  gGpio = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10005000, 0x1000));
+  gTop = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10000000, 0x1000));
+  gInfra = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10001000, 0x1000));
+  gPwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1000F000, 0x1000));
+  gKeypad = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10002000, 0x1000));
+  if (!gI2c || !gGpio || !gTop || !gInfra || !gPwrap || !gKeypad) { IOLog("a04br3 input: register mapping failed\n"); return; }
+  start(touchThread);
+  start(keyThread);
+}
