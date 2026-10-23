@@ -337,7 +337,37 @@ bool boot(void)
     // pvr_fw_stop()'s end state: everything back into soft reset, so the MIPS stops mastering the bus.
     wr64(ROGUE_CR_SOFT_RESET, softResetMask); (void)rd64(ROGUE_CR_SOFT_RESET);
   }
-  native_powervr_stage = started ? 7 : -7;
+  if (started) {
+    // First command (pvr_kccb_send_cmd_reserved_powered() and pvr_kccb_wait_for_completion()): a health check in KCCB
+    // slot 0 with its return slot cleared, the write offset advanced, then the MTS kick for the GP data master.
+    auto *cmds = static_cast<rogue_fwif_kccb_cmd *>(kccb.cpu());
+    auto *rtn = static_cast<uint32_t *>(kccbRtn.cpu());
+    clean(kctl, sizeof(*kctl));
+    const uint32_t slot = kctl->write_offset;
+    memset(&cmds[slot], 0, sizeof(cmds[slot]));
+    cmds[slot].cmd_type = ROGUE_FWIF_KCCB_CMD_HEALTH_CHECK;
+    rtn[slot] = ROGUE_FWIF_KCCB_RTN_SLOT_NO_RESPONSE;
+    clean(&cmds[slot], sizeof(cmds[slot]));
+    clean(&rtn[slot], sizeof(rtn[slot]));
+    __asm__ volatile("dsb sy" ::: "memory");
+    kctl->write_offset = (slot + 1) & kctl->wrap_mask;
+    clean(kctl, sizeof(*kctl));
+    __asm__ volatile("dsb sy" ::: "memory");
+    wr32(ROGUE_CR_MTS_SCHEDULE, PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK);
+    uint32_t result = 0;
+    for (unsigned ms = 0; ms < 2000 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); ms += 10) {
+      IOSleep(10);
+      clean(&rtn[slot], sizeof(rtn[slot]));
+      result = READ_ONCE_A04(rtn[slot]);
+    }
+    clean(kctl, sizeof(*kctl));
+    clean(gHeap + traceCtl.off, traceCtl.size);
+    IOLog("powervr: KCCB health check %s (return 0x%x, read offset %u write offset %u), trace pointer %u\n",
+          (result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED) ? "EXECUTED" : "not executed", result, kctl->read_offset,
+          kctl->write_offset, tc->tracebuf[0].trace_pointer);
+    if (!(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED)) started = false;
+  }
+  native_powervr_stage = started ? 8 : -8;
   return started;
 }
 }  // namespace
