@@ -398,6 +398,11 @@ bool boot(void)
     for (uint32_t w = 0; w < words; w += 8)
       IOLog("powervr trace %03u: %08x %08x %08x %08x %08x %08x %08x %08x\n", w, t0[w], t0[w + 1], t0[w + 2], t0[w + 3], t0[w + 4],
             t0[w + 5], t0[w + 6], t0[w + 7]);
+    // Linux's watchdog counts commands through osdata->kccb_cmds_executed (pvr_watchdog_kccb_stalled()).
+    auto *od = static_cast<rogue_fwif_osdata *>(osdataO.cpu());
+    clean(od, sizeof(*od));
+    IOLog("powervr: osdata kccb_cmds_executed %u\n", od->kccb_cmds_executed);
+    if (od->kccb_cmds_executed >= 1) result |= ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED;
     auto *hw = static_cast<rogue_fwif_hwrinfobuf *>(hwrInfo.cpu());
     clean(hw, sizeof(*hw));
     IOLog("powervr: MIPS exception status %llx wrapper status %llx; HWR counter %u; fault0 data %x %.64s:%u %.64s\n",
