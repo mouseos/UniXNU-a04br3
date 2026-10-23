@@ -272,7 +272,9 @@ bool boot(void)
   auto *tc = static_cast<rogue_fwif_tracebuf *>(traceCtl.cpu());
   tc->tracebuf_size_in_dwords = ROGUE_FW_TRACE_BUF_DEFAULT_SIZE_IN_DWORDS;
   tc->tracebuf_flags = 0;
-  tc->log_type = ROGUE_FWIF_LOG_TYPE_TRACE | ROGUE_FWIF_LOG_TYPE_GROUP_MASK;   // every group, for the bring-up
+  // Every group but MTS for the bring-up: the MTS group logs a background/interrupt task pair about 700 times a second
+  // here, which overwrites the 12000-word ring within seconds and hides the kicks.
+  tc->log_type = ROGUE_FWIF_LOG_TYPE_TRACE | (ROGUE_FWIF_LOG_TYPE_GROUP_MASK & ~ROGUE_FWIF_LOG_TYPE_GROUP_MTS);
   for (uint32_t t = 0; t < MAX_THREAD_NUM; t++) {
     tc->tracebuf[t].trace_buffer_fw_addr = trace[t].fw();
     tc->tracebuf[t].trace_buffer = static_cast<u32 *>(trace[t].cpu());
@@ -666,7 +668,7 @@ void dumpFirmware(const char *when, uint32_t from)
   clean(gTc, sizeof(*gTc));
   const uint32_t ring = ROGUE_FW_TRACE_BUF_DEFAULT_SIZE_IN_DWORDS, to = gTc->tracebuf[0].trace_pointer;
   uint32_t n = (to + ring - from) % ring;
-  if (n > 2048) { from = (to + ring - 2048) % ring; n = 2048; }
+  if (n > ring - 8) { from = (to + 8) % ring; n = ring - 8; }
   clean(gTrace0, ring * 4);
   IOLog("powervr: firmware trace %s: %u words from %u\n", when, n, from);
   uint32_t row[8];
