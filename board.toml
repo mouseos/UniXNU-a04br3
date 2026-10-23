@@ -200,9 +200,10 @@ kernel_args = [
   "boot-ui-focus4=containermanagerd_system",
   # Bring-up: every reset returns to LK fastboot for the unattended cycle (package/A04BR3AutoReset.cpp). Remove for a
   # release image.
-  # 2700 s: the first boot of a new Data seed builds the LaunchServices database in lsd (InstalledContentLibrary, one
+  # 7200 s: a round normally ends with the UART reset request (scripts/a04br3-reset.sh); the timer is the fallback.
+  # The first boot of a new Data seed builds the LaunchServices database in lsd (InstalledContentLibrary, one
   # thread on the Cortex-A35); SpringBoard, backboardd and runningboardd wait on it, and 900 s reset before it finished.
-  "a04br3-autoreset=2700",
+  "a04br3-autoreset=7200",
   # After the PMGR bridge: the launchd-side arguments of UniXNU-tb128fu (board.toml) and UniXNU-sheng that need no display.
   # No corpses for crashing processes (stock XNU osfmk/corpses/corpse.c): on tb128fu each corpse's footprint walk took half
   # of all CPU samples while daemons without a GPU crashed in loops; a04br3 has one Cortex-A35.
