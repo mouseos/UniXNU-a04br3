@@ -53,6 +53,14 @@ extern char boot_process_rows[10][120];
 void boot_process_capture(void);
 void boot_process_snapshot(void);
 }
+// BootProcessProbe.c calls tb128fu's UI thread sampler (BootUiTraceProbe.c) when it is linked; the kernel link needs the
+// symbols, so a04br3, which has no sampler, defines them as weak no-ops (role peer -1: nothing to follow).
+extern "C" {
+__attribute__((weak)) void boot_ui_trace_begin(void) {}
+__attribute__((weak)) void boot_ui_trace_task(void *, unsigned, int, const char *, unsigned) {}
+__attribute__((weak)) void boot_ui_trace_publish(void) {}
+__attribute__((weak)) int boot_ui_trace_role_peer(unsigned) { return -1; }
+}
 // BootProcessProbe.c fills the rows of processes it did not find with "<name>: absent from this process pass".
 static bool a04br3_row_absent(const char *row)
 {
