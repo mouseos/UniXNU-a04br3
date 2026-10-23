@@ -7,7 +7,7 @@
 # payload-<short sha>.img; this script is the host half.
 #
 # usage: UNIXNU=<UniXNU checkout> UEFI=<uefi-a04br3 checkout> [UART_LOG=<collector file> | UART=/dev/ttyUSB0]
-#        [REPO=mouseos/UniXNU] [OUT=<directory>] scripts/a04br3-ssh-round.sh RUN_ID TAG
+#        [REPO=mouseos/UniXNU] [OUT=<directory>] [WAIT=<seconds for the return to fastboot, default 3000>] scripts/a04br3-ssh-round.sh RUN_ID TAG
 # LK refuses fastboot writes while it measures a low battery ("low power, need battery charging"); nothing is written then,
 # so the round is retried every 300 s (up to 3 hours).
 set -uo pipefail
@@ -26,7 +26,7 @@ sha256sum "$OUT/payload-$TAG.img"
 IMG=$OUT/final/a04br3/boot/boot.img
 sha256sum "$IMG"
 for attempt in $(seq 1 36); do
-  MODE=flash "$ROOT/scripts/run-a04br3-unattended.sh" "$IMG" 1200
+  MODE=flash "$ROOT/scripts/run-a04br3-unattended.sh" "$IMG" "${WAIT:-3000}"
   rc=$?
   last=$(ls -td "$ROOT"/out/a04br3/unattended/*/ | head -1)
   if grep -q "low power" "$last/round-1/fastboot.log" 2>/dev/null; then echo "$(date +%T) LK reports low battery, retry in 300 s"; sleep 300; continue; fi
