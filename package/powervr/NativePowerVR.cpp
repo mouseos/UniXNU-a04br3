@@ -353,12 +353,26 @@ bool boot(void)
     kctl->write_offset = (slot + 1) & kctl->wrap_mask;
     clean(kctl, sizeof(*kctl));
     __asm__ volatile("dsb sy" ::: "memory");
-    wr32(ROGUE_CR_MTS_SCHEDULE, PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK);
+    // The host side of the connection (DDK native KM: eConnectionOsState = ACTIVE once its initialisation is done; Linux
+    // leaves it OFFLINE). The firmware reported its side ACTIVE and OS 0 active, but did not take the first kick.
+    auto *conn = static_cast<rogue_fwif_connection_ctl *>(connCtl.cpu());
+    conn->connection_os_state = ROGUE_FW_CONNECTION_OS_ACTIVE;
+    clean(conn, sizeof(*conn));
+    __asm__ volatile("dsb sy" ::: "memory");
     uint32_t result = 0;
-    for (unsigned ms = 0; ms < 2000 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); ms += 10) {
-      IOSleep(10);
-      clean(&rtn[slot], sizeof(rtn[slot]));
-      result = READ_ONCE_A04(rtn[slot]);
+    // Linux's kick, then the DDK's (TASK_COUNTED) if the first one is not taken.
+    const uint32_t kicks[2] = {PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK,
+                               (PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK) | ROGUE_CR_MTS_SCHEDULE_TASK_COUNTED};
+    for (unsigned k = 0; k < 2 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); k++) {
+      wr32(ROGUE_CR_MTS_SCHEDULE, kicks[k]);
+      for (unsigned ms = 0; ms < 2000 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); ms += 10) {
+        IOSleep(10);
+        clean(&rtn[slot], sizeof(rtn[slot]));
+        result = READ_ONCE_A04(rtn[slot]);
+      }
+      clean(kctl, sizeof(*kctl));
+      IOLog("powervr: kick %u (MTS 0x%x): return 0x%x read offset %u; MIPS exception status %llx\n", k, kicks[k], result,
+            kctl->read_offset, rd64(ROGUE_CR_MIPS_EXCEPTION_STATUS));
     }
     clean(kctl, sizeof(*kctl));
     clean(gHeap + traceCtl.off, traceCtl.size);
@@ -368,7 +382,7 @@ bool boot(void)
     // The firmware's state for the host: power state, OS 0 runtime flags, faults, the connection control, FWCCB and the
     // whole trace of thread 0 (decode with scripts/decode-powervr-trace.py, the format table of pvr_rogue_fwif_sf.h).
     auto *sd = static_cast<rogue_fwif_sysdata *>(sysdataO.cpu());
-    auto *cc = static_cast<rogue_fwif_connection_ctl *>(connCtl.cpu());
+    auto *cc = conn;
     clean(sd, sizeof(*sd)); clean(cc, sizeof(*cc)); clean(fctl, sizeof(*fctl));
     IOLog("powervr: sysdata pow_state %u os0 state %u fl_ok %u faults %u; connection fw %u os %u; FWCCB read %u write %u\n",
           unsigned(sd->pow_state), unsigned(sd->os_runtime_flags_mirror[0].os_state), unsigned(sd->os_runtime_flags_mirror[0].fl_ok),
