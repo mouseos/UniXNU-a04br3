@@ -200,13 +200,16 @@ void keyThread(void *, wait_result_t)
 }
 
 // a04br3-input-selftest=<seconds> (bring-up, default off): <seconds> after the input start, one synthetic rightward swipe
-// across the middle of the panel (20 points 15 ms apart) through the same finger set and notification as the panel, so
+// across the middle of the panel (41 points 20 ms apart) through the same finger set and notification as the panel, so
 // the touch path to iPadOS is tested without anyone at the tablet: on the first home screen page it opens the widget view
 // (a page with no previous page would not change on a leftward swipe). NativeHidInput's touch report count and the result of
 // its last report go to UART before and after. The panel's own readings are not involved.
 extern "C" {
 extern volatile uint32_t native_touch_hid_reports;
 extern volatile int native_hid_input_results[8];
+extern volatile uint32_t native_hid_input_events[8];
+extern volatile uint32_t native_touch_edge_stats[4];
+extern char native_hid_input_props[1024];
 }
 unsigned gSelftestSeconds;
 void selftestThread(void *, wait_result_t)
@@ -214,14 +217,18 @@ void selftestThread(void *, wait_result_t)
   IOSleep(gSelftestSeconds * 1000);
   IOLog("a04br3 input: selftest rightward swipe, touch reports %u result 0x%x\n", native_touch_hid_reports,
         unsigned(native_hid_input_results[6]));
-  for (unsigned i = 0; i <= 20; i++) {
-    publish(true, 100 + i * 30, 640);
-    IOSleep(15);
+  IOLog("a04br3 input: event service %.200s\n", native_hid_input_props);
+  for (unsigned i = 0; i <= 40; i++) {
+    publish(true, 100 + i * 15, 640);
+    IOSleep(20);
   }
   publish(false, 700, 640);
   IOSleep(1000);
-  IOLog("a04br3 input: selftest done, touch reports %u result 0x%x\n", native_touch_hid_reports,
-        unsigned(native_hid_input_results[6]));
+  IOLog("a04br3 input: selftest done, touch reports %u result 0x%x events %u/%u/%u/%u/%u/%u/%u/%u edge %u/%u/%u/%u\n",
+        native_touch_hid_reports, unsigned(native_hid_input_results[6]), native_hid_input_events[0], native_hid_input_events[1],
+        native_hid_input_events[2], native_hid_input_events[3], native_hid_input_events[4], native_hid_input_events[5],
+        native_hid_input_events[6], native_hid_input_events[7], native_touch_edge_stats[0], native_touch_edge_stats[1],
+        native_touch_edge_stats[2], native_touch_edge_stats[3]);
 }
 
 void start(void (*fn)(void *, wait_result_t))
