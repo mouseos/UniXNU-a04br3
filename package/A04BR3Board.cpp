@@ -53,7 +53,8 @@ extern char boot_process_rows[10][120];
 void boot_process_capture(void);
 void boot_process_snapshot(void);
 }
-// The user stacks of the traced processes (backboardd = role 0, SpringBoard = role 1) from package/BootUiTraceProbe.c
+// The user stacks of the traced processes (backboardd = role 0, SpringBoard = role 1, with boot-ui-follow=1 the process
+// SpringBoard sends to = role 3 and the one that process sends to = role 0) from package/BootUiTraceProbe.c
 // (UniXNU-tb128fu): the main thread's registers and frame chain, then the other thread groups. Unslid = address - cache slide.
 extern "C" unsigned boot_ui_trace_role_rows(unsigned role, char rows[][120], unsigned max, unsigned detail);
 // BootProcessProbe.c fills the rows of processes it did not find with "<name>: absent from this process pass".
@@ -70,7 +71,7 @@ static void a04br3_thread_report(void)
   for (unsigned i = 0; i < 10; ++i)
     if (boot_process_rows[i][0] && !a04br3_row_absent(boot_process_rows[i])) IOLog("a04br3 threads: %s\n", boot_process_rows[i]);
   static char rows[32][120];
-  for (unsigned role = 0; role < 2; ++role) {
+  for (unsigned role = 0; role < 4; ++role) {
     unsigned n = boot_ui_trace_role_rows(role, rows, 32, 1);
     for (unsigned i = 0; i < n; ++i) IOLog("a04br3 stack: %s\n", rows[i]);
   }
