@@ -365,6 +365,19 @@ bool boot(void)
     IOLog("powervr: KCCB health check %s (return 0x%x, read offset %u write offset %u), trace pointer %u\n",
           (result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED) ? "EXECUTED" : "not executed", result, kctl->read_offset,
           kctl->write_offset, tc->tracebuf[0].trace_pointer);
+    // The firmware's state for the host: power state, OS 0 runtime flags, faults, the connection control, FWCCB and the
+    // whole trace of thread 0 (decode with scripts/decode-powervr-trace.py, the format table of pvr_rogue_fwif_sf.h).
+    auto *sd = static_cast<rogue_fwif_sysdata *>(sysdataO.cpu());
+    auto *cc = static_cast<rogue_fwif_connection_ctl *>(connCtl.cpu());
+    clean(sd, sizeof(*sd)); clean(cc, sizeof(*cc)); clean(fctl, sizeof(*fctl));
+    IOLog("powervr: sysdata pow_state %u os0 state %u fl_ok %u faults %u; connection fw %u os %u; FWCCB read %u write %u\n",
+          unsigned(sd->pow_state), unsigned(sd->os_runtime_flags_mirror[0].os_state), unsigned(sd->os_runtime_flags_mirror[0].fl_ok),
+          sd->fw_faults, unsigned(cc->connection_fw_state), unsigned(cc->connection_os_state), fctl->read_offset, fctl->write_offset);
+    const uint32_t words = tc->tracebuf[0].trace_pointer < 512 ? tc->tracebuf[0].trace_pointer : 512;
+    clean(trace[0].cpu(), words * 4);
+    for (uint32_t w = 0; w < words; w += 8)
+      IOLog("powervr trace %03u: %08x %08x %08x %08x %08x %08x %08x %08x\n", w, t0[w], t0[w + 1], t0[w + 2], t0[w + 3], t0[w + 4],
+            t0[w + 5], t0[w + 6], t0[w + 7]);
     if (!(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED)) started = false;
   }
   native_powervr_stage = started ? 8 : -8;
