@@ -361,9 +361,24 @@ bool boot(void)
     __asm__ volatile("dsb sy" ::: "memory");
     uint32_t result = 0;
     // Linux's kick, then the DDK's (TASK_COUNTED) if the first one is not taken.
-    const uint32_t kicks[2] = {PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK,
-                               (PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK) | ROGUE_CR_MTS_SCHEDULE_TASK_COUNTED};
-    for (unsigned k = 0; k < 2 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); k++) {
+    const uint32_t kicks[3] = {PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK,
+                               (PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK) | ROGUE_CR_MTS_SCHEDULE_TASK_COUNTED,
+                               PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK};
+    auto mtsState = [&](const char *when) {
+      IOLog("powervr: MTS %s: schedule_enable %x bgctx %x intctx %x assoc bg %x/%x int %x/%x counted %llx gpu_int %x event %llx os0_event %x mips_irq %x\n",
+            when, rd32(ROGUE_CR_MTS_SCHEDULE_ENABLE), rd32(ROGUE_CR_MTS_BGCTX), rd32(ROGUE_CR_MTS_INTCTX),
+            rd32(ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC), rd32(ROGUE_CR_MTS_BGCTX_THREAD1_DM_ASSOC),
+            rd32(ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC), rd32(ROGUE_CR_MTS_INTCTX_THREAD1_DM_ASSOC),
+            rd64(ROGUE_CR_MTS_BGCTX_COUNTED_SCHEDULE), rd32(ROGUE_CR_MTS_GPU_INT_STATUS), rd64(ROGUE_CR_EVENT_STATUS),
+            rd32(ROGUE_CR_IRQ_OS0_EVENT_STATUS), rd32(ROGUE_CR_MIPS_WRAPPER_IRQ_STATUS));
+    };
+    mtsState("before kick");
+    for (unsigned k = 0; k < 3 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); k++) {
+      if (k == 2) {
+        // Third try: every data master enabled for scheduling, in case the firmware left the MTS gated.
+        wr32(ROGUE_CR_MTS_SCHEDULE_ENABLE, 0xff);
+        mtsState("after schedule_enable 0xff");
+      }
       wr32(ROGUE_CR_MTS_SCHEDULE, kicks[k]);
       for (unsigned ms = 0; ms < 2000 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); ms += 10) {
         IOSleep(10);
@@ -373,6 +388,7 @@ bool boot(void)
       clean(kctl, sizeof(*kctl));
       IOLog("powervr: kick %u (MTS 0x%x): return 0x%x read offset %u; MIPS exception status %llx\n", k, kicks[k], result,
             kctl->read_offset, rd64(ROGUE_CR_MIPS_EXCEPTION_STATUS));
+      mtsState("after kick");
     }
     clean(kctl, sizeof(*kctl));
     clean(gHeap + traceCtl.off, traceCtl.size);
