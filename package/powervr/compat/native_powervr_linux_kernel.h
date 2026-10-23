@@ -45,6 +45,14 @@ typedef unsigned gfp_t;
 #define likely(x) __builtin_expect(!!(x), 1)
 #define READ_ONCE(x) (*(const volatile __typeof__(x) *)&(x))
 #define WRITE_ONCE(x, v) (*(volatile __typeof__(x) *)&(x) = (v))
+/* XNU's <stdatomic.h> (pulled in by the kernel headers) defines C11 atomic_* macros with these names. */
+#undef atomic_read
+#undef atomic_set
+#undef atomic_xchg
+#undef atomic_fetch_or
+#undef container_of
+#undef min
+#undef max
 typedef struct { volatile int counter; } atomic_t;
 static inline int atomic_read(const atomic_t *a) { return a->counter; }
 static inline void atomic_set(atomic_t *a, int v) { a->counter = v; }
