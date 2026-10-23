@@ -329,7 +329,13 @@ bool boot(void)
                                ROGUE_CR_SLC_CTRL_MISC_ADDR_DECODE_MODE_PVR_HASH1 | ROGUE_CR_SLC_CTRL_MISC_BYPASS_BURST_COMBINER_EN);
   // pvr_mips_wrapper_init()
   const uint64_t remap = ROGUE_MIPSFW_BOOT_REMAP_LOG2_SEGMENT_SIZE;
-  wr32(ROGUE_CR_MIPS_WRAPPER_CONFIG, (ROGUE_MIPSFW_REGISTERS_VIRTUAL_BASE >> ROGUE_MIPSFW_WRAPPER_CONFIG_REGBANK_ADDR_ALIGN) |
+  // PHYS_BUS_WIDTH is 32 here: the register bank is decoded at the GPU's physical register address, as the vendor DDK
+  // does for a bus of 32 bits or less (m1.11ED5425693 rgxstartstop.c RGXInitMipsProcWrapper(): RGXAcquireGPURegsAddr()
+  // >> RGXMIPSFW_WRAPPER_CONFIG_REGBANK_ADDR_ALIGN). Linux only has the > 32-bit form (ROGUE_MIPSFW_REGISTERS_VIRTUAL_BASE)
+  // and refuses narrower buses; with that form the firmware's register accesses missed the bank (timer read 0, MTS tasks
+  // never retired, DM kicks never dispatched).
+  static_assert((kRegBase & 0x7FFFFULL) == 0, "the register bank must be 512 KiB aligned (rgxinit.c RGXSetPowerParams)");
+  wr64(ROGUE_CR_MIPS_WRAPPER_CONFIG, (kRegBase >> ROGUE_MIPSFW_WRAPPER_CONFIG_REGBANK_ADDR_ALIGN) |
                                      ROGUE_CR_MIPS_WRAPPER_CONFIG_BOOT_ISA_MODE_MICROMIPS);
   wr64(ROGUE_CR_MIPS_ADDR_REMAP1_CONFIG1, ROGUE_MIPSFW_BOOT_REMAP_PHYS_ADDR_IN | ROGUE_CR_MIPS_ADDR_REMAP1_CONFIG1_MODE_ENABLE_EN);
   wr64(ROGUE_CR_MIPS_ADDR_REMAP1_CONFIG2, (bootCodePhys & ~ROGUE_CR_MIPS_ADDR_REMAP1_CONFIG2_ADDR_OUT_CLRMSK) | remap);
@@ -352,10 +358,7 @@ bool boot(void)
        (2ULL << ROGUE_CR_AXI_ACE_LITE_CONFIGURATION_AWCACHE_COHERENT_SHIFT) |
        (2ULL << ROGUE_CR_AXI_ACE_LITE_CONFIGURATION_ARCACHE_COHERENT_SHIFT) |
        (2ULL << ROGUE_CR_AXI_ACE_LITE_CONFIGURATION_ARCACHE_CACHE_MAINTENANCE_SHIFT));
-  // The MTS thread 0 association with every data master (bring-up finding: with all associations 0, as the firmware left
-  // them, a kick stays pending in BGCTX and never reaches the MIPS; with them set the firmware wakes and reads the KCCB).
-  wr32(ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC_MASKFULL);
-  wr32(ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC_MASKFULL);
+  // The MTS thread associations stay as reset leaves them (the vendor DDK RGXStart() writes none; the firmware sets them).
   IODelay(3);
   wr64(ROGUE_CR_SOFT_RESET, 0); (void)rd64(ROGUE_CR_SOFT_RESET);
   IODelay(3);
