@@ -44,18 +44,18 @@ void proc_name(int pid, char *buf, int size);
 // The display state on UART with each process list (package/LegacyDisplayProbe.cpp; weak, so a board image without the
 // display archive still links).
 extern "C" {
-extern volatile uint32_t native_legacy_stage __attribute__((weak));
-extern volatile int native_legacy_meta_status __attribute__((weak));
-extern volatile uint32_t native_legacy_start_result __attribute__((weak));
-extern volatile uint64_t native_legacy_gop_physical __attribute__((weak)), native_legacy_gop_bytes __attribute__((weak));
-extern volatile uint32_t native_legacy_gop_width __attribute__((weak)), native_legacy_gop_height __attribute__((weak));
-extern volatile int native_legacy_surface_status __attribute__((weak)), native_legacy_pm_status __attribute__((weak));
-extern volatile int native_legacy_client_pid __attribute__((weak)), native_legacy_transfer_status __attribute__((weak));
-extern volatile uint32_t native_legacy_client_calls __attribute__((weak)), native_legacy_swap_validation_calls __attribute__((weak));
-extern volatile uint32_t native_legacy_swap_validation_reason __attribute__((weak)), native_legacy_transfer_calls __attribute__((weak));
-extern volatile uint32_t native_legacy_presented_generation __attribute__((weak)), native_legacy_retired_frames __attribute__((weak));
-extern volatile uint32_t native_legacy_registration_calls __attribute__((weak));
-unsigned native_legacy_prepare_report(char *out, unsigned cap) __attribute__((weak));
+extern volatile uint32_t native_legacy_stage __attribute__((weak_import));
+extern volatile int native_legacy_meta_status __attribute__((weak_import));
+extern volatile uint32_t native_legacy_start_result __attribute__((weak_import));
+extern volatile uint64_t native_legacy_gop_physical __attribute__((weak_import)), native_legacy_gop_bytes __attribute__((weak_import));
+extern volatile uint32_t native_legacy_gop_width __attribute__((weak_import)), native_legacy_gop_height __attribute__((weak_import));
+extern volatile int native_legacy_surface_status __attribute__((weak_import)), native_legacy_pm_status __attribute__((weak_import));
+extern volatile int native_legacy_client_pid __attribute__((weak_import)), native_legacy_transfer_status __attribute__((weak_import));
+extern volatile uint32_t native_legacy_client_calls __attribute__((weak_import)), native_legacy_swap_validation_calls __attribute__((weak_import));
+extern volatile uint32_t native_legacy_swap_validation_reason __attribute__((weak_import)), native_legacy_transfer_calls __attribute__((weak_import));
+extern volatile uint32_t native_legacy_presented_generation __attribute__((weak_import)), native_legacy_retired_frames __attribute__((weak_import));
+extern volatile uint32_t native_legacy_registration_calls __attribute__((weak_import));
+unsigned native_legacy_prepare_report(char *out, unsigned cap) __attribute__((weak_import));
 }
 
 static void a04br3_display_report(void)
