@@ -26,6 +26,7 @@
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
+#include <string.h>
 
 extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
 extern "C" void thread_deallocate(thread_t);
@@ -37,6 +38,10 @@ namespace {
 constexpr uint64_t kPwrap = 0x1000F000, kToprgu = 0x10007000, kUart0 = 0x11005000;
 constexpr unsigned kUartRbr = 0x00, kUartLsr = 0x14;   // 32-bit register spacing
 constexpr char kResetRequest[] = "A04BR3!RST";
+constexpr char kShotRequest[] = "A04BR3!SHOT";
+// The LK frame buffer that NativeLegacyDisplay presents into (uefi-a04br3 GOP, board.toml): 800x1280, 32 bpp, stride 3200.
+constexpr uint64_t kFrameBuffer = 0xBE9C0000;
+constexpr unsigned kFbWidth = 800, kFbHeight = 1280, kFbStride = 3200;
 constexpr unsigned kWacsCmd = 0xA0, kWacsRdata = 0xA4, kWacsVldclr = 0xA8;
 constexpr uint32_t kRtcBbpu = 0x8000, kRtcPdn1 = 0x802C, kRtcProt = 0x8036, kRtcWrtgr = 0x803C;
 constexpr uint32_t kRtcPdn1Fastboot = 1U << 13;
@@ -45,7 +50,9 @@ constexpr unsigned kWatchdogSeconds = 31;   // TOPRGU LENGTH holds at most 31 s 
 
 uint32_t rd(volatile uint8_t *base, unsigned offset);
 volatile uint8_t *gPwrap, *gToprgu, *gUart;
-unsigned gRequestMatched;
+unsigned gRequestMatched, gShotMatched;
+volatile uint8_t *gFb;
+bool gShotWanted;
 
 // True once the received bytes end with kResetRequest.
 bool resetRequested(void)
@@ -53,6 +60,11 @@ bool resetRequested(void)
   if (gUart == nullptr) { return false; }
   for (unsigned n = 0; n < 64 && (rd(gUart, kUartLsr) & 1U); n++) {
     const char c = static_cast<char>(rd(gUart, kUartRbr) & 0xff);
+    if (c == kShotRequest[gShotMatched]) {
+      if (++gShotMatched == sizeof(kShotRequest) - 1) { gShotWanted = true; gShotMatched = 0; }
+    } else {
+      gShotMatched = (c == kShotRequest[0]) ? 1 : 0;
+    }
     if (c == kResetRequest[gRequestMatched]) {
       if (++gRequestMatched == sizeof(kResetRequest) - 1) { return true; }
     } else {
@@ -138,6 +150,62 @@ void resetNow(void)
   for (;;) { __asm__ volatile("wfi"); }
 }
 
+// Screenshot over UART (bring-up): after "A04BR3!SHOT" the frame buffer goes out on UART0 as text lines, one per row:
+// "A04BR3SHOT <row> <crc32 of the row's raw bytes, hex> <base64 of the run-length coded row>", framed by "A04BR3SHOT BEGIN
+// 800 1280 3200" and "A04BR3SHOT END". The run-length code is a sequence of (count 1..256 as one byte minus 1, 4-byte pixel).
+// Kernel log lines may interleave with the rows (other CPUs print while this thread writes); the host
+// (scripts/a04br3-screenshot.py) keeps rows whose CRC matches and asks again for missing ones.
+void uartPut(char c)
+{
+  for (unsigned spin = 0; spin < 100000 && !(rd(gUart, kUartLsr) & 0x20); spin++) {}
+  wr(gUart, kUartRbr, uint8_t(c));
+}
+void uartPuts(const char *text) { while (*text) uartPut(*text++); }
+uint32_t crc32(const uint8_t *data, unsigned length)
+{
+  uint32_t crc = 0xffffffffU;
+  for (unsigned i = 0; i < length; i++) {
+    crc ^= data[i];
+    for (unsigned b = 0; b < 8; b++) crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1)));
+  }
+  return ~crc;
+}
+void sendShot(void)
+{
+  static uint8_t row[kFbStride], coded[kFbWidth * 5];
+  static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  char line[64];
+  snprintf(line, sizeof(line), "\r\nA04BR3SHOT BEGIN %u %u %u\r\n", kFbWidth, kFbHeight, kFbStride);
+  uartPuts(line);
+  for (unsigned y = 0; y < kFbHeight; y++) {
+    for (unsigned i = 0; i < kFbStride; i += 4) {
+      *reinterpret_cast<uint32_t *>(row + i) = *reinterpret_cast<volatile uint32_t *>(gFb + uint64_t(y) * kFbStride + i);
+    }
+    unsigned n = 0;
+    for (unsigned x = 0; x < kFbWidth;) {
+      const uint32_t pixel = *reinterpret_cast<uint32_t *>(row + x * 4);
+      unsigned run = 1;
+      while (x + run < kFbWidth && run < 256 && *reinterpret_cast<uint32_t *>(row + (x + run) * 4) == pixel) run++;
+      coded[n++] = uint8_t(run - 1);
+      memcpy(coded + n, &pixel, 4);
+      n += 4;
+      x += run;
+    }
+    snprintf(line, sizeof(line), "\r\nA04BR3SHOT %u %08x ", y, crc32(row, kFbWidth * 4));
+    uartPuts(line);
+    for (unsigned i = 0; i < n; i += 3) {
+      const uint32_t v = (uint32_t(coded[i]) << 16) | (i + 1 < n ? uint32_t(coded[i + 1]) << 8 : 0) | (i + 2 < n ? coded[i + 2] : 0);
+      uartPut(alphabet[(v >> 18) & 63]);
+      uartPut(alphabet[(v >> 12) & 63]);
+      uartPut(i + 1 < n ? alphabet[(v >> 6) & 63] : '=');
+      uartPut(i + 2 < n ? alphabet[v & 63] : '=');
+    }
+    uartPuts("\r\n");
+    if ((y & 15) == 15) { watchdogKick(); }
+  }
+  uartPuts("A04BR3SHOT END\r\n");
+}
+
 void cycleThread(void *, wait_result_t)
 {
   const uint64_t started = mach_absolute_time();
@@ -150,7 +218,9 @@ void cycleThread(void *, wait_result_t)
       IOSleep(200);  // let the console drain
       resetNow();
     }
-    if (resetRequested()) {
+    const bool reset = resetRequested();
+    if (gShotWanted && gFb) { gShotWanted = false; sendShot(); }
+    if (reset) {
       IOLog("a04br3-autoreset: reset requested on UART, resetting into fastboot\n");
       IOSleep(200);
       resetNow();
@@ -169,6 +239,7 @@ extern "C" void a04br3_autoreset_init(void)
   gPwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPwrap, 0x1000));
   gToprgu = reinterpret_cast<volatile uint8_t *>(ml_io_map(kToprgu, 0x1000));
   gUart = reinterpret_cast<volatile uint8_t *>(ml_io_map(kUart0, 0x1000));
+  gFb = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFrameBuffer, kFbStride * kFbHeight));
   if (gUart == nullptr) { IOLog("a04br3-autoreset: UART0 mapping failed; no reset on request\n"); }
   if (gPwrap == nullptr || gToprgu == nullptr) {
     IOLog("a04br3-autoreset: register mapping failed; cycle disabled\n");

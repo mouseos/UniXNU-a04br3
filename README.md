@@ -113,6 +113,12 @@ With `a04br3-autoreset` the kernel also polls UART0 receive and resets into LK f
 `A04BR3!RST`: `scripts/a04br3-reset.sh` (`UART=/dev/ttyUSB0`). A round can end as soon as its evidence is on the log
 instead of waiting for the timer.
 
+### Screenshot over UART
+
+`scripts/a04br3-screenshot.py --log <UART log> out.png` sends `A04BR3!SHOT`; the kernel (same thread as the reset request)
+sends the frame buffer as CRC-checked, run-length coded rows on UART0 and the script writes a PNG, asking again for rows a
+kernel log line broke.
+
 ### Fast rebuilds over SSH
 
 A full Actions build takes about 25 minutes. The base workflow `.github/workflows/a04br3-ssh.yml` of UniXNU builds once,
