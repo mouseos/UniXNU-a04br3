@@ -114,16 +114,59 @@ struct Obj { uint32_t off, size; void *cpu() const { return gHeap + off; } uint3
              uint64_t phys(uint32_t o = 0) const { return gHeapPhys + off + o; } };
 
 // pvr_fw_object_create_and_map(): a zeroed, 64-byte aligned (4 KiB for page-sized ones) piece of the heap.
+// Freed ranges of the heap (pvr_fw_object_destroy()), first fit before the bump pointer; adjacent ranges are merged.
+struct FreeRange { uint32_t off, size; };
+constexpr uint32_t kMaxFree = 1024;
+FreeRange gFree[kMaxFree];
+uint32_t gFreeCount;
+
+// pvr_fw_object_create_and_map(): a zeroed, 64-byte aligned (4 KiB for page-sized ones) piece of the heap.
 bool alloc(uint32_t size, Obj &obj, uint32_t align = 64)
 {
+  if (!size) size = 4;
   if (gLock) IOLockLock(gLock);
-  uint32_t off = (gNext + align - 1) & ~(align - 1);
-  if (off + size > kConfigOffset - kReserved) { if (gLock) IOLockUnlock(gLock); return false; }
-  gNext = off + size;
+  bool found = false;
+  uint32_t off = 0;
+  for (uint32_t i = 0; i < gFreeCount && !found; i++) {
+    const uint32_t start = (gFree[i].off + align - 1) & ~(align - 1), end = gFree[i].off + gFree[i].size;
+    if (start + size > end) continue;
+    off = start;
+    found = true;
+    // Split the range around [start, start + size).
+    const FreeRange before = {gFree[i].off, start - gFree[i].off}, after = {start + size, end - (start + size)};
+    for (uint32_t j = i; j + 1 < gFreeCount; j++) gFree[j] = gFree[j + 1];
+    gFreeCount--;
+    if (before.size && gFreeCount < kMaxFree) gFree[gFreeCount++] = before;
+    if (after.size && gFreeCount < kMaxFree) gFree[gFreeCount++] = after;
+  }
+  if (!found) {
+    off = (gNext + align - 1) & ~(align - 1);
+    if (off + size > kConfigOffset - kReserved) { if (gLock) IOLockUnlock(gLock); return false; }
+    gNext = off + size;
+  }
   if (gLock) IOLockUnlock(gLock);
   obj = {off, size};
   memset(obj.cpu(), 0, size);
   return true;
+}
+
+void release(uint32_t off, uint32_t size)
+{
+  if (!size) size = 4;
+  IOLockLock(gLock);
+  FreeRange r = {off, size};
+  for (uint32_t i = 0; i < gFreeCount;) {   // merge with neighbours
+    if (gFree[i].off + gFree[i].size == r.off || r.off + r.size == gFree[i].off) {
+      r = {gFree[i].off < r.off ? gFree[i].off : r.off, gFree[i].size + r.size};
+      gFree[i] = gFree[--gFreeCount];
+    } else {
+      i++;
+    }
+  }
+  if (r.off + r.size == gNext) gNext = r.off;      // give the tail back to the bump pointer
+  else if (gFreeCount < kMaxFree) gFree[gFreeCount++] = r;
+  else IOLog("powervr: firmware heap free list full; %u bytes at %x leak\n", r.size, r.off);
+  IOLockUnlock(gLock);
 }
 Obj fixed(uint32_t off, uint32_t size) { Obj o{off, size}; memset(o.cpu(), 0, size); return o; }
 
@@ -646,19 +689,82 @@ extern "C" int pvr_power_reset(struct pvr_device *pvr_dev, bool hard_reset)
 static struct drm_device gDrm;
 extern "C" struct drm_device *native_powervr_drm(struct pvr_device *pvr_dev) { (void)pvr_dev; return &gDrm; }
 
-extern "C" uint32_t native_powervr_kernel_fw_mem_ctx(void) { return gFwMemCtx; }
-extern "C" int native_powervr_vm_map(uint64_t device_addr, uint64_t phys, uint64_t size, int uncached)
+extern "C" void native_powervr_fw_free(const struct native_powervr_fw_obj *obj)
 {
-  if (!gMmuCtx) return -ENODEV;
-  struct scatterlist sg = {phys, static_cast<unsigned int>(size)};
-  struct sg_table sgt = {&sg, 1, 1};
-  dma_sync_sg_for_device(nullptr, &sg, 1, DMA_BIDIRECTIONAL);   // pvr_mmu_op_context_create() requires synced pages
-  pvr_mmu_op_context *op = pvr_mmu_op_context_create(gMmuCtx, &sgt, device_addr, 0, size);
+  if (!obj || !obj->cpu || !gHeap) return;
+  release(static_cast<uint32_t>(static_cast<uint8_t *>(obj->cpu) - gHeap), obj->size);
+}
+
+// A GPU VM context (pvr_vm_create_context(pvr_dev, is_userspace_context = true)): the pvr_mmu.c page tables and the
+// firmware memory context that points at them (fw_mem_context_init()).
+struct native_powervr_vm { pvr_mmu_context *mmu; native_powervr_fw_obj memCtx; };
+extern "C" struct native_powervr_vm *native_powervr_vm_create(void)
+{
+  if (!gFwStarted) return nullptr;
+  auto *vm = static_cast<native_powervr_vm *>(kzalloc(sizeof(native_powervr_vm), GFP_KERNEL));
+  if (!vm) return nullptr;
+  vm->mmu = pvr_mmu_context_create(&gPvr);
+  if (IS_ERR(vm->mmu)) { kfree(vm); return nullptr; }
+  if (native_powervr_fw_alloc(sizeof(rogue_fwif_fwmemcontext), 64, &vm->memCtx)) {
+    pvr_mmu_context_destroy(vm->mmu);
+    kfree(vm);
+    return nullptr;
+  }
+  auto *fmc = static_cast<rogue_fwif_fwmemcontext *>(vm->memCtx.cpu);
+  fmc->pc_dev_paddr = pvr_mmu_get_root_table_dma_addr(vm->mmu);
+  fmc->page_cat_base_reg_set = ROGUE_FW_BIF_INVALID_PCSET;
+  clean(fmc, sizeof(*fmc));
+  return vm;
+}
+extern "C" void native_powervr_vm_destroy(struct native_powervr_vm *vm)
+{
+  if (!vm) return;
+  // pvr_vm_context_release(): no firmware command for the memory context (its contexts are cleaned up first).
+  pvr_mmu_context_destroy(vm->mmu);
+  pvr_mmu_flush_request_all(&gPvr);
+  pvr_mmu_flush_exec(&gPvr, true);
+  native_powervr_fw_free(&vm->memCtx);
+  kfree(vm);
+}
+extern "C" uint32_t native_powervr_vm_fw_mem_ctx(struct native_powervr_vm *vm) { return vm ? vm->memCtx.fw_addr : 0; }
+extern "C" uint64_t native_powervr_vm_page_table_root(struct native_powervr_vm *vm) { return vm ? pvr_mmu_get_root_table_dma_addr(vm->mmu) : 0; }
+extern "C" int native_powervr_vm_map_sg(struct native_powervr_vm *vm, uint64_t device_addr, const struct native_powervr_sg *sg,
+                                        uint32_t nents, uint64_t offset, uint64_t size, uint64_t flags)
+{
+  if (!vm || !sg || !nents) return -EINVAL;
+  auto *list = static_cast<scatterlist *>(kcalloc(nents, sizeof(scatterlist), GFP_KERNEL));
+  if (!list) return -ENOMEM;
+  for (uint32_t i = 0; i < nents; i++) list[i] = {sg[i].phys, static_cast<unsigned int>(sg[i].size)};
+  sg_table sgt = {list, nents, nents};
+  dma_sync_sg_for_device(nullptr, list, static_cast<int>(nents), DMA_BIDIRECTIONAL);
+  pvr_mmu_op_context *op = pvr_mmu_op_context_create(vm->mmu, &sgt, device_addr, offset, size);
+  int err = IS_ERR(op) ? static_cast<int>(PTR_ERR(op)) : 0;
+  if (!err) {
+    err = pvr_mmu_map(op, size, flags, device_addr);
+    pvr_mmu_op_context_destroy(op);
+  }
+  kfree(list);
+  if (!err) err = pvr_mmu_flush_exec(&gPvr, true);
+  return err;
+}
+extern "C" int native_powervr_vm_unmap(struct native_powervr_vm *vm, uint64_t device_addr, uint64_t size)
+{
+  if (!vm) return -EINVAL;
+  pvr_mmu_op_context *op = pvr_mmu_op_context_create(vm->mmu, nullptr, device_addr, 0, 0);   // pvr_vm.c unmap form
   if (IS_ERR(op)) return static_cast<int>(PTR_ERR(op));
-  int err = pvr_mmu_map(op, size, uncached ? DRM_PVR_BO_BYPASS_DEVICE_CACHE : 0, device_addr);
+  int err = pvr_mmu_unmap(op, device_addr, size);
   pvr_mmu_op_context_destroy(op);
   if (!err) err = pvr_mmu_flush_exec(&gPvr, true);
   return err;
+}
+
+// The self-test VM context.
+native_powervr_vm *gKernelVm;
+extern "C" uint32_t native_powervr_kernel_fw_mem_ctx(void) { return native_powervr_vm_fw_mem_ctx(gKernelVm); }
+extern "C" int native_powervr_vm_map(uint64_t device_addr, uint64_t phys, uint64_t size, int uncached)
+{
+  const native_powervr_sg sg = {phys, size};
+  return native_powervr_vm_map_sg(gKernelVm, device_addr, &sg, 1, 0, size, uncached ? DRM_PVR_BO_BYPASS_DEVICE_CACHE : 0);
 }
 
 
@@ -716,16 +822,11 @@ void vmAndQueueBringUp(void)
   const uint32_t traceStart = gTc ? gTc->tracebuf[0].trace_pointer : 0;
   gPvr.fw_dev.initialised = true;
   gPvr.fw_dev.mem.mmucache_sync_obj = gMmuSync;
-  gMmuCtx = pvr_mmu_context_create(&gPvr);
-  if (IS_ERR(gMmuCtx)) { IOLog("powervr: pvr_mmu_context_create failed %ld\n", PTR_ERR(gMmuCtx)); gMmuCtx = nullptr; return; }
+  gKernelVm = native_powervr_vm_create();
+  if (!gKernelVm) { IOLog("powervr: VM context creation failed\n"); return; }
+  gMmuCtx = gKernelVm->mmu;
   const dma_addr_t pc = pvr_mmu_get_root_table_dma_addr(gMmuCtx);
-  Obj memCtx;
-  if (!alloc(sizeof(rogue_fwif_fwmemcontext), memCtx)) { IOLog("powervr: no FW memory context\n"); return; }
-  auto *fmc = static_cast<rogue_fwif_fwmemcontext *>(memCtx.cpu());   // pvr_vm.c fw_mem_context_init()
-  fmc->pc_dev_paddr = pc;
-  fmc->page_cat_base_reg_set = ROGUE_FW_BIF_INVALID_PCSET;
-  clean(fmc, sizeof(*fmc));
-  gFwMemCtx = memCtx.fw();
+  gFwMemCtx = gKernelVm->memCtx.fw_addr;
   IOLog("powervr: VM context page catalogue %llx, FW memory context %x\n", static_cast<unsigned long long>(pc), gFwMemCtx);
 
   // A 64 KiB buffer at the start of the general heap, mapped and then looked up through the three levels by hand.

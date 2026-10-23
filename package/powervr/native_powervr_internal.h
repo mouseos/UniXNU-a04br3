@@ -19,6 +19,19 @@ void native_powervr_invalidate(const void *p, size_t n);
 /* pvr_kccb_send_cmd() + pvr_kccb_wait_for_completion(): queue one KCCB command, kick the firmware and wait until it has
  * executed it (osdata->kccb_cmds_executed advances). Returns 0, -ETIMEDOUT or -ENODEV (firmware not started). */
 int native_powervr_kccb_submit(const struct rogue_fwif_kccb_cmd *cmd, uint32_t timeout_ms);
+void native_powervr_fw_free(const struct native_powervr_fw_obj *obj);
+/* GPU VM contexts (pvr_vm.c without drm_gpuvm): page tables (Linux pvr_mmu.c) and the firmware memory context. */
+struct native_powervr_vm;
+struct native_powervr_sg { uint64_t phys; uint64_t size; };   /* physically contiguous runs, multiples of 4 KiB */
+struct native_powervr_vm *native_powervr_vm_create(void);
+void native_powervr_vm_destroy(struct native_powervr_vm *vm);
+uint32_t native_powervr_vm_fw_mem_ctx(struct native_powervr_vm *vm);   /* FW address of its rogue_fwif_fwmemcontext */
+uint64_t native_powervr_vm_page_table_root(struct native_powervr_vm *vm);
+/* pvr_mmu_map() of [offset, offset + size) of the runs at device_addr; flags are DRM_PVR_BO_* (pvr_drm.h). Flushes the MMU
+ * caches through the firmware before returning. */
+int native_powervr_vm_map_sg(struct native_powervr_vm *vm, uint64_t device_addr, const struct native_powervr_sg *sg,
+                             uint32_t nents, uint64_t offset, uint64_t size, uint64_t flags);
+int native_powervr_vm_unmap(struct native_powervr_vm *vm, uint64_t device_addr, uint64_t size);
 /* The kernel GPU VM context (pvr_vm_create_context(is_userspace_context = false) equivalent), created after boot. */
 uint32_t native_powervr_kernel_fw_mem_ctx(void);   /* FW address of its rogue_fwif_fwmemcontext, 0 if none */
 /* Map physically contiguous memory into the kernel VM context at device_addr (pvr_mmu_map()). */
