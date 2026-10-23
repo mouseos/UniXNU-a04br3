@@ -27,6 +27,7 @@
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include <string.h>
+#include <libkern/libkern.h>
 
 extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
 extern "C" void thread_deallocate(thread_t);
@@ -39,7 +40,8 @@ constexpr uint64_t kPwrap = 0x1000F000, kToprgu = 0x10007000, kUart0 = 0x1100500
 constexpr unsigned kUartRbr = 0x00, kUartLsr = 0x14;   // 32-bit register spacing
 constexpr char kResetRequest[] = "A04BR3!RST";
 constexpr char kShotRequest[] = "A04BR3!SHOT";
-// The LK frame buffer that NativeLegacyDisplay presents into (uefi-a04br3 GOP, board.toml): 800x1280, 32 bpp, stride 3200.
+// The LK frame buffer that NativeLegacyDisplay presents into (the GOP base the UART report of LegacyDisplayProbe.cpp prints,
+// "gop be9c0000+3e8000 800x1280"); mapped as device memory like the presenter's own mapping: 800x1280, 32 bpp, stride 3200.
 constexpr uint64_t kFrameBuffer = 0xBE9C0000;
 constexpr unsigned kFbWidth = 800, kFbHeight = 1280, kFbStride = 3200;
 constexpr unsigned kWacsCmd = 0xA0, kWacsRdata = 0xA4, kWacsVldclr = 0xA8;
@@ -151,19 +153,31 @@ void resetNow(void)
 }
 
 // Screenshot over UART (bring-up): after "A04BR3!SHOT" the frame buffer goes out on UART0 as text lines, one per row:
-// "A04BR3SHOT <row> <crc32 of the row's raw bytes, hex> <base64 of the run-length coded row>", framed by "A04BR3SHOT BEGIN
+// "A04BR3SHOT <row> <crc32 of the row number and the row's raw bytes, hex> <base64 of the run-length coded row>", framed by "A04BR3SHOT BEGIN
 // 800 1280 3200" and "A04BR3SHOT END". The run-length code is a sequence of (count 1..256 as one byte minus 1, 4-byte pixel).
 // Kernel log lines may interleave with the rows (other CPUs print while this thread writes); the host
 // (scripts/a04br3-screenshot.py) keeps rows whose CRC matches and asks again for missing ones.
-void uartPut(char c)
+bool gUartStuck;
+// false once the transmitter has not drained for 100000 polls; the screenshot then stops (the watchdog keeps running).
+bool uartPut(char c)
 {
-  for (unsigned spin = 0; spin < 100000 && !(rd(gUart, kUartLsr) & 0x20); spin++) {}
+  if (gUartStuck) return false;
+  unsigned spin = 0;
+  while (!(rd(gUart, kUartLsr) & 0x20)) {
+    if (++spin > 100000) { gUartStuck = true; return false; }
+  }
   wr(gUart, kUartRbr, uint8_t(c));
+  return true;
 }
 void uartPuts(const char *text) { while (*text) uartPut(*text++); }
-uint32_t crc32(const uint8_t *data, unsigned length)
+// CRC-32 (zlib) of the row number (4 bytes, little endian) followed by the row's pixels.
+uint32_t shotCrc(uint32_t y, const uint8_t *data, unsigned length)
 {
   uint32_t crc = 0xffffffffU;
+  for (unsigned i = 0; i < 4; i++) {
+    crc ^= (y >> (8 * i)) & 0xff;
+    for (unsigned b = 0; b < 8; b++) crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1)));
+  }
   for (unsigned i = 0; i < length; i++) {
     crc ^= data[i];
     for (unsigned b = 0; b < 8; b++) crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1)));
@@ -172,29 +186,33 @@ uint32_t crc32(const uint8_t *data, unsigned length)
 }
 void sendShot(void)
 {
-  static uint8_t row[kFbStride], coded[kFbWidth * 5];
+  static uint32_t pixels[kFbWidth];
+  static uint8_t coded[kFbWidth * 5];
+  const uint8_t *row = reinterpret_cast<const uint8_t *>(pixels);
+  gUartStuck = false;
   static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   char line[64];
   snprintf(line, sizeof(line), "\r\nA04BR3SHOT BEGIN %u %u %u\r\n", kFbWidth, kFbHeight, kFbStride);
   uartPuts(line);
   for (unsigned y = 0; y < kFbHeight; y++) {
-    for (unsigned i = 0; i < kFbStride; i += 4) {
-      *reinterpret_cast<uint32_t *>(row + i) = *reinterpret_cast<volatile uint32_t *>(gFb + uint64_t(y) * kFbStride + i);
+    for (unsigned x = 0; x < kFbWidth; x++) {
+      pixels[x] = *reinterpret_cast<volatile uint32_t *>(gFb + uint64_t(y) * kFbStride + x * 4);
     }
     unsigned n = 0;
     for (unsigned x = 0; x < kFbWidth;) {
-      const uint32_t pixel = *reinterpret_cast<uint32_t *>(row + x * 4);
+      const uint32_t pixel = pixels[x];
       unsigned run = 1;
-      while (x + run < kFbWidth && run < 256 && *reinterpret_cast<uint32_t *>(row + (x + run) * 4) == pixel) run++;
+      while (x + run < kFbWidth && run < 256 && pixels[x + run] == pixel) run++;
       coded[n++] = uint8_t(run - 1);
       memcpy(coded + n, &pixel, 4);
       n += 4;
       x += run;
     }
-    snprintf(line, sizeof(line), "\r\nA04BR3SHOT %u %08x ", y, crc32(row, kFbWidth * 4));
+    snprintf(line, sizeof(line), "\r\nA04BR3SHOT %u %08x ", y, shotCrc(y, row, kFbWidth * 4));
     uartPuts(line);
     for (unsigned i = 0; i < n; i += 3) {
-      const uint32_t v = (uint32_t(coded[i]) << 16) | (i + 1 < n ? uint32_t(coded[i + 1]) << 8 : 0) | (i + 2 < n ? coded[i + 2] : 0);
+      const uint32_t v = (uint32_t(coded[i]) << 16) | (i + 1 < n ? uint32_t(coded[i + 1]) << 8 : 0U) |
+                         (i + 2 < n ? uint32_t(coded[i + 2]) : 0U);
       uartPut(alphabet[(v >> 18) & 63]);
       uartPut(alphabet[(v >> 12) & 63]);
       uartPut(i + 1 < n ? alphabet[(v >> 6) & 63] : '=');
@@ -202,6 +220,7 @@ void sendShot(void)
     }
     uartPuts("\r\n");
     if ((y & 15) == 15) { watchdogKick(); }
+    if (gUartStuck) { IOLog("a04br3-autoreset: UART transmitter stuck, screenshot stopped at row %u\n", y); return; }
   }
   uartPuts("A04BR3SHOT END\r\n");
 }
@@ -240,6 +259,7 @@ extern "C" void a04br3_autoreset_init(void)
   gToprgu = reinterpret_cast<volatile uint8_t *>(ml_io_map(kToprgu, 0x1000));
   gUart = reinterpret_cast<volatile uint8_t *>(ml_io_map(kUart0, 0x1000));
   gFb = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFrameBuffer, kFbStride * kFbHeight));
+  if (gFb == nullptr) { IOLog("a04br3-autoreset: frame buffer mapping failed; no screenshot\n"); }
   if (gUart == nullptr) { IOLog("a04br3-autoreset: UART0 mapping failed; no reset on request\n"); }
   if (gPwrap == nullptr || gToprgu == nullptr) {
     IOLog("a04br3-autoreset: register mapping failed; cycle disabled\n");
