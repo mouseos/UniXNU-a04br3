@@ -239,6 +239,9 @@ kernel_args = [
   # apart, to test the Home path from the lock screen without anyone at the tablet. Remove for a release image.
   "offline-hid-auto-home=60",
   "offline-hid-auto-home-count=3",
+  # Bring-up: synthetic swipes through the touch path 1000 s after the input start (package/A04BR3Input.cpp), after the
+  # Home presses have opened the home screen. Remove for a release image.
+  "a04br3-input-selftest=1000",
   # launchd's disabled jobs (package/BootWatchdogPolicy.c labels; written into the Data seed by
   # scripts/a04br3-seed-launch-policy.py, and by unixnu_board_launch() once CONFIG_XNU_BOARD_LAUNCH reaches UniXNU).
   # watchdogd: no AppleARMWatchdogTimer here (not in [kernel.prelink] roots); on tb128fu it trapped about 5 minutes in

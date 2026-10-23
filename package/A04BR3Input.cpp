@@ -199,6 +199,27 @@ void keyThread(void *, wait_result_t)
   }
 }
 
+// a04br3-input-selftest=<seconds> (bring-up, default off): <seconds> after the input start, three synthetic horizontal swipes
+// across the middle of the panel (right to left, left to right, right to left; 20 points 15 ms apart each) through the
+// same finger set and notification as the panel, 20 s apart, so the touch path to iPadOS is tested without anyone at the
+// tablet (the home screen changes page). The panel's own readings are not involved.
+unsigned gSelftestSeconds;
+void selftestThread(void *, wait_result_t)
+{
+  IOSleep(gSelftestSeconds * 1000);
+  for (unsigned round = 0; round < 3; round++) {
+    const bool leftward = (round % 2) == 0;
+    IOLog("a04br3 input: selftest swipe %u %s\n", round + 1, leftward ? "leftward" : "rightward");
+    for (unsigned i = 0; i <= 20; i++) {
+      const unsigned x = leftward ? 700 - i * 30 : 100 + i * 30;
+      publish(true, x, 640);
+      IOSleep(15);
+    }
+    publish(false, leftward ? 100 : 700, 640);
+    IOSleep(20000);
+  }
+}
+
 void start(void (*fn)(void *, wait_result_t))
 {
   thread_t thread = nullptr;
@@ -230,4 +251,5 @@ void a04br3_input_start(void)
   if (!gI2c || !gGpio || !gTop || !gInfra || !gPwrap || !gKeypad) { IOLog("a04br3 input: register mapping failed\n"); return; }
   start(touchThread);
   start(keyThread);
+  if (PE_parse_boot_argn("a04br3-input-selftest", &gSelftestSeconds, sizeof(gSelftestSeconds)) && gSelftestSeconds) start(selftestThread);
 }
