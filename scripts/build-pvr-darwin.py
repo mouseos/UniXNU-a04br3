@@ -2,7 +2,7 @@
 """Build the Mesa PowerVR Vulkan driver (src/imagination/vulkan) with the Darwin kernel interface
 (patches/mesa/pvr-darwin-winsys.patch), which talks to the NativePowerVR IOKit user client (package/powervr/NativePowerVRABI.h).
 
-The Imagination driver compiles its USC library from OpenCL C at build time, so it needs mesa_clc (LLVM, libclc,
+The Imagination driver compiles its USC library from OpenCL C at build time, so it needs mesa_clc (LLVM,
 SPIRV-LLVM-Translator) and the build-time compilers pco_clc and pdsc_precomp. A cross build cannot run them from the
 target, hence two stages, as Mesa's cross-compilation guide does:
   --target host  builds the driver for the Mac with the real IOKit (proof that the darwin interface compiles and links
@@ -122,16 +122,35 @@ def python_env():
     return meson
 
 
+def brew_prefix(formula):
+    try:
+        return Path(read(['brew', '--prefix', formula], stderr=subprocess.DEVNULL))
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
 def require_host_tools():
+    # Homebrew keeps llvm, bison and flex keg-only and puts the .pc files of spirv-llvm-translator and spirv-tools in
+    # their own prefixes: add them, so the build needs no shell setup on a macOS runner.
+    if shutil.which('brew'):
+        for formula, sub in (('bison', 'bin'), ('flex', 'bin'), ('llvm', 'bin')):
+            prefix = brew_prefix(formula)
+            if prefix and (prefix / sub).is_dir():
+                os.environ['PATH'] = '%s:%s' % (prefix / sub, os.environ.get('PATH', ''))
+        pc = [str(prefix / 'lib/pkgconfig') for prefix in map(brew_prefix, ('spirv-llvm-translator', 'spirv-tools', 'llvm'))
+              if prefix and (prefix / 'lib/pkgconfig').is_dir()]
+        if pc:
+            os.environ['PKG_CONFIG_PATH'] = ':'.join(pc + [os.environ.get('PKG_CONFIG_PATH', '')])
     missing = [t for t in ('ninja', 'pkg-config', 'xcrun', 'bison', 'flex') if not shutil.which(t)]
     if missing:
         sys.exit('Missing build tools: %s (brew install ninja pkg-config bison flex)' % ' '.join(missing))
     if not shutil.which('llvm-config'):
-        sys.exit('mesa_clc needs LLVM with clang: put $(brew --prefix llvm)/bin on PATH')
-    for module in ('LLVMSPIRVLib', 'SPIRV-Tools', 'libclc'):
+        sys.exit('mesa_clc needs LLVM with clang: brew install llvm')
+    # libclc is not needed: Mesa only looks for it with rusticl or the Microsoft CLC (meson.build, dep_clc).
+    for module in ('LLVMSPIRVLib', 'SPIRV-Tools'):
         if run(['pkg-config', '--exists', module]).returncode:
-            sys.exit('pkg-config cannot find %s (brew install spirv-llvm-translator spirv-tools libclc, matching the '
-                     'LLVM major version, and set PKG_CONFIG_PATH)' % module)
+            sys.exit('pkg-config cannot find %s (brew install spirv-llvm-translator spirv-tools, matching the LLVM major '
+                     'version)' % module)
 
 
 COMMON = ['-Dgallium-drivers=', '-Dvulkan-drivers=imagination', '-Dimagination-kmds=darwin', '-Dplatforms=',
