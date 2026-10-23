@@ -64,8 +64,16 @@ static bool a04br3_row_absent(const char *row)
     if (!strncmp(row, ": absent", 8)) return true;
   return false;
 }
+// Secondary-CPU bring-up counters of ArmCpu (sheng-smp=1): requested/running cores and each core's step and PSCI result.
+extern "C" {
+extern volatile uint32_t armcpu_smp_requested, armcpu_smp_running, armcpu_smp_step[8];
+extern volatile int32_t armcpu_smp_psci_rc[8];
+}
 static void a04br3_thread_report(void)
 {
+  IOLog("a04br3 smp: requested %u running %u steps %u/%u/%u/%u psci %d/%d/%d/%d\n", armcpu_smp_requested, armcpu_smp_running,
+        armcpu_smp_step[0], armcpu_smp_step[1], armcpu_smp_step[2], armcpu_smp_step[3], armcpu_smp_psci_rc[0],
+        armcpu_smp_psci_rc[1], armcpu_smp_psci_rc[2], armcpu_smp_psci_rc[3]);
   boot_process_capture();
   boot_process_snapshot();
   for (unsigned i = 0; i < 10; ++i)
