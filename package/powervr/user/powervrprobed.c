@@ -60,7 +60,9 @@
 #ifndef POWERVRPROBED_VULKAN
 #define POWERVRPROBED_VULKAN 0
 #endif
-#define POWERVRPROBED_VULKAN_LIBRARY "/private/var/ngpu/lib/libvulkan_powervr_mesa.dylib"
+// Through the GPU addon union mount (sheng-gpu-addon=1) of /private/var/ngpu/addons over /System/Library/Extensions: the platform
+// sandbox refuses an executable mapping of a library below /private/var ("file system sandbox blocked mmap()", hardware).
+#define POWERVRPROBED_VULKAN_LIBRARY "/System/Library/Extensions/NativePowerVRVulkan.bundle/libvulkan_powervr_mesa.dylib"
 
 // The user view of a BO is write-combined (NativePowerVRGpu.cpp clientMemoryForType()): complete the stores before reading
 // them back. The host check (build-a04br3-powervr-probe.py --check) compiles for the build machine's architecture.

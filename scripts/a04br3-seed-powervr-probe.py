@@ -6,7 +6,10 @@
 
 Adds, owned by root:wheel:
   /private/var/ngpu/bin/powervrprobed                    0755  (DIR/powervrprobed)
-  /private/var/ngpu/lib/libvulkan_powervr_mesa.dylib     0755  (DIR/lib/..., only when built with --vulkan)
+  /private/var/ngpu/addons/NativePowerVRVulkan.bundle/libvulkan_powervr_mesa.dylib  0755  (DIR/lib/..., only with --vulkan;
+      visible as /System/Library/Extensions/NativePowerVRVulkan.bundle/ through the GPU addon union mount of UniXNU
+      (zzy-native-gpu-addon-mount, kernel argument sheng-gpu-addon=1): the platform sandbox refuses an executable
+      mapping of a library below /private/var)
   /private/var/ngpu/daemons/<label>.plist                0644  (with --launchd-job; launchd does not run it, see build-a04br3-powervr-probe.py)
 the same paths UniXNU's add-gpu-plugin-data.py and make-gpu-addon.py use for adrenoprobed. The kernel starts the probe from the board
 launch hook with a04br3-powervrprobed=1 (package/A04BR3ProbeLaunch.c); the binaries run only with the owner trust bundle of
@@ -31,7 +34,7 @@ LABEL = 'org.unixnu.a04br3.powervrprobed'
 def plan(probe, launchd_job):
     files = [(probe / 'powervrprobed', 'bin/powervrprobed', '0755')]
     if (probe / 'lib' / LIB).is_file():
-        files.append((probe / 'lib' / LIB, 'lib/' + LIB, '0755'))
+        files.append((probe / 'lib' / LIB, 'addons/NativePowerVRVulkan.bundle/' + LIB, '0755'))
     if launchd_job:
         files.append((probe / (LABEL + '.plist'), 'daemons/%s.plist' % LABEL, '0644'))
     missing = [str(source) for source, _, _ in files if not source.is_file()]

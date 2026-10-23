@@ -240,6 +240,9 @@ kernel_args = [
   # (CONFIG_XNU_BOARD_LAUNCH, upstream proposal native-board-launch-hook) and a seed and trust bundle that carry it
   # (a04br3-pre-build.sh A04BR3_POWERVR_PROBE=1); without the binary the spawn prints ENOENT (2) and the boot goes on.
   "a04br3-powervrprobed=1",
+  # The GPU addon union mounts of UniXNU (zzy-native-gpu-addon-mount): /private/var/ngpu/addons over /System/Library/Extensions,
+  # where the platform sandbox allows the executable mapping of the Mesa PowerVR library.
+  "sheng-gpu-addon=1",
   "a04br3-input=1",
   # NativeHidInput registers its touch sink and digitizer collection only with this (UniXNU-tb128fu, UniXNU-qemu).
   "sheng-touch-hid=1",
