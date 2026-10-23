@@ -9,7 +9,9 @@
 //    PWRAP WACS2, polled PIO with the pen interrupt on GPIO8. Each contact is published as one finger to the finger set of
 //    package/TouchState.cpp (x 0..30480, y 0..20320 over the 800x1280 portrait panel) and NativeHidInput is notified.
 //  - Keys: the MT8167 keypad (0x10002000), bit 0 volume up, bit 1 Home. Home goes through NativeHidInput's Home path
-//    (native_hid_input_command, HidInputProbe.cpp), volume up through the button sink (report 2 bit 2).
+//    (native_hid_input_command, HidInputProbe.cpp: read on NativeHidInput's 1 s tick, one 100 ms press per request, after the
+//    second presented frame), volume up through the button sink (report 2 bit 2). Needs sheng-touch-hid=1 for the
+//    digitizer collection and the touch sink of NativeHidInput.
 // The only other PWRAP user, package/A04BR3AutoReset.cpp, finishes its WACS2 transactions in bsd_init before this starts.
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
@@ -146,7 +148,7 @@ void touchThread(void *, wait_result_t)
   a04br3_touch_error = e;
   IOLog("a04br3 input: BU21025 i2c0@48 init %d\n", e);
   if (e) return;
-  a04br3_input_stage |= 1;
+  a04br3_input_stage = a04br3_input_stage | 1;
   unsigned lastx = 0, lasty = 0, failures = 0;
   bool down = false;
   for (;;) {
@@ -178,7 +180,7 @@ void touchThread(void *, wait_result_t)
 void keyThread(void *, wait_result_t)
 {
   kwr(0x18, 1024); kwr(0x24, 1);   // as LK leaves the scan: debounce and enable
-  a04br3_input_stage |= 2;
+  a04br3_input_stage = a04br3_input_stage | 2;
   unsigned previous = 0, candidate = 0, stable = 0;
   for (;;) {
     const unsigned value = (~krd(4)) & 3;
