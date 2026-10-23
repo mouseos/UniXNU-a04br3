@@ -247,9 +247,9 @@ kernel_args = [
   # watchdogd: no AppleARMWatchdogTimer here (not in [kernel.prelink] roots); on tb128fu it trapped about 5 minutes in
   # and its exit is fatal. The jobs are tb128fu's set without a GPU: the SpringBoard wait cycle (identityservicesd,
   # locationd), radios (CommCenter, bluetoothd) and the respawn/crash loops (PerfPowerServices, iomfb_fdr_loader,
-  # iconservicesagent).
+  # iconservicesagent, which is enabled again here: the iOS 16 bring-up of this tablet drew icons without a GPU).
   "sheng-disable-watchdogd=1",
-  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader,com.apple.iconservices.iconservicesagent",
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
 ]
 
 [payload.adt]

@@ -215,6 +215,9 @@ unsigned gSelftestSeconds;
 void selftestThread(void *, wait_result_t)
 {
   IOSleep(gSelftestSeconds * 1000);
+  // Wake the display first: a sleeping or locked home screen ignores touches (Home through NativeHidInput, then 5 s).
+  native_hid_input_command = 1;
+  IOSleep(5000);
   IOLog("a04br3 input: selftest rightward swipe, touch reports %u result 0x%x\n", native_touch_hid_reports,
         unsigned(native_hid_input_results[6]));
   IOLog("a04br3 input: event service %.200s\n", native_hid_input_props);
