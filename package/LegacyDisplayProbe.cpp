@@ -417,8 +417,26 @@ __attribute__((noreturn,noinline)) void native_legacy_backend_guard(unsigned slo
       (unsigned)native_legacy_transfer_status,native_legacy_transfer_bytes,native_legacy_retirement_calls,
       native_legacy_prepare_reason,native_legacy_prepare_attempts);
 }
+// a04br3: the state of this probe on UART, printed by the board's process-list thread (package/A04BR3Board.cpp).
+extern "C" void a04br3_display_report_set(void (*report)(void));
+static void a04br3DisplayReport(void)
+{
+    IOLog("a04br3 display: stage %u meta %d start %u gop %llx+%llx %ux%u reg %u surface %d pm %d client pid %d calls %u "
+          "swaps %u reason %u transfers %u status %d presented %u retired %u\n",
+          native_legacy_stage, native_legacy_meta_status, native_legacy_start_result,
+          (unsigned long long)native_legacy_gop_physical, (unsigned long long)native_legacy_gop_bytes, native_legacy_gop_width,
+          native_legacy_gop_height, native_legacy_registration_calls, native_legacy_surface_status, native_legacy_pm_status,
+          native_legacy_client_pid, native_legacy_client_calls, native_legacy_swap_validation_calls,
+          native_legacy_swap_validation_reason, native_legacy_transfer_calls, native_legacy_transfer_status,
+          native_legacy_presented_generation, native_legacy_retired_frames);
+    static char text[400];
+    native_legacy_prepare_report(text, sizeof(text));
+    IOLog("a04br3 display: %s\n", text);
+}
+
 void native_legacy_display_probe(void);
 void native_legacy_display_probe(void) {
+    a04br3_display_report_set(a04br3DisplayReport);
     // The registration path and optional original-userclient inspection both
     // reach this boot-thread entry. Run class constructors only once; a second
     // postModLoad would attempt to register the same metaclasses again.

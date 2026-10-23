@@ -41,39 +41,13 @@ int proc_pid(proc_t);
 void proc_name(int pid, char *buf, int size);
 }
 
-// The display state on UART with each process list (package/LegacyDisplayProbe.cpp; weak, so a board image without the
-// display archive still links).
-extern "C" {
-extern volatile uint32_t native_legacy_stage __attribute__((weak_import));
-extern volatile int native_legacy_meta_status __attribute__((weak_import));
-extern volatile uint32_t native_legacy_start_result __attribute__((weak_import));
-extern volatile uint64_t native_legacy_gop_physical __attribute__((weak_import)), native_legacy_gop_bytes __attribute__((weak_import));
-extern volatile uint32_t native_legacy_gop_width __attribute__((weak_import)), native_legacy_gop_height __attribute__((weak_import));
-extern volatile int native_legacy_surface_status __attribute__((weak_import)), native_legacy_pm_status __attribute__((weak_import));
-extern volatile int native_legacy_client_pid __attribute__((weak_import)), native_legacy_transfer_status __attribute__((weak_import));
-extern volatile uint32_t native_legacy_client_calls __attribute__((weak_import)), native_legacy_swap_validation_calls __attribute__((weak_import));
-extern volatile uint32_t native_legacy_swap_validation_reason __attribute__((weak_import)), native_legacy_transfer_calls __attribute__((weak_import));
-extern volatile uint32_t native_legacy_presented_generation __attribute__((weak_import)), native_legacy_retired_frames __attribute__((weak_import));
-extern volatile uint32_t native_legacy_registration_calls __attribute__((weak_import));
-unsigned native_legacy_prepare_report(char *out, unsigned cap) __attribute__((weak_import));
-}
-
+// The display state on UART with each process list: package/LegacyDisplayProbe.cpp registers its report here (the first
+// kernel pass links a display stub that registers nothing, so the board archive references no display symbol).
+static void (*volatile gDisplayReport)(void);
+extern "C" void a04br3_display_report_set(void (*report)(void)) { gDisplayReport = report; }
 static void a04br3_display_report(void)
 {
-  if (!&native_legacy_stage) return;
-  IOLog("a04br3 display: stage %u meta %d start %u gop %llx+%llx %ux%u reg %u surface %d pm %d client pid %d calls %u "
-        "swaps %u reason %u transfers %u status %d presented %u retired %u\n",
-        native_legacy_stage, native_legacy_meta_status, native_legacy_start_result,
-        (unsigned long long)native_legacy_gop_physical, (unsigned long long)native_legacy_gop_bytes, native_legacy_gop_width,
-        native_legacy_gop_height, native_legacy_registration_calls, native_legacy_surface_status, native_legacy_pm_status,
-        native_legacy_client_pid, native_legacy_client_calls, native_legacy_swap_validation_calls,
-        native_legacy_swap_validation_reason, native_legacy_transfer_calls, native_legacy_transfer_status,
-        native_legacy_presented_generation, native_legacy_retired_frames);
-  if (&native_legacy_prepare_report) {
-    static char text[400];
-    native_legacy_prepare_report(text, sizeof(text));
-    IOLog("a04br3 display: %s\n", text);
-  }
+  if (void (*report)(void) = gDisplayReport) report();
 }
 
 namespace {
