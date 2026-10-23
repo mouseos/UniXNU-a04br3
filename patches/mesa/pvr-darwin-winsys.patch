@@ -175,6 +175,61 @@ index 5b9e96d..29bedfa 100644
  
  #include "vk_device.h"
  #include "vk_device_memory.h"
+diff --git a/src/imagination/vulkan/pvr_image.c b/src/imagination/vulkan/pvr_image.c
+index 654ba77..a107581 100644
+--- a/src/imagination/vulkan/pvr_image.c
++++ b/src/imagination/vulkan/pvr_image.c
+@@ -22,6 +22,7 @@
+  */
+ 
+ #include "pvr_image.h"
++#include "util/detect_os.h"
+ 
+ #include <assert.h>
+ #include <stdbool.h>
+@@ -65,7 +66,9 @@ static void pvr_image_init_memlayout(struct pvr_image *image)
+       break;
+    case VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT:
+       /* Support only LINEAR now */
++#if DETECT_OS_LINUX || DETECT_OS_BSD
+       assert(image->vk.drm_format_mod == DRM_FORMAT_MOD_LINEAR);
++#endif
+       image->memlayout = PVR_MEMLAYOUT_LINEAR;
+       break;
+    }
+@@ -214,6 +217,7 @@ static void pvr_image_setup_mip_levels(struct pvr_image *image)
+ 
+ static unsigned get_pbe_stride_align(const struct pvr_device_info *dev_info);
+ 
++#if DETECT_OS_LINUX || DETECT_OS_BSD
+ static VkResult pvr_pick_modifier(const VkImageCreateInfo *pCreateInfo,
+                                   unsigned pbe_stride_align,
+                                   uint64_t *modifier)
+@@ -257,6 +261,7 @@ static VkResult pvr_pick_modifier(const VkImageCreateInfo *pCreateInfo,
+ 
+    return VK_SUCCESS;
+ }
++#endif
+ 
+ VkResult pvr_CreateImage(VkDevice _device,
+                          const VkImageCreateInfo *pCreateInfo,
+@@ -307,6 +312,8 @@ void pvr_image_init(struct pvr_device *device,
+    image->plane_count = vk_format_get_plane_count(image->vk.format);
+    image->alignment = device->pdevice->ws->page_size;
+ 
++#if DETECT_OS_LINUX || DETECT_OS_BSD
++   /* vk_image carries drm_format_mod only there; Darwin does not expose VK_EXT_image_drm_format_modifier. */
+    if (pCreateInfo->tiling == VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT) {
+       VkResult res = pvr_pick_modifier(pCreateInfo,
+                                        pbe_stride_align,
+@@ -316,6 +323,7 @@ void pvr_image_init(struct pvr_device *device,
+ 
+       assert(image->vk.drm_format_mod == DRM_FORMAT_MOD_LINEAR);
+    }
++#endif
+ 
+    pvr_image_init_memlayout(image);
+    pvr_image_init_physical_extent(image, pCreateInfo, pbe_stride_align);
 diff --git a/src/imagination/vulkan/pvr_instance.c b/src/imagination/vulkan/pvr_instance.c
 index da1f495..f1a6711 100644
 --- a/src/imagination/vulkan/pvr_instance.c
