@@ -235,8 +235,7 @@ bool boot(void)
   auto *tc = static_cast<rogue_fwif_tracebuf *>(traceCtl.cpu());
   tc->tracebuf_size_in_dwords = ROGUE_FW_TRACE_BUF_DEFAULT_SIZE_IN_DWORDS;
   tc->tracebuf_flags = 0;
-  tc->log_type = ROGUE_FWIF_LOG_TYPE_TRACE | ROGUE_FWIF_LOG_TYPE_GROUP_MAIN | ROGUE_FWIF_LOG_TYPE_GROUP_POW |
-                 ROGUE_FWIF_LOG_TYPE_GROUP_HWR | ROGUE_FWIF_LOG_TYPE_GROUP_MISC;
+  tc->log_type = ROGUE_FWIF_LOG_TYPE_TRACE | ROGUE_FWIF_LOG_TYPE_GROUP_MASK;   // every group, for the bring-up
   for (uint32_t t = 0; t < MAX_THREAD_NUM; t++) {
     tc->tracebuf[t].trace_buffer_fw_addr = trace[t].fw();
     tc->tracebuf[t].trace_buffer = static_cast<u32 *>(trace[t].cpu());
@@ -307,6 +306,10 @@ bool boot(void)
        (2ULL << ROGUE_CR_AXI_ACE_LITE_CONFIGURATION_AWCACHE_COHERENT_SHIFT) |
        (2ULL << ROGUE_CR_AXI_ACE_LITE_CONFIGURATION_ARCACHE_COHERENT_SHIFT) |
        (2ULL << ROGUE_CR_AXI_ACE_LITE_CONFIGURATION_ARCACHE_CACHE_MAINTENANCE_SHIFT));
+  // The MTS thread 0 association with every data master (bring-up finding: with all associations 0, as the firmware left
+  // them, a kick stays pending in BGCTX and never reaches the MIPS; with them set the firmware wakes and reads the KCCB).
+  wr32(ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC_MASKFULL);
+  wr32(ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC_MASKFULL);
   IODelay(3);
   wr64(ROGUE_CR_SOFT_RESET, 0); (void)rd64(ROGUE_CR_SOFT_RESET);
   IODelay(3);
@@ -373,30 +376,14 @@ bool boot(void)
             rd32(ROGUE_CR_IRQ_OS0_EVENT_STATUS), rd32(ROGUE_CR_MIPS_WRAPPER_IRQ_STATUS));
     };
     mtsState("before kick");
-    for (unsigned k = 0; k < 4 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); k++) {
-      if (k == 3) {
-        // Fourth try: thread 0 associated with every data master in both contexts (the firmware had left all of them 0,
-        // and pvr_fw_stop() writes the cleared form, so the host side owns these registers).
-        wr32(ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC_MASKFULL);
-        wr32(ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC_MASKFULL);
-        mtsState("after thread 0 DM association");
-      }
-      if (k == 2) {
-        // Third try: every data master enabled for scheduling, in case the firmware left the MTS gated.
-        wr32(ROGUE_CR_MTS_SCHEDULE_ENABLE, 0xff);
-        mtsState("after schedule_enable 0xff");
-      }
-      wr32(ROGUE_CR_MTS_SCHEDULE, kicks[k]);
-      for (unsigned ms = 0; ms < 2000 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); ms += 10) {
-        IOSleep(10);
-        clean(&rtn[slot], sizeof(rtn[slot]));
-        result = READ_ONCE_A04(rtn[slot]);
-      }
-      clean(kctl, sizeof(*kctl));
-      IOLog("powervr: kick %u (MTS 0x%x): return 0x%x read offset %u; MIPS exception status %llx\n", k, kicks[k], result,
-            kctl->read_offset, rd64(ROGUE_CR_MIPS_EXCEPTION_STATUS));
-      mtsState("after kick");
+    wr32(ROGUE_CR_MTS_SCHEDULE, PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK);
+    for (unsigned ms = 0; ms < 5000 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); ms += 10) {
+      IOSleep(10);
+      clean(&rtn[slot], sizeof(rtn[slot]));
+      result = READ_ONCE_A04(rtn[slot]);
     }
+    clean(kctl, sizeof(*kctl));
+    mtsState("after kick");
     clean(kctl, sizeof(*kctl));
     clean(gHeap + traceCtl.off, traceCtl.size);
     IOLog("powervr: KCCB health check %s (return 0x%x, read offset %u write offset %u), trace pointer %u\n",
@@ -415,6 +402,14 @@ bool boot(void)
     for (uint32_t w = 0; w < words; w += 8)
       IOLog("powervr trace %03u: %08x %08x %08x %08x %08x %08x %08x %08x\n", w, t0[w], t0[w + 1], t0[w + 2], t0[w + 3], t0[w + 4],
             t0[w + 5], t0[w + 6], t0[w + 7]);
+    auto *hw = static_cast<rogue_fwif_hwrinfobuf *>(hwrInfo.cpu());
+    clean(hw, sizeof(*hw));
+    IOLog("powervr: MIPS exception status %llx wrapper status %llx; HWR counter %u; fault0 data %x %.64s:%u %.64s\n",
+          rd64(ROGUE_CR_MIPS_EXCEPTION_STATUS), rd64(ROGUE_CR_MIPS_WRAPPER_STATUS), hw->hwr_counter, sd->fault_info[0].data,
+          sd->fault_info[0].fault_buf.path, sd->fault_info[0].fault_buf.line_num, sd->fault_info[0].fault_buf.info);
+    if (tc->tracebuf[0].assert_buf.line_num)
+      IOLog("powervr: firmware assert %.64s:%u %.64s\n", tc->tracebuf[0].assert_buf.path, tc->tracebuf[0].assert_buf.line_num,
+            tc->tracebuf[0].assert_buf.info);
     if (!(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED)) started = false;
   }
   native_powervr_stage = started ? 8 : -8;
