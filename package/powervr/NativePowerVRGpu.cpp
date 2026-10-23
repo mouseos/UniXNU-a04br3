@@ -41,6 +41,7 @@
 //    semantics of copy_struct_from_user(), pvr_get_uobj() and pvr_set_uobj().
 //  - DRM_IOCTL_GEM_CLOSE does not check drm_gem_close.pad, as drm_gem_close_ioctl() does not.
 #include <IOKit/IOLib.h>
+#include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOMemoryDescriptor.h>
