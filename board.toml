@@ -235,6 +235,11 @@ kernel_args = [
   # GPU bring-up (package/A04BR3Gpu.cpp, package/powervr/NativePowerVR.cpp): power the MFG domains, print the Rogue
   # BVNC and boot the upstream MIPS firmware (2), waiting for FWIF initialisation.
   "a04br3-gpu=2",
+  # The PowerVR user-space probe (package/powervr/user/powervrprobed.c): started once by the board launch hook before launchd
+  # (package/A04BR3ProbeLaunch.c), its lines "powervrprobed: ..." on UART through /dev/console. Needs the hook
+  # (CONFIG_XNU_BOARD_LAUNCH, upstream proposal native-board-launch-hook) and a seed and trust bundle that carry it
+  # (a04br3-pre-build.sh A04BR3_POWERVR_PROBE=1); without the binary the spawn prints ENOENT (2) and the boot goes on.
+  "a04br3-powervrprobed=1",
   "a04br3-input=1",
   # NativeHidInput registers its touch sink and digitizer collection only with this (UniXNU-tb128fu, UniXNU-qemu).
   "sheng-touch-hid=1",

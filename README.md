@@ -155,6 +155,24 @@ The launchd-side parts of UniXNU-tb128fu and UniXNU-sheng that do not need a boo
   calls the policy today only from its boot-progress page.
 - `-no_corpses` and `ml-timeout-lock-panic-scale=40`: stock XNU boot arguments.
 
+## PowerVR user-space probe
+
+`powervrprobed` (`package/powervr/user`) tests the NativePowerVR user client from user space with IOKit only: the ABI
+handshake, every device query, buffer objects mapped into the process, a VM context with a GPU mapping, a transfer and a
+compute context, and the submission and fence refusals that need no GPU work. Built with `--vulkan`, it also loads Mesa's
+PowerVR driver (`scripts/build-pvr-darwin.py`), clears an image on the GPU and reads it back. Every step is one UART line
+`powervrprobed: PASS|FAIL ...`, written to `/dev/console`, and a summary line `powervrprobed: done: N passed, M failed`.
+
+- Start: the kernel spawns `/private/var/ngpu/bin/powervrprobed` once before launchd (`package/A04BR3ProbeLaunch.c`,
+  boot argument `a04br3-powervrprobed=1`). This needs the board launch hook (`CONFIG_XNU_BOARD_LAUNCH`, the
+  `native-board-launch-hook` proposal for UniXNU). launchd on iPadOS 17 does not run new owner jobs.
+- Build: in the macOS workflow, set `pre_build = A04BR3_POWERVR_PROBE=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"`
+  (add `A04BR3_POWERVR_VULKAN=1` for the Mesa stage) and `owner_trust_cache = true`. The pre-build step stages the probe
+  into the Data seed and replaces the trust cache with an owner bundle carrying its CDHashes.
+- Incremental builds: `build-a04br3-powervr-probe.py --trust-base TRUSTCACHE --trust-out OWNER --addon ADDON`, then
+  `unixnu build payload --owner-trust-cache OWNER --gpu-addon ADDON` with the kernel argument `sheng-gpu-addon=1`.
+- Host check: `python3 scripts/build-a04br3-powervr-probe.py --check`.
+
 ## Credits
 
 - [UniXNU](https://github.com/UniXNU/UniXNU) and [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng): build

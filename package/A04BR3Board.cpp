@@ -14,6 +14,8 @@
 // launchd disabled-jobs policy of sheng-disable-watchdogd / sheng-disable-jobs (package/BootWatchdogPolicy.c). In UniXNU the
 // only caller of that policy is zzz-boot-progress.patch under XNU_BOOT_PROGRESS, which needs CONFIG_XNU_NATIVE_UFS. Until
 // the hook is in UniXNU, scripts/a04br3-seed-launch-policy.py writes the same file into the Data seed at build time.
+// After the policy it starts the PowerVR user-space probe once under a04br3-powervrprobed=1 (package/A04BR3ProbeLaunch.c);
+// that start has no build-time stand-in and waits for the hook.
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
@@ -25,6 +27,7 @@ void a04br3_autoreset_init(void);
 void a04br3_gpu_init(void);
 void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
+int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
 extern volatile uint32_t native_keyevents_stage;
 extern volatile int native_keyevents_status;
 // KeyStoreProbe.cpp writes its counters into two rows of the boot-progress page (CONFIG_XNU_BOOT_PROGRESS), which this board
@@ -156,5 +159,8 @@ extern "C" void unixnu_board_init(void)
 
 extern "C" int unixnu_board_launch(void *process, uint64_t scratch)
 {
-  return sheng_boot_watchdog_policy(process, scratch);
+  const int policy = sheng_boot_watchdog_policy(process, scratch);
+  // Not fatal: its result is printed and kept in a04br3_powervrprobed_status, never returned (a nonzero result stops the boot).
+  a04br3_powervrprobed_spawn(process, scratch);
+  return policy;
 }

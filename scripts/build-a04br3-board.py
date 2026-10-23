@@ -7,7 +7,8 @@ native-board-init-hook), and unixnu_board_launch(), which a kernel with CONFIG_X
 
   C++ (the kernel's record for IOPlatformExpert.cpp, as in build-arm-driver.py): A04BR3Board.cpp, A04BR3AutoReset.cpp and
       KeyStoreProbe.cpp (UniXNU-tb128fu, the AppleKeyStore stand-in probe).
-  C (the kernel's record for kern_exec.c, as UniXNU-tb128fu scripts/build-boot-progress.py builds it): BootWatchdogPolicy.c.
+  C (the kernel's record for kern_exec.c, as UniXNU-tb128fu scripts/build-boot-progress.py builds it): BootWatchdogPolicy.c
+      and A04BR3ProbeLaunch.c (the start of the PowerVR user-space probe from the launch hook).
   NativeKeyStoreEvents.o (UniXNU drivers/NativeKeyStoreEvents, built by "build-arm-driver.py NativeKeyStoreEvents" before
       this script in board.toml): its static initializer is unregistered and made global, as UniXNU-tb128fu
       scripts/build-native-legacy-display.py does, so KeyStoreProbe.cpp runs it between OSMetaClass::preModLoad and
@@ -24,7 +25,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 KIT = ROOT / 'kits/a04br3'
 CXX_SOURCES = ['A04BR3Board.cpp', 'A04BR3AutoReset.cpp', 'KeyStoreProbe.cpp', 'A04BR3Gpu.cpp']
-C_SOURCES = ['BootWatchdogPolicy.c']
+C_SOURCES = ['BootWatchdogPolicy.c', 'A04BR3ProbeLaunch.c']
 OBJ = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
 out = ROOT / 'build/a04br3-board'
 out.mkdir(parents=True, exist_ok=True)
