@@ -70,6 +70,10 @@ constexpr uint32_t kMipsHeapBase = 0xC0000000;     // ROGUE_FW_HEAP_MIPS_BASE
 constexpr uint32_t kConfigGranularity = SZ_64K;    // PVR_ROGUE_FW_CONFIG_HEAP_GRANULARITY
 constexpr uint32_t kConfigOffset = kHeapSize - 3 * kConfigGranularity;   // raw size - PVR_ROGUE_FW_CONFIG_HEAP_SIZE
 constexpr uint32_t kReserved = SZ_1M;              // ROGUE_FW_HEAP_MIPS_RESERVED_SIZE
+// The KCCB kick of the vendor DDK for this core (MediaTek m1.11ED5425693 services/server/devices/rgx/rgxfwutils.c,
+// RGXSendCommandRaw(): RGXFWIF_DM_GP | RGX_CR_MTS_SCHEDULE_TASK_COUNTED). Linux's pvr_ccb.c writes the uncounted form for
+// its newer META/RISC-V firmware; with this MIPS firmware the uncounted kick left the DM 4 work of a KICK unscheduled.
+constexpr uint32_t kKccbKick = (PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK) | ROGUE_CR_MTS_SCHEDULE_TASK_COUNTED;
 constexpr uint32_t kCoreClockHz = 26000000;        // package/A04BR3Gpu.cpp leaves the core on the 26 MHz crystal
 
 volatile uint8_t *gRegs;
@@ -352,10 +356,6 @@ bool boot(void)
   // them, a kick stays pending in BGCTX and never reaches the MIPS; with them set the firmware wakes and reads the KCCB).
   wr32(ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC_MASKFULL);
   wr32(ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC_MASKFULL);
-  // Bring-up finding: MTS_SCHEDULE_ENABLE reads 0 after the firmware has started, and a KICK then only updates the CCCB
-  // write offset ("cCCB Woff update ... DM = 4") without the firmware's own DM 4 schedule ever reaching a task. Enable
-  // MTS scheduling for every OSID (one bit each, ROGUE_CR_MTS_SCHEDULE_ENABLE_MASKFULL).
-  wr32(ROGUE_CR_MTS_SCHEDULE_ENABLE, ROGUE_CR_MTS_SCHEDULE_ENABLE_MASKFULL);
   IODelay(3);
   wr64(ROGUE_CR_SOFT_RESET, 0); (void)rd64(ROGUE_CR_SOFT_RESET);
   IODelay(3);
@@ -417,12 +417,8 @@ bool boot(void)
             rd64(ROGUE_CR_MTS_BGCTX_COUNTED_SCHEDULE), rd32(ROGUE_CR_MTS_GPU_INT_STATUS), rd64(ROGUE_CR_EVENT_STATUS),
             rd32(ROGUE_CR_IRQ_OS0_EVENT_STATUS), rd32(ROGUE_CR_MIPS_WRAPPER_IRQ_STATUS));
     };
-    if (!rd32(ROGUE_CR_MTS_SCHEDULE_ENABLE)) {   // the firmware may clear it in its initialisation
-      IOLog("powervr: MTS_SCHEDULE_ENABLE cleared after start; setting it again\n");
-      wr32(ROGUE_CR_MTS_SCHEDULE_ENABLE, ROGUE_CR_MTS_SCHEDULE_ENABLE_MASKFULL);
-    }
     mtsState("before kick");
-    wr32(ROGUE_CR_MTS_SCHEDULE, PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK);
+    wr32(ROGUE_CR_MTS_SCHEDULE, kKccbKick);
     for (unsigned ms = 0; ms < 5000 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); ms += 10) {
       IOSleep(10);
       clean(&rtn[slot], sizeof(rtn[slot]));
@@ -604,7 +600,7 @@ extern "C" int native_powervr_kccb_submit(const struct rogue_fwif_kccb_cmd *cmd,
   gKctl->write_offset = next;
   clean(gKctl, sizeof(*gKctl));
   __asm__ volatile("dsb sy" ::: "memory");
-  wr32(ROGUE_CR_MTS_SCHEDULE, PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK);
+  wr32(ROGUE_CR_MTS_SCHEDULE, kKccbKick);
   IOLockUnlock(gLock);
   // Wait outside the lock, sleeping (thread context only: callers are kernel threads).
   int err = -ETIMEDOUT;
