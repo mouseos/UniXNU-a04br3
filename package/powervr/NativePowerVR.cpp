@@ -12,11 +12,15 @@
 // a04br3 differences, all because this is the boot of a kernel without the Linux object/VM layers:
 //  - One physically contiguous 16 MiB allocation backs the whole firmware heap, and the MIPS page table maps it linearly
 //    (Linux maps each FW object's pages as it is created). FW objects are carved from it by offset.
+//  - Linux's pvr_mips_wrapper_init() refuses PHYS_BUS_WIDTH <= 32, which this firmware's device info gives: Linux has not
+//    booted this combination. The register values below are Linux's, with the device info of this firmware applied
+//    (SYS_BUS_SECURE_RESET, BRN 63553, 32-bit PFN mask).
 //  - The firmware is the 22.67.54.30 image (no 22.40 image is published). Linux refuses a BVNC mismatch; here it is
 //    reported and booted anyway, to see whether this firmware runs on the 22.40 core.
 //  - CPU access is through the cached kernel mapping with explicit clean/invalidate (flush_dcache) at each hand-over.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <kern/thread.h>
 #include <pexpert/pexpert.h>
 #include <libkern/libkern.h>
 #include <string.h>
@@ -129,9 +133,11 @@ bool boot(void)
   if (!gRegs || !gHeapMem || !gPtMem) return fail(2, "memory");
   IOByteCount len = 0;
   gHeap = static_cast<uint8_t *>(gHeapMem->getBytesNoCopy());
-  gHeapPhys = gHeapMem->getPhysicalSegment(0, &len);
+  gHeapPhys = gHeapMem->getPhysicalSegment(0, &len, kIOMemoryMapperNone);
+  if (len < kHeapSize) return fail(2, "heap not contiguous");
   gPt = static_cast<uint32_t *>(gPtMem->getBytesNoCopy());
-  gPtPhys = gPtMem->getPhysicalSegment(0, &len);
+  gPtPhys = gPtMem->getPhysicalSegment(0, &len, kIOMemoryMapperNone);
+  if (len < ROGUE_MIPSFW_MAX_NUM_PAGETABLE_PAGES * SZ_4K) return fail(2, "page table not contiguous");
   memset(gHeap, 0, kHeapSize);
   memset(gPt, 0, ROGUE_MIPSFW_MAX_NUM_PAGETABLE_PAGES * SZ_4K);
   IOLog("powervr: heap %llx (16 MiB), MIPS page table %llx\n", gHeapPhys, gPtPhys);
@@ -142,7 +148,8 @@ bool boot(void)
                             ROGUE_MIPSFW_ENTRYLO_VALID_EN | ROGUE_MIPSFW_ENTRYLO_GLOBAL_EN;
   for (uint32_t pfn = 0; pfn < kHeapSize / SZ_4K; pfn++) {
     const uint64_t pa = gHeapPhys + uint64_t(pfn) * SZ_4K;
-    gPt[pfn] = (uint32_t(((pa >> ROGUE_MIPSFW_LOG2_PAGE_SIZE_4K) << ROGUE_MIPSFW_ENTRYLO_PFN_SHIFT)) & ROGUE_MIPSFW_ENTRYLO_PFN_MASK_ABOVE_32BIT) | pteFlags;
+    // PHYS_BUS_WIDTH is 32 in this firmware's device info, so the 32-bit PFN mask (the heap is below 4 GiB anyway).
+    gPt[pfn] = (uint32_t(((pa >> ROGUE_MIPSFW_LOG2_PAGE_SIZE_4K) << ROGUE_MIPSFW_ENTRYLO_PFN_SHIFT)) & ROGUE_MIPSFW_ENTRYLO_PFN_MASK) | pteFlags;
   }
 
   // pvr_fw_process(): code at heap offset 0, private data at its fixed address (MIPS has_fixed_data_addr).
@@ -169,7 +176,7 @@ bool boot(void)
     uint8_t *dst = nullptr;
     for (uint32_t j = 0; j < gHeader->layout_entry_num && !dst; j++) {
       const pvr_fw_layout_entry &e = gLayout[j];
-      if (ph->vaddr >= e.base_addr && ph->vaddr + ph->memsz <= e.base_addr + e.max_size) {
+      if (ph->vaddr >= e.base_addr && ph->vaddr + ph->memsz <= e.base_addr + e.alloc_size) {   // pvr_fw_find_mmu_segment
         const uint32_t into = e.alloc_offset + (ph->vaddr - e.base_addr);
         if (e.type == FW_CODE) dst = static_cast<uint8_t *>(code.cpu()) + into;
         else if (e.type == FW_DATA) dst = static_cast<uint8_t *>(data.cpu()) + into;
@@ -266,8 +273,9 @@ bool boot(void)
   clean(gPt, ROGUE_MIPSFW_MAX_NUM_PAGETABLE_PAGES * SZ_4K);
   native_powervr_stage = 5;
 
-  // pvr_fw_start() for a MIPS core with pbe2_in_xe (GE8300), no xe_tpu2, no sys_bus_secure_reset.
+  // pvr_fw_start() with this firmware's device info: pbe2_in_xe, sys_bus_secure_reset, no xe_tpu2, BRN 63553.
   const uint64_t softResetMask = ROGUE_CR_SOFT_RESET__PBE2_XE__MASKFULL;
+  wr32(ROGUE_CR_SYS_BUS_SECURE, 0); (void)rd32(ROGUE_CR_SYS_BUS_SECURE);
   wr64(ROGUE_CR_SOFT_RESET, softResetMask); (void)rd64(ROGUE_CR_SOFT_RESET);
   wr64(ROGUE_CR_SOFT_RESET, softResetMask ^ ROGUE_CR_SOFT_RESET_RASCALDUSTS_EN); (void)rd64(ROGUE_CR_SOFT_RESET);
   wr64(ROGUE_CR_SOFT_RESET, ROGUE_CR_SOFT_RESET_GARTEN_EN); (void)rd64(ROGUE_CR_SOFT_RESET);
@@ -280,6 +288,9 @@ bool boot(void)
                                      ROGUE_CR_MIPS_WRAPPER_CONFIG_BOOT_ISA_MODE_MICROMIPS);
   wr64(ROGUE_CR_MIPS_ADDR_REMAP1_CONFIG1, ROGUE_MIPSFW_BOOT_REMAP_PHYS_ADDR_IN | ROGUE_CR_MIPS_ADDR_REMAP1_CONFIG1_MODE_ENABLE_EN);
   wr64(ROGUE_CR_MIPS_ADDR_REMAP1_CONFIG2, (bootCodePhys & ~ROGUE_CR_MIPS_ADDR_REMAP1_CONFIG2_ADDR_OUT_CLRMSK) | remap);
+  // BRN 63553 (set in this firmware's device info): remap 5 to the boot code as well, against unmapped accesses to 0.
+  wr64(ROGUE_CR_MIPS_ADDR_REMAP5_CONFIG1, ROGUE_CR_MIPS_ADDR_REMAP5_CONFIG1_MODE_ENABLE_EN);
+  wr64(ROGUE_CR_MIPS_ADDR_REMAP5_CONFIG2, (bootCodePhys & ~ROGUE_CR_MIPS_ADDR_REMAP5_CONFIG2_ADDR_OUT_CLRMSK) | remap);
   wr64(ROGUE_CR_MIPS_ADDR_REMAP2_CONFIG1, ROGUE_MIPSFW_DATA_REMAP_PHYS_ADDR_IN | ROGUE_CR_MIPS_ADDR_REMAP2_CONFIG1_MODE_ENABLE_EN);
   wr64(ROGUE_CR_MIPS_ADDR_REMAP2_CONFIG2, (bootDataPhys & ~ROGUE_CR_MIPS_ADDR_REMAP2_CONFIG2_ADDR_OUT_CLRMSK) | remap);
   wr64(ROGUE_CR_MIPS_ADDR_REMAP3_CONFIG1, ROGUE_MIPSFW_CODE_REMAP_PHYS_ADDR_IN | ROGUE_CR_MIPS_ADDR_REMAP3_CONFIG1_MODE_ENABLE_EN);
@@ -318,15 +329,29 @@ bool boot(void)
   if (tc->tracebuf[0].assert_buf.line_num)
     IOLog("powervr: firmware assert %.64s:%u %.64s\n", tc->tracebuf[0].assert_buf.path, tc->tracebuf[0].assert_buf.line_num,
           tc->tracebuf[0].assert_buf.info);
+  clean(os, sizeof(*os));
+  IOLog("powervr: compchecks hw_bvnc %llx fw_bvnc %llx fw_processor_version %x updated %u\n",
+        static_cast<unsigned long long>(os->rogue_comp_checks.hw_bvnc.bvnc), static_cast<unsigned long long>(os->rogue_comp_checks.fw_bvnc.bvnc),
+        os->rogue_comp_checks.fw_processor_version, unsigned(os->rogue_comp_checks.updated));
+  if (!started) {
+    // pvr_fw_stop()'s end state: everything back into soft reset, so the MIPS stops mastering the bus.
+    wr64(ROGUE_CR_SOFT_RESET, softResetMask); (void)rd64(ROGUE_CR_SOFT_RESET);
+  }
   native_powervr_stage = started ? 7 : -7;
   return started;
 }
 }  // namespace
+
+extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
+extern "C" void thread_deallocate(thread_t);
+static void bootThread(void *, wait_result_t) { boot(); }
 
 void native_powervr_boot(void)
 {
   unsigned mode = 0;
   if (!PE_parse_boot_argn("a04br3-gpu", &mode, sizeof(mode)) || mode < 2) return;
   if (!a04br3_gpu_bvnc || a04br3_gpu_bvnc == ~0ULL) { IOLog("powervr: no core identified; firmware not booted\n"); return; }
-  boot();
+  // Its own thread: the boot waits up to 10 s for the firmware and must not hold up unixnu_board_init().
+  thread_t thread = nullptr;
+  if (kernel_thread_start(bootThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }

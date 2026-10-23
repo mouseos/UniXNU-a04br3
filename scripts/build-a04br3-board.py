@@ -106,13 +106,15 @@ for name in CXX_SOURCES:
 c_record = record('bsd/DEVELOPMENT/kern_exec.o.json')
 for name in C_SOURCES:
     objects.append(compile_one(c_record, KIT / name, C_FLAGS))
-# UniXNU-tb128fu's process pass (BootProcessProbe.c) needs the Mach-private task and thread layout: the osfmk record, as
-# tb128fu's build-boot-progress.py compiles it. Its rows go to UART through a04br3-proclog (A04BR3Board.cpp).
 # NativePowerVR (package/powervr): the unchanged Linux drm/imagination headers through the Linux type shim, and the
 # upstream PowerVR firmware for the GE8300, downloaded from imagination/linux-firmware and checked against a pinned SHA-256
 # (redistributable, not stored in this repository), embedded with .incbin.
 import hashlib, urllib.request
+import os
 FW_URL = 'https://gitlab.freedesktop.org/imagination/linux-firmware/-/raw/powervr/powervr/rogue_22.67.54.30_v1.fw'
+# A local copy with the same SHA-256 may be given instead (offline builds): A04BR3_POWERVR_FW=<path>.
+if os.environ.get('A04BR3_POWERVR_FW'):
+    (out / 'rogue_22.67.54.30_v1.fw').write_bytes(Path(os.environ['A04BR3_POWERVR_FW']).read_bytes())
 FW_SHA256 = 'cfe6f58db2ad604b1729349629510c5a3434b266c99ea886d2959887bff4fed8'
 fw_path = out / 'rogue_22.67.54.30_v1.fw'
 if not fw_path.is_file() or hashlib.sha256(fw_path.read_bytes()).hexdigest() != FW_SHA256:
@@ -120,11 +122,11 @@ if not fw_path.is_file() or hashlib.sha256(fw_path.read_bytes()).hexdigest() != 
 if hashlib.sha256(fw_path.read_bytes()).hexdigest() != FW_SHA256:
     raise SystemExit(f'{FW_URL}: unexpected SHA-256')
 fw_asm = out / 'native_powervr_fw.S'
-fw_asm.write_text(f'''.section __CONST,__const
+fw_asm.write_text(f'''.section __DATA_CONST,__const
 .globl _native_powervr_fw
 .p2align 12
 _native_powervr_fw:
-.incbin "{fw_path}"
+.incbin "{str(fw_path).replace(chr(92), chr(92)*2).replace(chr(34), chr(92)+chr(34))}"
 .globl _native_powervr_fw_size
 .p2align 2
 _native_powervr_fw_size:
@@ -132,10 +134,13 @@ _native_powervr_fw_size:
 ''')
 fw_obj = out / 'native_powervr_fw.o'
 subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64', '-c', str(fw_asm), '-o', str(fw_obj)], check=True)
+check_object(fw_obj)
 objects.append(fw_obj)
 powervr_flags = CXX_FLAGS + ['-I', str(KIT / 'powervr' / 'compat'), '-I', str(KIT / 'powervr' / 'linux'), '-Wno-missing-field-initializers',
                              '-Wno-gnu-variable-sized-type-not-at-end', '-Wno-c99-extensions']
 objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVR.cpp', powervr_flags))
+# UniXNU-tb128fu's process pass (BootProcessProbe.c) needs the Mach-private task and thread layout: the osfmk record, as
+# tb128fu's build-boot-progress.py compiles it. Its rows go to UART through a04br3-proclog (A04BR3Board.cpp).
 osfmk_record = record('osfmk/DEVELOPMENT/startup.o.json')
 for name in ('BootProcessProbe.c', 'BootUiTraceProbe.c'):
     objects.append(compile_one(osfmk_record, KIT / name, C_FLAGS))
