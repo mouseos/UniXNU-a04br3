@@ -5,9 +5,9 @@
 //  - the unattended test cycle (package/A04BR3AutoReset.cpp, a04br3-autoreset=<seconds>);
 //  - the AppleKeyStore stand-in (package/KeyStoreProbe.cpp + UniXNU drivers/NativeKeyStoreEvents, offline-key-events=1 and
 //    sheng-aks=1). UniXNU-tb128fu and UniXNU-sheng call native_keystore_probe() from native_legacy_display_late_probe()
-//    (LegacyDisplayProbe.cpp), which exists only with CONFIG_XNU_NATIVE_LEGACY_DISPLAY; a04br3 has no display driver, so
-//    the board hook calls it. Without it liveactivitiesd's keybag finds no AppleKeyStore and SpringBoard waits on chronod
-//    forever (UniXNU-tb128fu board.toml).
+//    (LegacyDisplayProbe.cpp). The a04br3 copy of that probe leaves it out and the board hook calls it: it runs with or
+//    without CONFIG_XNU_NATIVE_LEGACY_DISPLAY, and the key store objects are only in the board archive. Without it
+//    liveactivitiesd's keybag finds no AppleKeyStore and SpringBoard waits on chronod forever (UniXNU-tb128fu board.toml).
 //
 // unixnu_board_launch(): load_init_program, after the root, SystemOS and Data mounts and before launchd
 // (CONFIG_XNU_BOARD_LAUNCH=y, proposed UniXNU patch upstream/UniXNU/0001-native-board-launch-hook.patch). It writes the

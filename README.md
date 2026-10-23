@@ -107,13 +107,24 @@ mtkclient and without touching the tablet:
 Both parts are on in this board file for bring-up. For an image that boots normally, set `A04BR3_TEST_CYCLE = "0"`
 and remove `a04br3-autoreset` from `kernel_args`; nothing else changes.
 
+## Display
+
+`CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y` and `scripts/build-a04br3-legacy-display.py` (from UniXNU-tb128fu
+`build-native-legacy-display.py`) put the iPadOS display on the firmware frame buffer: UniXNU `NativeLegacyDisplay`, a
+subclass of the original `IOMobileFramebufferLegacy`, on uefi-a04br3's GOP (800x1280, 32 bpp), QuartzCore's CPU renderer
+copying each frame, and `NativeHidInput` with a Home button. The probes are `package/LegacyDisplayProbe.cpp`,
+`package/HidInputProbe.cpp` and `package/TouchState.cpp` (from UniXNU-tb128fu, without its touch, GPU and RPM parts); the
+kernel arguments are the `offline-legacy-*`, `offline-mobile-graphics-load` and `offline-hid-*` entries of `board.toml`.
+The original classes are checked against this board's previous kernel (`out/a04br3/kernel/kernel.macho`), so a new tree
+needs two kernel builds: `scripts/a04br3-pre-build.sh` runs the first, which links no-op display probes.
+
 ## launchd without a display
 
-The launchd-side parts of UniXNU-tb128fu and UniXNU-sheng that do not need a display or a boot-progress page:
+The launchd-side parts of UniXNU-tb128fu and UniXNU-sheng that do not need a boot-progress page:
 
 - AppleKeyStore stand-in (`offline-key-events=1`, `sheng-aks=1`): `package/KeyStoreProbe.cpp` (from UniXNU-tb128fu) and
   UniXNU `drivers/NativeKeyStoreEvents`, linked in `libA04BR3Board.a` and started from `unixnu_board_init`
-  (`package/A04BR3Board.cpp`). The other boards start it from their display probe.
+  (`package/A04BR3Board.cpp`). The other boards start it from their display probe; the a04br3 copy of that probe does not.
 - launchd disabled jobs (`sheng-disable-watchdogd=1`, `sheng-disable-jobs=...`): `scripts/a04br3-seed-launch-policy.py`
   writes `/private/var/db/com.apple.xpc.launchd/disabled.plist` into the Data seed at build time with the bytes of
   `package/BootWatchdogPolicy.c` (from UniXNU-tb128fu). The kernel form, `unixnu_board_launch` with

@@ -70,6 +70,12 @@ archives = [
   # The original-PMGR bridge (CONFIG_XNU_SHENG_PMGR, kernel argument sheng-pmgr=2): AMFI requires a published PMGR
   # ("AMFI: No PMGR?" without it). Generic and hardware-free; from UniXNU-tb128fu/UniXNU-sheng.
   "build-platform-power.py",
+  # The display (CONFIG_XNU_NATIVE_LEGACY_DISPLAY): NativeLegacyDisplay, a subclass of the original IOMobileFramebufferLegacy, on
+  # the firmware frame buffer (uefi-a04br3's GOP, 800x1280, 32 bpp), QuartzCore's CPU renderer and the HID input with a Home
+  # button, as on UniXNU-tb128fu without its touch, GPU and RPM parts. It checks the original classes against this board's
+  # previous kernel (out/a04br3/kernel); without one it links no-op probes, like build-platform-power.py. After
+  # build-a04br3-board.py: it refuses symbols that the board archive also defines (the key store stand-in is there).
+  "build-a04br3-legacy-display.py",
 ]
 
 [kernel.prelink]
@@ -79,14 +85,31 @@ kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2
 slide = "-0x1000000"
 early_security_init = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
 roots = [
+  # UniXNU-tb128fu's set (the same as UniXNU-sheng's) without com.apple.driver.AppleARMWatchdogTimer (no watchdog backend:
+  # watchdogd is disabled below) and com.apple.driver.AppleEffaceableStorage (not needed by the display; the boot reached
+  # SpringBoard without it). The display set: IOMobileGraphicsFamily (the original IOMobileFramebufferLegacy that
+  # NativeLegacyDisplay subclasses) with IOAVFamily, IOHDCPFamily, IOCECFamily, IOGPUFamily, IOSlowAdaptiveClockingFamily,
+  # IODARTFamily, AppleM2ScalerCSCDriver and the audio set (IOAudio2Family, AppleAudioClockLibs, AppleIISController) of
+  # tb128fu. The a04br3 device tree (scripts/make-a04br3-adt.py) has no Apple hardware node for any of them to match.
   "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
   "com.apple.driver.AppleARMPlatform",
+  "com.apple.driver.AppleAudioClockLibs",
+  "com.apple.driver.AppleIISController",
+  "com.apple.driver.AppleM2ScalerCSCDriver",
   "com.apple.driver.AppleMobileFileIntegrity",
   "com.apple.driver.ApplePMGR",
+  "com.apple.driver.IODARTFamily",
   "com.apple.filesystems.apfs",
   "com.apple.iokit.CoreAnalyticsFamily",
+  "com.apple.iokit.IOAVFamily",
+  "com.apple.iokit.IOAudio2Family",
+  "com.apple.iokit.IOCECFamily",
   "com.apple.iokit.IOCryptoAcceleratorFamily",
+  "com.apple.iokit.IOGPUFamily",
+  "com.apple.iokit.IOHDCPFamily",
+  "com.apple.iokit.IOMobileGraphicsFamily",
   "com.apple.iokit.IOReportFamily",
+  "com.apple.iokit.IOSlowAdaptiveClockingFamily",
   "com.apple.iokit.IOStorageFamily",
   "com.apple.iokit.IOSurface",
   "com.apple.kec.Libm",
@@ -137,6 +160,10 @@ dram_size = "0x80000000"             # 2 GiB at 0x40000000 (MT8167 EMI, LK memor
 # panic_screen needs a device scripts/patch-xnu-entry-probe.py (UniXNU-sheng); a04br3 reports panics on UART.
 panic_screen = false
 skip_setup_tool = "scripts/seed-data-skip-setup.py"
+# With a display (UniXNU-tb128fu): without these SpringBoard preferences iPadOS turns the display off about 30 s after it starts
+# and puts the system to sleep, which ArmCpu does not support. Applied when the payload step runs with --skip-setup (the
+# workflow's skip_setup input). tb128fu's --plain-framebuffer serves its GPU addon and is left out.
+skip_setup_args = ["--no-auto-dim"]
 trust_cache_sha256 = [
   "7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7",
   "8900d6a93d7a59ce1a872a5c081e559f4240a218f97e12d44d22dda46644d68f",
@@ -170,6 +197,22 @@ kernel_args = [
   # unixnu_board_init(): the notification service and the state answers (no passcode, nothing locked). It holds no keys.
   "offline-key-events=1",
   "sheng-aks=1",
+  # The display as on UniXNU-tb128fu (board.toml) and UniXNU-qemu: IOMobileGraphicsFamily loaded from bsd_init, NativeLegacyDisplay
+  # on the firmware frame buffer as the system display (phase 4) with one scanout pixel per point (800x1280 points), logical
+  # power management, swap validation, the transfer to the frame buffer by the CPU (package/LegacyDisplayProbe.cpp,
+  # UniXNU drivers/NativeMobileDisplay), and the HID input with a Home button (package/HidInputProbe.cpp). tb128fu's touch
+  # (sheng-touch-hid, tb128fu-touch), GPU (tb128fu-gpu, sheng-gpu-addon, sheng-fb-gpu) and CPU frequency arguments are left out.
+  "offline-mobile-graphics-load=1",
+  "offline-legacy-register=1",
+  "offline-legacy-phase=4",
+  "offline-legacy-gop=1",
+  "offline-legacy-unit-scale=1",
+  "offline-legacy-pm=1",
+  "offline-legacy-validate=1",
+  "offline-legacy-transfer=1",
+  "offline-legacy-cpu-present=1",
+  "offline-hid-input=1",
+  "offline-hid-home=1",
   # launchd's disabled jobs (package/BootWatchdogPolicy.c labels; written into the Data seed by
   # scripts/a04br3-seed-launch-policy.py, and by unixnu_board_launch() once CONFIG_XNU_BOARD_LAUNCH reaches UniXNU).
   # watchdogd: no AppleARMWatchdogTimer here (not in [kernel.prelink] roots); on tb128fu it trapped about 5 minutes in
