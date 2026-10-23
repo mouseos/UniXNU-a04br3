@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// a04br3 GPU bring-up, step 1 (boot argument a04br3-gpu=1, default off): power the MT8167 MFG domains and identify the
+// a04br3 GPU bring-up, step 1 (boot argument a04br3-gpu=1 or 2, default off; 2 also boots the firmware, NativePowerVR.cpp): power the MT8167 MFG domains and identify the
 // PowerVR Rogue core. Ported from github.com/mouseos/xnu_kernel_benesse_a04br3 iokit/Kernel/arm/rogue (A04BR3RogueGPU.cpp,
 // A04BR3RoguePower.h: register facts from the board Linux mtk-scpsys-mt8167, mtk-infracfg and clk-mt8167), where the same
 // sequence ran on this tablet and read BVNC 22.40.54.30 (GE8300). The core stays at crystal speed (26 MHz); no firmware
@@ -15,6 +15,7 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 extern "C" {
 void a04br3_gpu_init(void);
+void native_powervr_boot(void);   // package/powervr/NativePowerVR.cpp (a04br3-gpu=2)
 volatile uint64_t a04br3_gpu_bvnc;
 volatile int a04br3_gpu_power_error = -1;
 }
@@ -38,7 +39,7 @@ void waitUs(void *, unsigned us) { IODelay(us); }
 void a04br3_gpu_init(void)
 {
   unsigned enabled = 0;
-  if (!PE_parse_boot_argn("a04br3-gpu", &enabled, sizeof(enabled)) || enabled != 1) return;
+  if (!PE_parse_boot_argn("a04br3-gpu", &enabled, sizeof(enabled)) || enabled == 0) return;
   gBank[A04_RGX_SPM] = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10006000, 0x1000));
   gBank[A04_RGX_INFRA] = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10001000, 0x1000));
   gBank[A04_RGX_TOP] = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10000000, 0x1000));
@@ -57,4 +58,5 @@ void a04br3_gpu_init(void)
   a04br3_gpu_bvnc = (uint64_t(hi) << 32) | lo;
   IOLog("a04br3 gpu: BVNC %u.%u.%u.%u (raw 0x%llx) revision 0x%x\n", hi >> 16, hi & 0xffff, lo >> 16, lo & 0xffff,
         static_cast<unsigned long long>(a04br3_gpu_bvnc), revision);
+  if (a04br3_gpu_bvnc && a04br3_gpu_bvnc != ~0ULL) native_powervr_boot();
 }
