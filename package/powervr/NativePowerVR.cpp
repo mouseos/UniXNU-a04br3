@@ -34,7 +34,9 @@
 #include "linux/pvr_rogue_mmu_defs.h"
 #include "compat/native_powervr_linux_kernel.h"
 #include "stub/native_powervr_kernel.h"
+extern "C" {   // pvr_mmu.h is C (compiled from kernel/pvr_mmu.c)
 #include "kernel/pvr_mmu.h"
+}
 #include "native_powervr_internal.h"
 #include <stdarg.h>
 #undef min
