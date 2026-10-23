@@ -13,8 +13,14 @@
 #include "../compat/native_powervr_linux_kernel.h"
 #include "../compat/native_powervr_linux_jobs.h"
 #include <uapi/drm/pvr_drm.h>
+#ifdef __cplusplus
+extern "C" {   /* the unchanged Linux headers declare C functions */
+#endif
 #include "../kernel/pvr_device_info.h"
 #include "../kernel/pvr_stream.h"
+#ifdef __cplusplus
+}
+#endif
 struct pvr_fw_object;
 /* include/drm/drm_file.h: what the job layer reads of a DRM file. */
 struct drm_file {
