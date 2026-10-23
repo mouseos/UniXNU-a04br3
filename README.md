@@ -106,6 +106,16 @@ mtkclient and without touching the tablet:
 
 Both parts are on in this board file for bring-up. For an image that boots normally, set `A04BR3_TEST_CYCLE = "0"`
 and remove `a04br3-autoreset` from `kernel_args`; nothing else changes.
+### Fast rebuilds over SSH
+
+A full Actions build takes about 25 minutes. The base workflow `.github/workflows/a04br3-ssh.yml` of UniXNU builds once,
+then keeps the runner (`keep_minutes`, at most 330) with an upterm SSH session whose command is posted as the commit
+status `a04br3/ssh` (only the owner's key in `authorized_keys`). In the session, `/tmp/a04br3-rebuild.sh <device ref>`
+rebuilds the kernel and payload of that ref incrementally (about 4 minutes) and publishes `payload-<short sha>.img` on the
+prerelease `a04br3-ssh-<run id>`. On the host, `scripts/a04br3-ssh-round.sh RUN_ID TAG` (with `UNIXNU=` and `UEFI=`
+checkouts) downloads that payload, builds the boot image with the official `unixnu bootimg` and runs one unattended round.
+Every fix is committed and pushed first, so each payload comes from a pushed ref.
+
 
 ## Display
 
