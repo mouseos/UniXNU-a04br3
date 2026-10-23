@@ -53,14 +53,9 @@ extern char boot_process_rows[10][120];
 void boot_process_capture(void);
 void boot_process_snapshot(void);
 }
-// BootProcessProbe.c calls tb128fu's UI thread sampler (BootUiTraceProbe.c) when it is linked; the kernel link needs the
-// symbols, so a04br3, which has no sampler, defines them as weak no-ops (role peer -1: nothing to follow).
-extern "C" {
-__attribute__((weak)) void boot_ui_trace_begin(void) {}
-__attribute__((weak)) void boot_ui_trace_task(void *, unsigned, int, const char *, unsigned) {}
-__attribute__((weak)) void boot_ui_trace_publish(void) {}
-__attribute__((weak)) int boot_ui_trace_role_peer(unsigned) { return -1; }
-}
+// The user stacks of the traced processes (backboardd = role 0, SpringBoard = role 1) from package/BootUiTraceProbe.c
+// (UniXNU-tb128fu): the main thread's registers and frame chain, then the other thread groups. Unslid = address - cache slide.
+extern "C" unsigned boot_ui_trace_role_rows(unsigned role, char rows[][120], unsigned max, unsigned detail);
 // BootProcessProbe.c fills the rows of processes it did not find with "<name>: absent from this process pass".
 static bool a04br3_row_absent(const char *row)
 {
@@ -74,6 +69,11 @@ static void a04br3_thread_report(void)
   boot_process_snapshot();
   for (unsigned i = 0; i < 10; ++i)
     if (boot_process_rows[i][0] && !a04br3_row_absent(boot_process_rows[i])) IOLog("a04br3 threads: %s\n", boot_process_rows[i]);
+  static char rows[32][120];
+  for (unsigned role = 0; role < 2; ++role) {
+    unsigned n = boot_ui_trace_role_rows(role, rows, 32, 1);
+    for (unsigned i = 0; i < n; ++i) IOLog("a04br3 stack: %s\n", rows[i]);
+  }
 }
 extern "C" void a04br3_display_report_set(void (*report)(void)) { gDisplayReport = report; }
 static void a04br3_display_report(void)
