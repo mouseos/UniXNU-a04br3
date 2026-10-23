@@ -27,6 +27,8 @@ parser.add_argument('--configure-only', action='store_true', help='stop after me
 parser.add_argument('--check-patch', action='store_true', help='fetch the pinned Mesa and check the patch, nothing else')
 parser.add_argument('--abi-dir', type=Path, help='directory of NativePowerVRABI.h (default: package/powervr, or '
                     'kits/<kit>/powervr in a UniXNU build tree)')
+parser.add_argument('--reset-source', action='store_true', help='discard every change in the Mesa work tree (an older '
+                    'state of the recorded patch, for example) and apply the recorded patches again')
 parser.add_argument('-j', '--jobs', type=int, default=os.cpu_count() or 4)
 args = parser.parse_args()
 
@@ -70,6 +72,9 @@ def fetch_source():
 
 def apply_patches():
     """Applies the recorded patches to a clean tree, or accepts a tree that is exactly HEAD plus them."""
+    if args.reset_source:
+        git('checkout', '-q', '--', '.')
+        git('clean', '-fdq')
     changed = read(['git', '-C', SOURCE, 'status', '--porcelain', '--untracked-files=all'])
     if not changed:
         for patch in PATCHES:
