@@ -44,6 +44,29 @@ void proc_name(int pid, char *buf, int size);
 // The display state on UART with each process list: package/LegacyDisplayProbe.cpp registers its report here (the first
 // kernel pass links a display stub that registers nothing, so the board archive references no display symbol).
 static void (*volatile gDisplayReport)(void);
+
+// The thread states of launchd, backboardd, SpringBoard and the other targets of package/BootProcessProbe.c (UniXNU-tb128fu):
+// threads, running, waiting, the first thread's state/priority, wait event, continuation, user PC and shared region slide.
+// They tell a process that computes (r>0, user PC moving) from one that waits (W the same each pass).
+extern "C" {
+extern char boot_process_rows[10][120];
+void boot_process_capture(void);
+void boot_process_snapshot(void);
+}
+// BootProcessProbe.c fills the rows of processes it did not find with "<name>: absent from this process pass".
+static bool a04br3_row_absent(const char *row)
+{
+  for (; *row; ++row)
+    if (!strncmp(row, ": absent", 8)) return true;
+  return false;
+}
+static void a04br3_thread_report(void)
+{
+  boot_process_capture();
+  boot_process_snapshot();
+  for (unsigned i = 0; i < 10; ++i)
+    if (boot_process_rows[i][0] && !a04br3_row_absent(boot_process_rows[i])) IOLog("a04br3 threads: %s\n", boot_process_rows[i]);
+}
 extern "C" void a04br3_display_report_set(void (*report)(void)) { gDisplayReport = report; }
 static void a04br3_display_report(void)
 {
@@ -89,6 +112,7 @@ void procLogThread(void *, wait_result_t)
     procFlush(line);
     IOLog("a04br3 procs: round %u, %u processes\n", round, line.count);
     a04br3_display_report();
+    a04br3_thread_report();
   }
 }
 }

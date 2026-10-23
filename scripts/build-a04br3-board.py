@@ -106,6 +106,10 @@ for name in CXX_SOURCES:
 c_record = record('bsd/DEVELOPMENT/kern_exec.o.json')
 for name in C_SOURCES:
     objects.append(compile_one(c_record, KIT / name, C_FLAGS))
+# UniXNU-tb128fu's process pass (BootProcessProbe.c) needs the Mach-private task and thread layout: the osfmk record, as
+# tb128fu's build-boot-progress.py compiles it. Its rows go to UART through a04br3-proclog (A04BR3Board.cpp).
+osfmk_record = record('osfmk/DEVELOPMENT/startup.o.json')
+objects.append(compile_one(osfmk_record, KIT / 'BootProcessProbe.c', C_FLAGS))
 
 events = ROOT / 'build/native-keystore-events/NativeKeyStoreEvents.o'
 if not events.is_file():
