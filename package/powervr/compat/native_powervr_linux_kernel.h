@@ -127,9 +127,11 @@ struct drm_device { struct device *dev; };
 static inline bool drm_dev_enter(struct drm_device *d, int *idx) { (void)d; *idx = 0; return true; }
 static inline void drm_dev_exit(int idx) { (void)idx; }
 void native_powervr_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-#define drm_err(d, fmt, ...) native_powervr_log("powervr: " fmt, ##__VA_ARGS__)
-#define drm_warn(d, fmt, ...) native_powervr_log("powervr: " fmt, ##__VA_ARGS__)
-#define drm_info(d, fmt, ...) native_powervr_log("powervr: " fmt, ##__VA_ARGS__)
+/* The device is evaluated, so a local "struct drm_device *drm_dev = from_pvr_device(...)" used only for printing (pvr_dump.c)
+ * counts as used. */
+#define drm_err(d, fmt, ...) ((void)(d), native_powervr_log("powervr: " fmt, ##__VA_ARGS__))
+#define drm_warn(d, fmt, ...) ((void)(d), native_powervr_log("powervr: " fmt, ##__VA_ARGS__))
+#define drm_info(d, fmt, ...) ((void)(d), native_powervr_log("powervr: " fmt, ##__VA_ARGS__))
 #ifdef __cplusplus
 }
 #endif

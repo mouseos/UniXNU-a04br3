@@ -1,1 +1,3 @@
 Unchanged headers from Linux drivers/gpu/drm/imagination at torvalds/linux 734bef548a96e8774d6eef5dfa2026c6edc4e80b (SPDX: GPL-2.0-only OR MIT; used under the MIT terms). Copyright Imagination Technologies Ltd.
+pvr_rogue_fwif_client.h, pvr_rogue_fwif_client_check.h, pvr_rogue_fwif_stream.h, pvr_rogue_cr_defs_client.h: used by the job layer (../kernel, ../NativePowerVRJobs.cpp).
+uapi/drm/pvr_drm.h: include/uapi/drm/pvr_drm.h of the same commit, unchanged (identical to Mesa include/drm-uapi/pvr_drm.h).

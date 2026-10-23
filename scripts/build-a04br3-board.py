@@ -141,16 +141,32 @@ powervr_flags = CXX_FLAGS + ['-I', str(KIT / 'powervr' / 'compat'), '-I', str(KI
 powervr_flags += ['-I', str(KIT / 'powervr')]
 objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVR.cpp', powervr_flags))
 objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRQueue.cpp', powervr_flags))
-# The unchanged Linux kernel sources (package/powervr/kernel: pvr_mmu.c) as C with the kern_exec.c record, through the
-# Linux API shim (compat/native_powervr_linux_kernel.h) and the pvr_device stand-in (stub/). Their own warnings that the
+# The IOKit service and user client (NativePowerVRGpu.cpp: the NativePowerVRABI.h methods, BOs, VM contexts, device
+# queries). Its classes derive from kernel classes, so the kernel's own C++ start-up registers them (the archive is
+# force-loaded); native_powervr_publish() publishes the service once the firmware runs.
+objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRGpu.cpp', powervr_flags))
+# The job layer (NativePowerVRJobs.cpp: native_powervr_jobs.h, Linux pvr_queue.c/pvr_job.c without drm_sched) includes
+# the headers of the unchanged kernel/ sources it drives and the pvr_device stand-in (stub/).
+objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRJobs.cpp',
+                           powervr_flags + ['-I', str(KIT / 'powervr' / 'stub'), '-I', str(KIT / 'powervr' / 'kernel')]))
+# The unchanged Linux kernel sources (package/powervr/kernel: pvr_mmu.c and the job layer's pvr_context.c, pvr_cccb.c,
+# pvr_free_list.c, pvr_hwrt.c, pvr_stream.c, pvr_stream_defs.c, pvr_dump.c) as C with the kern_exec.c record, through the
+# Linux API shim (compat/native_powervr_linux_kernel.h, _jobs.h) and the pvr_device stand-in (stub/). Their own warnings that the
 # kernel's -Werror set rejects (signed/unsigned comparisons, packed member addresses, C23 static_assert) are not changed
 # in the sources, only disabled for them.
 powervr_c_flags = C_FLAGS + ['-Wno-unknown-warning-option', '-Wno-sign-compare', '-Wno-address-of-packed-member',
                              '-Wno-c23-extensions', '-Wno-c2x-extensions', '-Wno-unused-parameter',
                              '-I', str(KIT / 'powervr' / 'stub'), '-I', str(KIT / 'powervr' / 'compat'),
                              '-I', str(KIT / 'powervr' / 'linux'), '-I', str(KIT / 'powervr' / 'kernel')]
-for name in ('pvr_mmu.c',):
+for name in ('pvr_mmu.c', 'pvr_context.c', 'pvr_cccb.c', 'pvr_free_list.c', 'pvr_hwrt.c', 'pvr_stream.c', 'pvr_stream_defs.c',
+             'pvr_dump.c'):
     objects.append(compile_one(c_record, KIT / 'powervr' / 'kernel' / name, powervr_c_flags))
+# pvr_device_info.c (unchanged) fills the device information of NativePowerVRGpu.cpp from the firmware image; its
+# struct pvr_device is the stand-in of stub/devinfo, found before stub/ on the include path. Compiled once: the job layer
+# reads the result through native_powervr_device_features()/_quirks()/_enhancements() (native_powervr_jobs.h).
+objects.append(compile_one(c_record, KIT / 'powervr' / 'kernel' / 'pvr_device_info.c',
+                           C_FLAGS + powervr_c_flags[len(C_FLAGS):powervr_c_flags.index('-I')] +
+                           ['-I', str(KIT / 'powervr' / 'stub' / 'devinfo')] + powervr_c_flags[powervr_c_flags.index('-I'):]))
 # UniXNU-tb128fu's process pass (BootProcessProbe.c) needs the Mach-private task and thread layout: the osfmk record, as
 # tb128fu's build-boot-progress.py compiles it. Its rows go to UART through a04br3-proclog (A04BR3Board.cpp).
 osfmk_record = record('osfmk/DEVELOPMENT/startup.o.json')

@@ -20,6 +20,10 @@ void native_powervr_invalidate(const void *p, size_t n);
  * executed it (osdata->kccb_cmds_executed advances). Returns 0, -ETIMEDOUT or -ENODEV (firmware not started). */
 int native_powervr_kccb_submit(const struct rogue_fwif_kccb_cmd *cmd, uint32_t timeout_ms);
 void native_powervr_fw_free(const struct native_powervr_fw_obj *obj);
+/* The firmware CCB (Linux pvr_dev->fwccb, pvr_fwccb_init()): its control and its command array as FW objects, for
+ * pvr_fwccb_process() of the job layer. The host writes nothing through these cached views after boot. 0, or -ENODEV
+ * before the firmware started. */
+int native_powervr_fwccb(struct native_powervr_fw_obj *ctl, struct native_powervr_fw_obj *cmds);
 /* GPU VM contexts (pvr_vm.c without drm_gpuvm): page tables (Linux pvr_mmu.c) and the firmware memory context. */
 struct native_powervr_vm;
 struct native_powervr_sg { uint64_t phys; uint64_t size; };   /* physically contiguous runs, multiples of 4 KiB */

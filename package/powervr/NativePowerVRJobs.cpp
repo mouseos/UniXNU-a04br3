@@ -1,0 +1,1655 @@
+// SPDX-License-Identifier: MIT
+// NativePowerVR job layer (native_powervr_jobs.h): render, compute and transfer contexts, free lists, HWRT datasets, job
+// submission and completion for the user-client layer.
+//
+// Written after Linux drivers/gpu/drm/imagination (torvalds/linux 734bef548a96e8774d6eef5dfa2026c6edc4e80b; pvr_job.c,
+// pvr_queue.c, pvr_fw.c, pvr_ccb.c, pvr_device.c, pvr_drv.c, "GPL-2.0-only OR MIT", used under MIT, Copyright Imagination
+// Technologies Ltd.). The object code is Linux's own, unchanged, in package/powervr/kernel: pvr_context.c, pvr_cccb.c,
+// pvr_free_list.c, pvr_hwrt.c, pvr_stream.c, pvr_stream_defs.c and pvr_dump.c, through the Linux API shim
+// (compat/native_powervr_linux_jobs.h) and the pvr_device stand-in (stub/native_powervr_kernel.h). This file provides
+// what they call (the FW object, GEM, VM, KCCB/FWCCB and queue functions) and replaces the two Linux files that depend on
+// drm_sched and dma_fence, pvr_queue.c and pvr_job.c. Each function carries the name of the Linux one it stands for.
+//
+// a04br3 differences:
+//  - No drm_sched. A job is written to its queue's client CCB (CCCB) and kicked when it is submitted; every dependency
+//    is a firmware wait on another queue's timeline UFO (pvr_queue_submit_job_to_cccb() writes the same FENCE_PR
+//    commands for the dependencies Linux finds UFO-backed). The dependencies are those Linux gets for a Mesa submission
+//    without sync objects (NativePowerVRABI.h version 1): one queue runs its jobs in order; a job on an HWRT data set
+//    waits as the dma_resv of its FW object makes it on Linux (geometry writes it, so it waits for every earlier job on
+//    it; fragment reads it, so it waits for the last geometry job); a geometry job followed by a fragment job of the same
+//    context and HWRT in the same call is paired and sent with one combined kick (pvr_jobs_link_geom_frag()), the
+//    geometry -> fragment sync object of Mesa being implied by the ABI.
+//  - Completion is the timeline UFO reaching the job's seqno, polled by a kernel thread every 1 ms while jobs are queued
+//    (Linux: pvr_queue_signal_done_fences() on the FWCCB interrupt). The same thread consumes the FWCCB
+//    (pvr_fwccb_process()) and applies the drm_sched timeout (SCHED_TIMEOUT_PERIOD): a job that has not completed by
+//    then fails and its context becomes faulty, as pvr_queue_start() does after a reset.
+//  - A context reset notification that names a guilty context (lockup, overrun or page fault) fails the job it names
+//    and makes the context faulty. Linux only prints it (pvr_dump_context_reset_notification(), which runs here too) and
+//    finds the hang through the timeout; the ABI reports failed jobs through WaitFence.
+//  - Linux maps every FW object write-combined for the CPU (PVR_BO_FW_FLAGS_DEVICE_UNCACHED, pvr_fw_object_vmap()) and
+//    its C code performs no cache maintenance. The firmware heap of NativePowerVR.cpp is mapped cached, so each FW object
+//    gets a write-combined alias of its pages (the Linux arm64 dma_alloc_coherent() arrangement: the cached alias is
+//    cleaned and invalidated once and not written through again). Objects are cache-line aligned, so no cached access
+//    to a neighbouring object shares a line with them.
+//  - The KCCB is NativePowerVR.cpp's, which waits for every command to execute (there is no slot reservation and the
+//    return slot is not reported: pvr_fw_structure_cleanup() never sees CLEANUP_BUSY).
+//  - The handles are the user-client layer's: it passes resolved objects, and the Linux functions that look a handle up
+//    in the pvr_file (pvr_vm_context_lookup(), pvr_free_list_lookup()) find them under the same handle in this file's
+//    pvr_file for the duration of the call.
+#include <IOKit/IOLib.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOMemoryDescriptor.h>
+#include <kern/thread.h>
+#include <string.h>
+#include <sys/errno.h>
+#include "compat/native_powervr_linux_compat.h"
+#include "linux/pvr_rogue_fwif.h"
+#include "linux/pvr_rogue_fwif_client.h"
+#include "compat/native_powervr_linux_kernel.h"
+#include "stub/native_powervr_kernel.h"
+extern "C" {
+#include "kernel/pvr_cccb.h"
+#include "kernel/pvr_context.h"
+#include "kernel/pvr_dump.h"
+#include "kernel/pvr_free_list.h"
+#include "kernel/pvr_hwrt.h"
+#include "kernel/pvr_stream.h"
+#include "kernel/pvr_stream_defs.h"
+}
+#include "native_powervr_internal.h"
+#include "native_powervr_jobs.h"
+#include "NativePowerVRABI.h"
+#undef min
+#undef max
+
+extern "C" {
+uint64_t mach_absolute_time(void);
+void nanoseconds_to_absolutetime(uint64_t nanoseconds, uint64_t *result);
+int proc_selfpid(void);
+kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
+void thread_deallocate(thread_t);
+}
+
+// struct pvr_fw_object of the stub (stub/native_powervr_kernel.h), NativePowerVR.cpp's definition token for token.
+struct pvr_fw_object { native_powervr_fw_obj o; };
+
+namespace {
+constexpr uint32_t kMaxDeadlineMs = 30000;                  // pvr_queue.c MAX_DEADLINE_MS
+constexpr uint32_t kSchedTimeoutMs = 2 * kMaxDeadlineMs;    // pvr_queue.c SCHED_TIMEOUT_PERIOD
+constexpr uint32_t kCccbSizeLog2 = 15;                      // pvr_queue.c CTX_{COMPUTE,FRAG,GEOM,TRANSFER}_CCCB_SIZE_LOG2
+constexpr uint32_t kKccbTimeoutMs = 1000;
+constexpr uint32_t kCacheLine = 64;                         // Cortex-A53 L1/L2 line
+constexpr uint32_t kHwrtReaders = 8;                        // reader queues remembered per HWRT data
+constexpr uint32_t kMaxUfosPerJob = 1 + kHwrtReaders;       // a geometry job waits for one writer and every reader
+constexpr uint32_t kFailedFences = 64;                      // failed fences remembered per file after retirement
+constexpr uint32_t kResetNotes = 16;
+
+// A write-combined kernel mapping of physical memory.
+struct WcMap {
+  IOMemoryDescriptor *md;
+  IOMemoryMap *map;
+  uint8_t *cpu;
+};
+
+bool wcMap(uint64_t phys, uint64_t size, WcMap &m)
+{
+  const uint64_t mask = uint64_t(PAGE_MASK);
+  const uint64_t base = phys & ~mask, end = (phys + size + mask) & ~mask;
+  m = {};
+  m.md = IOMemoryDescriptor::withPhysicalAddress(IOPhysicalAddress(base), IOByteCount(end - base), kIODirectionInOut);
+  if (!m.md) return false;
+  m.map = m.md->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapWriteCombineCache);
+  if (!m.map) {
+    m.md->release();
+    m.md = nullptr;
+    return false;
+  }
+  m.cpu = reinterpret_cast<uint8_t *>(m.map->getVirtualAddress()) + (phys - base);
+  return true;
+}
+
+void wcUnmap(WcMap &m)
+{
+  if (m.map) m.map->release();
+  if (m.md) m.md->release();
+  m = {};
+}
+
+// A FW object: its piece of the firmware heap and the write-combined view the C code uses.
+struct JobsFwObject {
+  pvr_fw_object base;
+  WcMap wc;
+};
+JobsFwObject *jobsFwObject(pvr_fw_object *o) { return reinterpret_cast<JobsFwObject *>(o); }
+
+// A GEM object of the C code: kernel pages for a free list (pvr_gem_object_create()), or a user BO found in a VM
+// context (pvr_vm_find_gem_object()).
+struct JobsGem {
+  pvr_gem_object gem;
+  native_powervr_bo *bo;              // user BO, or null
+  IOBufferMemoryDescriptor *mem;      // kernel pages
+  sg_table sgt;
+  size_t size;
+};
+JobsGem *jobsGem(pvr_gem_object *g) { return reinterpret_cast<JobsGem *>(g); }
+
+struct Job;
+
+// A dependency: queue and seqno of its timeline.
+struct Dep {
+  pvr_queue *queue;
+  uint32_t seqno;
+};
+
+// What the dma_resv of an HWRT data's FW object holds on Linux: the last writer (geometry) and the readers (fragment)
+// since then, one seqno per queue.
+struct HwrtTrack {
+  pvr_hwrt_data *hwrt;
+  Dep write;
+  Dep reads[kHwrtReaders];
+  uint32_t nreads;
+};
+
+struct ResetNote {
+  uint32_t ctx_id, job_ref, reason, flags;
+};
+
+struct JobsDevice {
+  pvr_device dev;
+  IOLock *lock;          // queued jobs, CCCB writes, HWRT tracking, files, fences
+  IOLock *fwccbLock;     // pvr_dev->fwccb.lock
+  list_head jobs;        // queued jobs in submission order
+  list_head files;
+  HwrtTrack *tracks;
+  uint32_t ntracks, captracks;
+  WcMap fwccbCtlMap, fwccbMap;
+  rogue_fwif_ccb_ctl *fwccbCtl;
+  rogue_fwif_fwccb_cmd *fwccb;
+  uint32_t fwccbSlots;
+  ResetNote resets[kResetNotes];
+  uint32_t resetCount;   // under fwccbLock
+  uint64_t timeoutAbs;
+};
+JobsDevice gJobs;
+volatile int32_t gJobsState;   // 0 not set up, 1 being set up, 2 ready
+}  // namespace
+
+// struct pvr_queue (pvr_queue.h) without the scheduler, entity and fence contexts.
+struct pvr_queue {
+  enum drm_pvr_job_type type;
+  uint32_t ctx_offset;
+  pvr_context *ctx;
+  uint64_t callstack_addr;
+  pvr_cccb cccb;
+  pvr_fw_object *reg_state_obj;
+  struct {
+    pvr_fw_object *fw_obj;
+    uint32_t *value;
+  } timeline_ufo;
+  uint32_t seqno;   // job_fence_ctx.seqno: the last done-fence seqno handed out
+  bool killed;      // pvr_queue_kill()
+};
+
+// The job part of struct pvr_file (native_powervr_jobs.h).
+struct native_powervr_jobs_file {
+  pvr_file pf;
+  drm_file df;
+  list_head link;    // gJobs.files
+  list_head jobs;    // this file's queued jobs
+  uint64_t nextFence;
+  uint64_t failed[kFailedFences];
+  uint32_t failedNext;
+};
+
+// A context of the user-client layer: the context and the handle pvr_context_create() gave it in this file's pvr_file.
+struct native_powervr_context {
+  native_powervr_jobs_file *file;
+  uint32_t handle;
+  pvr_context *ctx;
+};
+
+namespace {
+// struct pvr_job without the drm_sched job.
+struct Job {
+  list_head dev_link;    // gJobs.jobs, or a retirement list
+  list_head file_link;   // file->jobs
+  native_powervr_jobs_file *file;   // null once the file is gone
+  uint64_t fence;
+  enum drm_pvr_job_type type;
+  pvr_context *ctx;
+  pvr_hwrt_data *hwrt;
+  pvr_queue *queue;
+  uint32_t id;
+  uint32_t fw_ccb_cmd_type;
+  void *cmd;
+  uint32_t cmd_len;
+  uint32_t seqno;        // done_fence->seqno
+  Job *paired;           // paired_job, during the submission only
+  uint64_t kicked;
+  bool failed, timed_out;
+};
+
+struct UfoList {
+  rogue_fwif_ufo ufo[kMaxUfosPerJob];
+  pvr_queue *queue[kMaxUfosPerJob];
+  uint32_t n;
+};
+
+uint64_t nowAbs() { return mach_absolute_time(); }
+
+bool queueReached(pvr_queue *q, uint32_t seqno) { return int32_t(READ_ONCE(*q->timeline_ufo.value) - seqno) >= 0; }
+bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); }
+}  // namespace
+
+// ---- The Linux API shim (compat/native_powervr_linux_jobs.h) ----
+extern "C" void native_powervr_lock_init(void **lock)
+{
+  *lock = IOLockAlloc();
+  if (!*lock) native_powervr_log("powervr: jobs: lock allocation failed\n");
+}
+extern "C" void native_powervr_lock_destroy(void **lock)
+{
+  if (*lock) IOLockFree(static_cast<IOLock *>(*lock));
+  *lock = nullptr;
+}
+extern "C" void native_powervr_lock(void *lock) { IOLockLock(static_cast<IOLock *>(lock)); }
+extern "C" void native_powervr_unlock(void *lock) { IOLockUnlock(static_cast<IOLock *>(lock)); }
+
+extern "C" void xa_init_flags(struct xarray *xa, unsigned int flags)
+{
+  memset(xa, 0, sizeof(*xa));
+  xa->flags = flags;
+  native_powervr_lock_init(&xa->native_lock);
+}
+extern "C" void xa_destroy(struct xarray *xa)
+{
+  kfree(xa->slots);
+  xa->slots = nullptr;
+  xa->nr_slots = 0;
+  native_powervr_lock_destroy(&xa->native_lock);
+}
+namespace {
+// Called with the xarray's lock held.
+bool xaReserve(struct xarray *xa, uint64_t index)
+{
+  if (index < xa->nr_slots) return true;
+  if (index >= U32_MAX) return false;
+  uint64_t n = xa->nr_slots ? xa->nr_slots : 16;
+  while (n <= index) n *= 2;
+  if (n > U32_MAX) n = U32_MAX;
+  void **slots = static_cast<void **>(kcalloc(size_t(n), sizeof(void *), GFP_KERNEL));
+  if (!slots) return false;
+  if (xa->slots) memcpy(slots, xa->slots, xa->nr_slots * sizeof(void *));
+  kfree(xa->slots);
+  xa->slots = slots;
+  xa->nr_slots = uint32_t(n);
+  return true;
+}
+// xa_insert(): entry at index, which must be free. Used to show the objects the user-client layer resolved to the Linux
+// lookups under their handles.
+int xaInsert(struct xarray *xa, unsigned long index, void *entry)
+{
+  native_powervr_lock(xa->native_lock);
+  int err = 0;
+  if (!xaReserve(xa, index)) err = -ENOMEM;
+  else if (xa->slots[index]) err = -EBUSY;
+  else xa->slots[index] = entry;
+  native_powervr_unlock(xa->native_lock);
+  return err;
+}
+}  // namespace
+extern "C" int xa_alloc(struct xarray *xa, u32 *id, void *entry, struct xa_limit limit, gfp_t gfp)
+{
+  (void)gfp;
+  native_powervr_lock(xa->native_lock);
+  uint64_t first = limit.min;
+  if ((xa->flags & XA_FLAGS_ALLOC1) == XA_FLAGS_ALLOC1 && first == 0) first = 1;
+  int err = -EBUSY;
+  for (uint64_t i = first; i <= limit.max; i++) {
+    if (!xaReserve(xa, i)) {
+      err = -ENOMEM;
+      break;
+    }
+    if (!xa->slots[i]) {
+      xa->slots[i] = entry;
+      *id = u32(i);
+      err = 0;
+      break;
+    }
+  }
+  native_powervr_unlock(xa->native_lock);
+  return err;
+}
+extern "C" void *native_powervr_xa_erase(struct xarray *xa, unsigned long index)
+{
+  native_powervr_lock(xa->native_lock);
+  void *old = nullptr;
+  if (index < xa->nr_slots) {
+    old = xa->slots[index];
+    xa->slots[index] = nullptr;
+  }
+  native_powervr_unlock(xa->native_lock);
+  return old;
+}
+extern "C" void *native_powervr_xa_load(struct xarray *xa, unsigned long index)
+{
+  return index < xa->nr_slots ? xa->slots[index] : nullptr;
+}
+extern "C" void *native_powervr_xa_find(struct xarray *xa, unsigned long *index, int after)
+{
+  native_powervr_lock(xa->native_lock);
+  void *entry = nullptr;
+  for (uint64_t i = uint64_t(*index) + (after ? 1 : 0); i < xa->nr_slots; i++) {
+    if (xa->slots[i]) {
+      entry = xa->slots[i];
+      *index = static_cast<unsigned long>(i);
+      break;
+    }
+  }
+  native_powervr_unlock(xa->native_lock);
+  return entry;
+}
+extern "C" bool xa_empty(struct xarray *xa)
+{
+  unsigned long index = 0;
+  return !native_powervr_xa_find(xa, &index, 0);
+}
+extern "C" void *memdup_user(const void *src, size_t len)
+{
+  void *p = kmalloc(len, GFP_KERNEL);
+  if (!p) return ERR_PTR(-ENOMEM);
+  memcpy(p, src, len);
+  return p;
+}
+
+// ---- pvr_device.c ----
+extern "C" bool pvr_device_has_uapi_quirk(struct pvr_device *pvr_dev, u32 quirk)
+{
+  switch (quirk) {
+  case 47217: return PVR_HAS_QUIRK(pvr_dev, 47217);
+  case 48545: return PVR_HAS_QUIRK(pvr_dev, 48545);
+  case 49927: return PVR_HAS_QUIRK(pvr_dev, 49927);
+  case 51764: return PVR_HAS_QUIRK(pvr_dev, 51764);
+  case 62269: return PVR_HAS_QUIRK(pvr_dev, 62269);
+  default: return false;
+  }
+}
+extern "C" bool pvr_device_has_uapi_enhancement(struct pvr_device *pvr_dev, u32 enhancement)
+{
+  switch (enhancement) {
+  case 35421: return PVR_HAS_ENHANCEMENT(pvr_dev, 35421);
+  case 42064: return PVR_HAS_ENHANCEMENT(pvr_dev, 42064);
+  default: return false;
+  }
+}
+extern "C" bool pvr_device_has_feature(struct pvr_device *pvr_dev, u32 feature)
+{
+  switch (feature) {
+  case PVR_FEATURE_CLUSTER_GROUPING: return PVR_HAS_FEATURE(pvr_dev, cluster_grouping);
+  case PVR_FEATURE_COMPUTE_MORTON_CAPABLE: return PVR_HAS_FEATURE(pvr_dev, compute_morton_capable);
+  case PVR_FEATURE_FB_CDC_V4: return PVR_HAS_FEATURE(pvr_dev, fb_cdc_v4);
+  case PVR_FEATURE_GPU_MULTICORE_SUPPORT: return PVR_HAS_FEATURE(pvr_dev, gpu_multicore_support);
+  case PVR_FEATURE_ISP_ZLS_D24_S8_PACKING_OGL_MODE: return PVR_HAS_FEATURE(pvr_dev, isp_zls_d24_s8_packing_ogl_mode);
+  case PVR_FEATURE_S7_TOP_INFRASTRUCTURE: return PVR_HAS_FEATURE(pvr_dev, s7_top_infrastructure);
+  case PVR_FEATURE_TESSELLATION: return PVR_HAS_FEATURE(pvr_dev, tessellation);
+  case PVR_FEATURE_TPU_DM_GLOBAL_REGISTERS: return PVR_HAS_FEATURE(pvr_dev, tpu_dm_global_registers);
+  case PVR_FEATURE_VDM_DRAWINDIRECT: return PVR_HAS_FEATURE(pvr_dev, vdm_drawindirect);
+  case PVR_FEATURE_VDM_OBJECT_LEVEL_LLS: return PVR_HAS_FEATURE(pvr_dev, vdm_object_level_lls);
+  case PVR_FEATURE_ZLS_SUBTILE: return PVR_HAS_FEATURE(pvr_dev, zls_subtile);
+  // Derived features.
+  case PVR_FEATURE_CDM_USER_MODE_QUEUE: {
+    u8 cdm_control_stream_format = 0;
+    PVR_FEATURE_VALUE(pvr_dev, cdm_control_stream_format, &cdm_control_stream_format);
+    return cdm_control_stream_format >= 2 && cdm_control_stream_format <= 4;
+  }
+  case PVR_FEATURE_REQUIRES_FB_CDC_ZLS_SETUP:
+    if (PVR_HAS_FEATURE(pvr_dev, fbcdc_algorithm)) {
+      u8 fbcdc_algorithm = 0;
+      PVR_FEATURE_VALUE(pvr_dev, fbcdc_algorithm, &fbcdc_algorithm);
+      return fbcdc_algorithm < 3 || PVR_HAS_FEATURE(pvr_dev, fb_cdc_v4);
+    }
+    return false;
+  default:
+    WARN(true, "Looking up undefined feature %u\n", feature);
+    return false;
+  }
+}
+
+// ---- pvr_fw.c: FW objects in the firmware heap, seen through a write-combined alias ----
+extern "C" int pvr_fw_object_create(struct pvr_device *pvr_dev, size_t size, u64 flags, void (*init)(void *cpu_ptr, void *priv),
+                                    void *init_priv, struct pvr_fw_object **pvr_obj_out)
+{
+  // flags: every caller here asks for PVR_BO_FW_FLAGS_DEVICE_UNCACHED, which the whole heap is for the firmware
+  // (NativePowerVR.cpp maps it uncached in the MIPS page table).
+  (void)pvr_dev;
+  (void)flags;
+  if (!size || size > SZ_16M) return -EINVAL;
+  JobsFwObject *o = static_cast<JobsFwObject *>(kzalloc(sizeof(*o), GFP_KERNEL));
+  if (!o) return -ENOMEM;
+  const uint32_t sz = ALIGN(uint32_t(size), kCacheLine);
+  if (native_powervr_fw_alloc(sz, sz >= SZ_4K ? SZ_4K : kCacheLine, &o->base.o)) {
+    kfree(o);
+    return -ENOMEM;
+  }
+  // The allocator zeroed it through the cached heap mapping: write those lines back and drop them before the alias is
+  // used, and never write through the cached mapping again.
+  native_powervr_invalidate(o->base.o.cpu, sz);
+  if (!wcMap(o->base.o.phys, sz, o->wc)) {
+    native_powervr_fw_free(&o->base.o);
+    kfree(o);
+    return -ENOMEM;
+  }
+  if (init) init(o->wc.cpu, init_priv);
+  wmb();
+  *pvr_obj_out = &o->base;
+  return 0;
+}
+extern "C" void *pvr_fw_object_create_and_map(struct pvr_device *pvr_dev, size_t size, u64 flags,
+                                              void (*init)(void *cpu_ptr, void *priv), void *init_priv,
+                                              struct pvr_fw_object **pvr_obj_out)
+{
+  const int err = pvr_fw_object_create(pvr_dev, size, flags, init, init_priv, pvr_obj_out);
+  return err ? ERR_PTR(err) : jobsFwObject(*pvr_obj_out)->wc.cpu;
+}
+extern "C" void *pvr_fw_object_vmap(struct pvr_fw_object *fw_obj) { return jobsFwObject(fw_obj)->wc.cpu; }
+extern "C" void pvr_fw_object_vunmap(struct pvr_fw_object *fw_obj) { (void)fw_obj; wmb(); }
+extern "C" void pvr_fw_object_destroy(struct pvr_fw_object *fw_obj)
+{
+  if (!fw_obj) return;
+  JobsFwObject *o = jobsFwObject(fw_obj);
+  wcUnmap(o->wc);
+  native_powervr_fw_free(&o->base.o);
+  kfree(o);
+}
+extern "C" void pvr_fw_object_unmap_and_destroy(struct pvr_fw_object *fw_obj)
+{
+  pvr_fw_object_vunmap(fw_obj);
+  pvr_fw_object_destroy(fw_obj);
+}
+extern "C" void pvr_fw_object_get_fw_addr_offset(struct pvr_fw_object *fw_obj, u32 offset, u32 *fw_addr_out)
+{
+  *fw_addr_out = fw_obj->o.fw_addr + offset;
+}
+
+// pvr_fw_structure_cleanup()
+extern "C" int pvr_fw_structure_cleanup(struct pvr_device *pvr_dev, u32 type, struct pvr_fw_object *fw_obj, u32 offset)
+{
+  struct rogue_fwif_kccb_cmd cmd;
+  memset(&cmd, 0, sizeof(cmd));
+  struct rogue_fwif_cleanup_request *cleanup_req = &cmd.cmd_data.cleanup_data;
+  cmd.cmd_type = ROGUE_FWIF_KCCB_CMD_CLEANUP;
+  cmd.kccb_flags = 0;
+  cleanup_req->cleanup_type = static_cast<enum rogue_fwif_cleanup_type>(type);
+  switch (type) {
+  case ROGUE_FWIF_CLEANUP_FWCOMMONCONTEXT:
+    pvr_fw_object_get_fw_addr_offset(fw_obj, offset, &cleanup_req->cleanup_data.context_fw_addr);
+    break;
+  case ROGUE_FWIF_CLEANUP_HWRTDATA:
+    pvr_fw_object_get_fw_addr_offset(fw_obj, offset, &cleanup_req->cleanup_data.hwrt_data_fw_addr);
+    break;
+  case ROGUE_FWIF_CLEANUP_FREELIST:
+    pvr_fw_object_get_fw_addr_offset(fw_obj, offset, &cleanup_req->cleanup_data.freelist_fw_addr);
+    break;
+  default:
+    return -EINVAL;
+  }
+  u32 slot_nr = 0, rtn = 0;
+  int err = pvr_kccb_send_cmd(pvr_dev, &cmd, &slot_nr);
+  if (err) return err;
+  err = pvr_kccb_wait_for_completion(pvr_dev, slot_nr, HZ, &rtn);
+  if (err) return err;
+  if (rtn & ROGUE_FWIF_KCCB_RTN_SLOT_CLEANUP_BUSY) err = -EBUSY;
+  return err;
+}
+
+// pvr_kccb_send_cmd_reserved_powered(): Linux writes into a slot the job reserved and does not wait.
+// native_powervr_kccb_submit() waits for the firmware to execute the command; a full KCCB (which the reservation rules
+// out on Linux) is retried for up to a second.
+extern "C" void pvr_kccb_send_cmd_reserved_powered(struct pvr_device *pvr_dev, struct rogue_fwif_kccb_cmd *cmd, u32 *kccb_slot)
+{
+  (void)pvr_dev;
+  int err = -EBUSY;
+  for (uint32_t ms = 0; err == -EBUSY && ms <= kKccbTimeoutMs; ms++) {
+    err = native_powervr_kccb_submit(cmd, kKccbTimeoutMs);
+    if (err == -EBUSY) IOSleep(1);
+  }
+  if (err) native_powervr_log("powervr: jobs: KCCB command %x: %d\n", cmd->cmd_type, err);
+  if (kccb_slot) *kccb_slot = 0;
+}
+
+// ---- pvr_gem.c: free list pages and user BOs ----
+extern "C" struct pvr_gem_object *pvr_gem_object_create(struct pvr_device *pvr_dev, size_t size, u64 flags)
+{
+  (void)pvr_dev;
+  if (!size) return static_cast<pvr_gem_object *>(ERR_PTR(-EINVAL));
+  JobsGem *g = static_cast<JobsGem *>(kzalloc(sizeof(*g), GFP_KERNEL));
+  if (!g) return static_cast<pvr_gem_object *>(ERR_PTR(-ENOMEM));
+  // Below 4 GiB: PHYS_BUS_WIDTH is 32 on this core, and the PM takes 32-bit page numbers.
+  g->mem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut, size, 0x00000000FFFFF000ULL);
+  if (!g->mem) {
+    kfree(g);
+    return static_cast<pvr_gem_object *>(ERR_PTR(-ENOMEM));
+  }
+  g->size = size;
+  void *cpu = g->mem->getBytesNoCopy();
+  memset(cpu, 0, size);
+  native_powervr_clean(cpu, size);   // shmem pages are zeroed; the GPU sees the zeros
+  // The physical runs (drm_gem_shmem_get_pages_sgt()).
+  uint32_t n = 0;
+  for (int pass = 0; pass < 2; pass++) {
+    uint64_t lastEnd = ~0ULL;
+    n = 0;
+    for (size_t off = 0; off < size;) {
+      IOByteCount len = 0;
+      const uint64_t pa = g->mem->getPhysicalSegment(off, &len, kIOMemoryMapperNone);
+      if (!pa || !len) break;
+      if (len > size - off) len = size - off;
+      if (pa == lastEnd) {
+        if (pass) g->sgt.sgl[n - 1].dma_length += unsigned(len);
+      } else {
+        if (pass) g->sgt.sgl[n] = {pa, unsigned(len)};
+        n++;
+      }
+      lastEnd = pa + len;
+      off += len;
+    }
+    if (!pass) {
+      g->sgt.sgl = static_cast<scatterlist *>(kcalloc(n ? n : 1, sizeof(scatterlist), GFP_KERNEL));
+      if (!g->sgt.sgl) {
+        g->mem->release();
+        kfree(g);
+        return static_cast<pvr_gem_object *>(ERR_PTR(-ENOMEM));
+      }
+    }
+  }
+  g->sgt.nents = g->sgt.orig_nents = n;
+  g->gem.base.sgt = &g->sgt;
+  g->gem.flags = flags;
+  return &g->gem;
+}
+extern "C" struct sg_table *drm_gem_shmem_get_pages_sgt(struct drm_gem_shmem_object *shmem)
+{
+  return shmem->sgt ? shmem->sgt : static_cast<sg_table *>(ERR_PTR(-EINVAL));
+}
+extern "C" void pvr_gem_object_put(struct pvr_gem_object *pvr_obj)
+{
+  if (!pvr_obj) return;
+  JobsGem *g = jobsGem(pvr_obj);
+  if (g->bo) native_powervr_bo_put(g->bo);
+  if (g->mem) g->mem->release();
+  kfree(g->sgt.sgl);
+  kfree(g);
+}
+// pvr_gem_object_vmap(): the BO's kernel view is cached (native_powervr_jobs.h), so it is cleaned and invalidated
+// before the C code reads it and cleaned when it is done (pvr_gem_object_vunmap()).
+extern "C" void *pvr_gem_object_vmap(struct pvr_gem_object *pvr_obj)
+{
+  JobsGem *g = jobsGem(pvr_obj);
+  void *cpu = g->bo ? native_powervr_bo_cpu(g->bo) : g->mem->getBytesNoCopy();
+  if (!cpu) return ERR_PTR(-ENOMEM);
+  native_powervr_invalidate(cpu, g->bo ? size_t(native_powervr_bo_size(g->bo)) : g->size);
+  return cpu;
+}
+extern "C" void pvr_gem_object_vunmap(struct pvr_gem_object *pvr_obj)
+{
+  JobsGem *g = jobsGem(pvr_obj);
+  void *cpu = g->bo ? native_powervr_bo_cpu(g->bo) : g->mem->getBytesNoCopy();
+  if (cpu) native_powervr_clean(cpu, g->bo ? size_t(native_powervr_bo_size(g->bo)) : g->size);
+}
+
+// ---- pvr_vm.c: the user-client layer's VM contexts ----
+// struct pvr_vm_context of the C code is the user-client layer's struct native_powervr_vm_context.
+static native_powervr_vm_context *nativeVm(pvr_vm_context *v) { return reinterpret_cast<native_powervr_vm_context *>(v); }
+extern "C" struct pvr_vm_context *pvr_vm_context_lookup(struct pvr_file *pvr_file, u32 handle)
+{
+  xa_lock(&pvr_file->vm_ctx_handles);
+  native_powervr_vm_context *vm = xa_load(&pvr_file->vm_ctx_handles, handle);
+  if (vm) vm = native_powervr_vm_context_get(vm);
+  xa_unlock(&pvr_file->vm_ctx_handles);
+  return reinterpret_cast<pvr_vm_context *>(vm);
+}
+// Linux returns whether this put destroyed the context; no caller of the C code reads it, and the user-client layer
+// does not report it.
+extern "C" bool pvr_vm_context_put(struct pvr_vm_context *vm_ctx)
+{
+  if (vm_ctx) native_powervr_vm_context_put(nativeVm(vm_ctx));
+  return false;
+}
+extern "C" struct pvr_gem_object *pvr_vm_find_gem_object(struct pvr_vm_context *vm_ctx, u64 device_addr,
+                                                        u64 *mapped_offset_out, u64 *mapped_size_out)
+{
+  native_powervr_bo_mapping m;
+  memset(&m, 0, sizeof(m));
+  if (native_powervr_vm_find_bo(nativeVm(vm_ctx), device_addr, &m) || !m.bo) return nullptr;
+  JobsGem *g = static_cast<JobsGem *>(kzalloc(sizeof(*g), GFP_KERNEL));
+  if (!g) {
+    native_powervr_bo_put(m.bo);
+    return nullptr;
+  }
+  g->bo = m.bo;
+  g->gem.flags = native_powervr_bo_flags(m.bo);
+  if (mapped_offset_out) *mapped_offset_out = m.bo_offset;
+  if (mapped_size_out) *mapped_size_out = m.va_range;
+  return &g->gem;
+}
+// Linux unmaps the VM context of a context that queued jobs still hold when its file closes, so that those jobs fault
+// rather than touch freed memory. The user-client layer owns the mappings; native_powervr_jobs_file_destroy() instead
+// waits for the file's jobs to complete.
+extern "C" void pvr_vm_unmap_all(struct pvr_vm_context *vm_ctx)
+{
+  (void)vm_ctx;
+  native_powervr_log("powervr: jobs: a closing file's context still has queued jobs\n");
+}
+
+// ---- pvr_queue.c without drm_sched ----
+namespace {
+int get_xfer_ctx_state_size(struct pvr_device *pvr_dev)
+{
+  u32 num_isp_store_registers;
+  if (PVR_HAS_FEATURE(pvr_dev, xe_memory_hierarchy)) {
+    num_isp_store_registers = 1;
+  } else {
+    int err = PVR_FEATURE_VALUE(pvr_dev, num_isp_ipp_pipes, &num_isp_store_registers);
+    if (WARN_ON(err)) return err;
+  }
+  // struct_size_t(struct rogue_fwif_frag_ctx_state, frag_reg_isp_store, n)
+  return int(sizeof(struct rogue_fwif_frag_ctx_state) + num_isp_store_registers * sizeof(u32));
+}
+int get_frag_ctx_state_size(struct pvr_device *pvr_dev)
+{
+  u32 num_isp_store_registers;
+  int err;
+  if (PVR_HAS_FEATURE(pvr_dev, xe_memory_hierarchy)) {
+    err = PVR_FEATURE_VALUE(pvr_dev, num_raster_pipes, &num_isp_store_registers);
+    if (WARN_ON(err)) return err;
+    if (PVR_HAS_FEATURE(pvr_dev, gpu_multicore_support)) {
+      u32 xpu_max_slaves;
+      err = PVR_FEATURE_VALUE(pvr_dev, xpu_max_slaves, &xpu_max_slaves);
+      if (WARN_ON(err)) return err;
+      num_isp_store_registers *= (1 + xpu_max_slaves);
+    }
+  } else {
+    err = PVR_FEATURE_VALUE(pvr_dev, num_isp_ipp_pipes, &num_isp_store_registers);
+    if (WARN_ON(err)) return err;
+  }
+  return int(sizeof(struct rogue_fwif_frag_ctx_state) + num_isp_store_registers * sizeof(u32));
+}
+int get_ctx_state_size(struct pvr_device *pvr_dev, enum drm_pvr_job_type type)
+{
+  switch (type) {
+  case DRM_PVR_JOB_TYPE_GEOMETRY: return int(sizeof(struct rogue_fwif_geom_ctx_state));
+  case DRM_PVR_JOB_TYPE_FRAGMENT: return get_frag_ctx_state_size(pvr_dev);
+  case DRM_PVR_JOB_TYPE_COMPUTE: return int(sizeof(struct rogue_fwif_compute_ctx_state));
+  case DRM_PVR_JOB_TYPE_TRANSFER_FRAG: return get_xfer_ctx_state_size(pvr_dev);
+  }
+  WARN(1, "Invalid queue type");
+  return -EINVAL;
+}
+u32 get_ctx_offset(enum drm_pvr_job_type type)
+{
+  switch (type) {
+  case DRM_PVR_JOB_TYPE_GEOMETRY: return u32(offsetof(struct rogue_fwif_fwrendercontext, geom_context));
+  case DRM_PVR_JOB_TYPE_FRAGMENT: return u32(offsetof(struct rogue_fwif_fwrendercontext, frag_context));
+  case DRM_PVR_JOB_TYPE_COMPUTE: return u32(offsetof(struct rogue_fwif_fwcomputecontext, cdm_context));
+  case DRM_PVR_JOB_TYPE_TRANSFER_FRAG: return u32(offsetof(struct rogue_fwif_fwtransfercontext, tq_context));
+  }
+  return 0;
+}
+u32 get_dm_type(struct pvr_queue *queue)
+{
+  switch (queue->type) {
+  case DRM_PVR_JOB_TYPE_GEOMETRY: return PVR_FWIF_DM_GEOM;
+  case DRM_PVR_JOB_TYPE_TRANSFER_FRAG:
+  case DRM_PVR_JOB_TYPE_FRAGMENT: return PVR_FWIF_DM_FRAG;
+  case DRM_PVR_JOB_TYPE_COMPUTE: return PVR_FWIF_DM_CDM;
+  }
+  return ~0U;
+}
+void init_fw_context(struct pvr_queue *queue, void *fw_ctx_map)
+{
+  struct pvr_context *ctx = queue->ctx;
+  struct rogue_fwif_fwcommoncontext *cctx_fw =
+      reinterpret_cast<rogue_fwif_fwcommoncontext *>(static_cast<u8 *>(fw_ctx_map) + queue->ctx_offset);
+  struct pvr_cccb *cccb = &queue->cccb;
+  cctx_fw->ccbctl_fw_addr = cccb->ctrl_fw_addr;
+  cctx_fw->ccb_fw_addr = cccb->cccb_fw_addr;
+  cctx_fw->dm = get_dm_type(queue);
+  cctx_fw->priority = ctx->priority;
+  cctx_fw->priority_seq_num = 0;
+  cctx_fw->max_deadline_ms = kMaxDeadlineMs;
+  cctx_fw->pid = u32(proc_selfpid());   // task_tgid_nr(current): contexts are created on the caller's thread
+  cctx_fw->server_common_context_id = ctx->ctx_id;
+  // pvr_vm_get_fw_mem_context()
+  cctx_fw->fw_mem_context_fw_addr = native_powervr_vm_fw_mem_ctx(native_powervr_vm_context_vm(nativeVm(ctx->vm_ctx)));
+  pvr_fw_object_get_fw_addr(queue->reg_state_obj, &cctx_fw->context_state_addr);
+}
+int pvr_queue_cleanup_fw_context(struct pvr_queue *queue)
+{
+  if (!queue->ctx->fw_obj) return 0;
+  return pvr_fw_structure_cleanup(queue->ctx->pvr_dev, ROGUE_FWIF_CLEANUP_FWCOMMONCONTEXT, queue->ctx->fw_obj,
+                                  queue->ctx_offset);
+}
+void reg_state_init(void *cpu_ptr, void *priv)
+{
+  struct pvr_queue *queue = static_cast<pvr_queue *>(priv);
+  if (queue->type == DRM_PVR_JOB_TYPE_GEOMETRY) {
+    struct rogue_fwif_geom_ctx_state *geom_ctx_state_fw = static_cast<rogue_fwif_geom_ctx_state *>(cpu_ptr);
+    geom_ctx_state_fw->geom_core[0].geom_reg_vdm_call_stack_pointer_init = queue->callstack_addr;
+  }
+}
+
+// Forget a queue that goes away in the HWRT tracking (called with gJobs.lock held).
+void purgeQueue(pvr_queue *q)
+{
+  for (uint32_t i = 0; i < gJobs.ntracks; i++) {
+    HwrtTrack &t = gJobs.tracks[i];
+    if (t.write.queue == q) t.write = {};
+    for (uint32_t r = 0; r < t.nreads;) {
+      if (t.reads[r].queue == q) t.reads[r] = t.reads[--t.nreads];
+      else r++;
+    }
+  }
+}
+}  // namespace
+
+extern "C" struct pvr_queue *pvr_queue_create(struct pvr_context *ctx, enum drm_pvr_job_type type,
+                                              struct drm_pvr_ioctl_create_context_args *args, void *fw_ctx_map)
+{
+  static const char *const names[] = {"geometry", "fragment", "compute", "transfer_frag"};
+  struct pvr_device *pvr_dev = ctx->pvr_dev;
+  if (WARN_ON(u32(type) > DRM_PVR_JOB_TYPE_TRANSFER_FRAG)) return static_cast<pvr_queue *>(ERR_PTR(-EINVAL));
+  switch (ctx->type) {
+  case DRM_PVR_CTX_TYPE_RENDER:
+    if (type != DRM_PVR_JOB_TYPE_GEOMETRY && type != DRM_PVR_JOB_TYPE_FRAGMENT) return static_cast<pvr_queue *>(ERR_PTR(-EINVAL));
+    break;
+  case DRM_PVR_CTX_TYPE_COMPUTE:
+    if (type != DRM_PVR_JOB_TYPE_COMPUTE) return static_cast<pvr_queue *>(ERR_PTR(-EINVAL));
+    break;
+  case DRM_PVR_CTX_TYPE_TRANSFER_FRAG:
+    if (type != DRM_PVR_JOB_TYPE_TRANSFER_FRAG) return static_cast<pvr_queue *>(ERR_PTR(-EINVAL));
+    break;
+  default:
+    return static_cast<pvr_queue *>(ERR_PTR(-EINVAL));
+  }
+  const int ctx_state_size = get_ctx_state_size(pvr_dev, type);
+  if (ctx_state_size < 0) return static_cast<pvr_queue *>(ERR_PTR(ctx_state_size));
+  pvr_queue *queue = static_cast<pvr_queue *>(kzalloc(sizeof(*queue), GFP_KERNEL));
+  if (!queue) return static_cast<pvr_queue *>(ERR_PTR(-ENOMEM));
+  queue->type = type;
+  queue->ctx_offset = get_ctx_offset(type);
+  queue->ctx = ctx;
+  queue->callstack_addr = args->callstack_addr;
+  void *cpu_map;
+  int err = pvr_cccb_init(pvr_dev, &queue->cccb, kCccbSizeLog2, names[type]);
+  if (err) goto err_free_queue;
+  err = pvr_fw_object_create(pvr_dev, size_t(ctx_state_size), PVR_BO_FW_FLAGS_DEVICE_UNCACHED, reg_state_init, queue,
+                             &queue->reg_state_obj);
+  if (err) goto err_cccb_fini;
+  init_fw_context(queue, fw_ctx_map);
+  if (type != DRM_PVR_JOB_TYPE_GEOMETRY && type != DRM_PVR_JOB_TYPE_FRAGMENT && args->callstack_addr) {
+    err = -EINVAL;
+    goto err_release_reg_state;
+  }
+  cpu_map = pvr_fw_object_create_and_map(pvr_dev, sizeof(*queue->timeline_ufo.value), PVR_BO_FW_FLAGS_DEVICE_UNCACHED,
+                                         nullptr, nullptr, &queue->timeline_ufo.fw_obj);
+  if (IS_ERR(cpu_map)) {
+    err = int(PTR_ERR(cpu_map));
+    goto err_release_reg_state;
+  }
+  queue->timeline_ufo.value = static_cast<u32 *>(cpu_map);
+  return queue;
+
+err_release_reg_state:
+  pvr_fw_object_destroy(queue->reg_state_obj);
+err_cccb_fini:
+  pvr_cccb_fini(&queue->cccb);
+err_free_queue:
+  kfree(queue);
+  return static_cast<pvr_queue *>(ERR_PTR(err));
+}
+
+// pvr_queue_kill(): no job is queued to it after this (the scheduler entity is destroyed on Linux).
+extern "C" void pvr_queue_kill(struct pvr_queue *queue)
+{
+  IOLockLock(gJobs.lock);
+  queue->killed = true;
+  IOLockUnlock(gJobs.lock);
+}
+
+// pvr_queue_destroy(): runs once nothing references the context, so no job of the queue is still queued.
+extern "C" void pvr_queue_destroy(struct pvr_queue *queue, bool cleanup_queue_entity)
+{
+  (void)cleanup_queue_entity;
+  if (!queue) return;
+  IOLockLock(gJobs.lock);
+  purgeQueue(queue);
+  IOLockUnlock(gJobs.lock);
+  const int err = pvr_queue_cleanup_fw_context(queue);
+  if (err) native_powervr_log("powervr: jobs: FW context cleanup: %d\n", err);
+  pvr_fw_object_unmap_and_destroy(queue->timeline_ufo.fw_obj);
+  pvr_fw_object_destroy(queue->reg_state_obj);
+  pvr_cccb_fini(&queue->cccb);
+  kfree(queue);
+}
+
+// ---- pvr_ccb.c: the firmware CCB ----
+namespace {
+// process_fwccb_command()
+void process_fwccb_command(struct pvr_device *pvr_dev, struct rogue_fwif_fwccb_cmd *cmd)
+{
+  if ((cmd->cmd_type & ROGUE_CMD_MAGIC_DWORD_MASK) != ROGUE_CMD_MAGIC_DWORD_SHIFTED) {
+    native_powervr_log("powervr: Received FWCCB command with bad magic value; ignoring (type=0x%08x)\n", cmd->cmd_type);
+    return;
+  }
+  switch (cmd->cmd_type) {
+  case ROGUE_FWIF_FWCCB_CMD_REQUEST_GPU_RESTART:
+    pvr_power_reset(pvr_dev, false);
+    break;
+  case ROGUE_FWIF_FWCCB_CMD_FREELISTS_RECONSTRUCTION:
+    pvr_free_list_process_reconstruct_req(pvr_dev, &cmd->cmd_data.cmd_freelists_reconstruction);
+    break;
+  case ROGUE_FWIF_FWCCB_CMD_FREELIST_GROW:
+    pvr_free_list_process_grow_req(pvr_dev, &cmd->cmd_data.cmd_free_list_gs);
+    break;
+  case ROGUE_FWIF_FWCCB_CMD_UPDATE_STATS:
+    break;
+  case ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_NOTIFICATION: {
+    rogue_fwif_fwccb_cmd_context_reset_data *d = &cmd->cmd_data.cmd_context_reset_notification;
+    pvr_dump_context_reset_notification(pvr_dev, d);
+    // Applied to the queued jobs by the completion thread (it takes gJobs.lock, which a submission can hold while it
+    // waits for the KCCB).
+    IOLockLock(gJobs.fwccbLock);
+    if (gJobs.resetCount < kResetNotes)
+      gJobs.resets[gJobs.resetCount++] = {d->server_common_context_id, d->reset_job_ref, d->reset_reason, d->flags};
+    IOLockUnlock(gJobs.fwccbLock);
+    break;
+  }
+  default:
+    native_powervr_log("powervr: Received unknown FWCCB command (type=%d)\n", int(cmd->cmd_type & ~ROGUE_CMD_MAGIC_DWORD_MASK));
+    break;
+  }
+}
+}  // namespace
+
+// pvr_fwccb_process()
+extern "C" void pvr_fwccb_process(struct pvr_device *pvr_dev)
+{
+  rogue_fwif_ccb_ctl *ctrl = gJobs.fwccbCtl;
+  if (!ctrl) return;
+  IOLockLock(gJobs.fwccbLock);
+  u32 read_offset;
+  while ((read_offset = READ_ONCE(ctrl->read_offset)) != READ_ONCE(ctrl->write_offset)) {
+    if (read_offset >= gJobs.fwccbSlots) {
+      native_powervr_log("powervr: jobs: FWCCB read offset %u out of range\n", read_offset);
+      break;
+    }
+    struct rogue_fwif_fwccb_cmd cmd;
+    memcpy(&cmd, &gJobs.fwccb[read_offset], sizeof(cmd));
+    WRITE_ONCE(ctrl->read_offset, (read_offset + 1) & READ_ONCE(ctrl->wrap_mask));
+    wmb();
+    // Drop FWCCB lock while we process command.
+    IOLockUnlock(gJobs.fwccbLock);
+    process_fwccb_command(pvr_dev, &cmd);
+    IOLockLock(gJobs.fwccbLock);
+  }
+  IOLockUnlock(gJobs.fwccbLock);
+}
+
+// ---- pvr_job.c and the job half of pvr_queue.c ----
+namespace {
+u32 convert_geom_flags(u32 in_flags)
+{
+  u32 out_flags = 0;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_GEOM_CMD_FIRST) out_flags |= ROGUE_GEOM_FLAGS_FIRSTKICK;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_GEOM_CMD_LAST) out_flags |= ROGUE_GEOM_FLAGS_LASTKICK;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_GEOM_CMD_SINGLE_CORE) out_flags |= ROGUE_GEOM_FLAGS_SINGLE_CORE;
+  return out_flags;
+}
+u32 convert_frag_flags(u32 in_flags)
+{
+  u32 out_flags = 0;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_FRAG_CMD_SINGLE_CORE) out_flags |= ROGUE_FRAG_FLAGS_SINGLE_CORE;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_FRAG_CMD_DEPTHBUFFER) out_flags |= ROGUE_FRAG_FLAGS_DEPTHBUFFER;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_FRAG_CMD_STENCILBUFFER) out_flags |= ROGUE_FRAG_FLAGS_STENCILBUFFER;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_FRAG_CMD_PREVENT_CDM_OVERLAP) out_flags |= ROGUE_FRAG_FLAGS_PREVENT_CDM_OVERLAP;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_FRAG_CMD_SCRATCHBUFFER) out_flags |= ROGUE_FRAG_FLAGS_SCRATCHBUFFER;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_FRAG_CMD_GET_VIS_RESULTS) out_flags |= ROGUE_FRAG_FLAGS_GET_VIS_RESULTS;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_FRAG_CMD_DISABLE_PIXELMERGE) out_flags |= ROGUE_FRAG_FLAGS_DISABLE_PIXELMERGE;
+  return out_flags;
+}
+u32 convert_compute_flags(u32 in_flags)
+{
+  u32 out_flags = 0;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_PREVENT_ALL_OVERLAP) out_flags |= ROGUE_COMPUTE_FLAG_PREVENT_ALL_OVERLAP;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_SINGLE_CORE) out_flags |= ROGUE_COMPUTE_FLAG_SINGLE_CORE;
+  return out_flags;
+}
+u32 convert_transfer_flags(u32 in_flags)
+{
+  u32 out_flags = 0;
+  if (in_flags & DRM_PVR_SUBMIT_JOB_TRANSFER_CMD_SINGLE_CORE) out_flags |= ROGUE_TRANSFER_FLAGS_SINGLE_CORE;
+  return out_flags;
+}
+
+// pvr_fw_cmd_init() with pvr_job_process_stream(); the stream is the kernel copy of the user-client layer.
+int pvr_fw_cmd_init(struct pvr_device *pvr_dev, Job *job, const struct pvr_stream_cmd_defs *stream_def, const void *stream_copy,
+                    u32 stream_len)
+{
+  void *stream = memdup_user(stream_copy, stream_len);
+  if (IS_ERR(stream)) return int(PTR_ERR(stream));
+  int err = -ENOMEM;
+  job->cmd = kzalloc(stream_def->dest_size, GFP_KERNEL);
+  if (job->cmd) {
+    job->cmd_len = u32(stream_def->dest_size);
+    err = pvr_stream_process(pvr_dev, stream_def, stream, stream_len, job->cmd);
+    if (err) {
+      kfree(job->cmd);
+      job->cmd = nullptr;
+    }
+  }
+  kfree(stream);
+  return err;
+}
+
+// pvr_job_fw_cmd_init() and the four pvr_*_job_fw_cmd_init()
+int pvr_job_fw_cmd_init(Job *job, const struct drm_pvr_job *args, const void *stream)
+{
+  struct pvr_device *pvr_dev = &gJobs.dev;
+  int err;
+  switch (args->type) {
+  case DRM_PVR_JOB_TYPE_GEOMETRY: {
+    if (args->flags & ~DRM_PVR_SUBMIT_JOB_GEOM_CMD_FLAGS_MASK) return -EINVAL;
+    if (job->ctx->type != DRM_PVR_CTX_TYPE_RENDER) return -EINVAL;
+    if (!job->hwrt) return -EINVAL;
+    job->fw_ccb_cmd_type = ROGUE_FWIF_CCB_CMD_TYPE_GEOM;
+    err = pvr_fw_cmd_init(pvr_dev, job, &pvr_cmd_geom_stream, stream, args->cmd_stream_len);
+    if (err) return err;
+    rogue_fwif_cmd_geom *cmd = static_cast<rogue_fwif_cmd_geom *>(job->cmd);
+    cmd->cmd_shared.cmn.frame_num = 0;
+    cmd->flags = convert_geom_flags(args->flags);
+    pvr_fw_object_get_fw_addr(job->hwrt->fw_obj, &cmd->cmd_shared.hwrt_data_fw_addr);
+    return 0;
+  }
+  case DRM_PVR_JOB_TYPE_FRAGMENT: {
+    if (args->flags & ~DRM_PVR_SUBMIT_JOB_FRAG_CMD_FLAGS_MASK) return -EINVAL;
+    if (job->ctx->type != DRM_PVR_CTX_TYPE_RENDER) return -EINVAL;
+    if (!job->hwrt) return -EINVAL;
+    job->fw_ccb_cmd_type = (args->flags & DRM_PVR_SUBMIT_JOB_FRAG_CMD_PARTIAL_RENDER) ? ROGUE_FWIF_CCB_CMD_TYPE_FRAG_PR
+                                                                                     : ROGUE_FWIF_CCB_CMD_TYPE_FRAG;
+    err = pvr_fw_cmd_init(pvr_dev, job, &pvr_cmd_frag_stream, stream, args->cmd_stream_len);
+    if (err) return err;
+    rogue_fwif_cmd_frag *cmd = static_cast<rogue_fwif_cmd_frag *>(job->cmd);
+    cmd->cmd_shared.cmn.frame_num = 0;
+    cmd->flags = convert_frag_flags(args->flags);
+    pvr_fw_object_get_fw_addr(job->hwrt->fw_obj, &cmd->cmd_shared.hwrt_data_fw_addr);
+    return 0;
+  }
+  case DRM_PVR_JOB_TYPE_COMPUTE: {
+    if (args->flags & ~DRM_PVR_SUBMIT_JOB_COMPUTE_CMD_FLAGS_MASK) return -EINVAL;
+    if (job->ctx->type != DRM_PVR_CTX_TYPE_COMPUTE) return -EINVAL;
+    job->fw_ccb_cmd_type = ROGUE_FWIF_CCB_CMD_TYPE_CDM;
+    err = pvr_fw_cmd_init(pvr_dev, job, &pvr_cmd_compute_stream, stream, args->cmd_stream_len);
+    if (err) return err;
+    rogue_fwif_cmd_compute *cmd = static_cast<rogue_fwif_cmd_compute *>(job->cmd);
+    cmd->common.frame_num = 0;
+    cmd->flags = convert_compute_flags(args->flags);
+    return 0;
+  }
+  case DRM_PVR_JOB_TYPE_TRANSFER_FRAG: {
+    if (args->flags & ~DRM_PVR_SUBMIT_JOB_TRANSFER_CMD_FLAGS_MASK) return -EINVAL;
+    if (job->ctx->type != DRM_PVR_CTX_TYPE_TRANSFER_FRAG) return -EINVAL;
+    job->fw_ccb_cmd_type = ROGUE_FWIF_CCB_CMD_TYPE_TQ_3D;
+    err = pvr_fw_cmd_init(pvr_dev, job, &pvr_cmd_transfer_stream, stream, args->cmd_stream_len);
+    if (err) return err;
+    rogue_fwif_cmd_transfer *cmd = static_cast<rogue_fwif_cmd_transfer *>(job->cmd);
+    cmd->common.frame_num = 0;
+    cmd->flags = convert_transfer_flags(args->flags);
+    return 0;
+  }
+  default:
+    return -EINVAL;
+  }
+}
+
+// ufo_cmds_size(), job_cmds_size()
+u32 ufo_cmds_size(u32 elem_count)
+{
+  const u32 full_cmd_count = elem_count / ROGUE_FWIF_CCB_CMD_MAX_UFOS;
+  const u32 remaining_elems = elem_count % ROGUE_FWIF_CCB_CMD_MAX_UFOS;
+  u32 size = full_cmd_count * pvr_cccb_get_size_of_cmd_with_hdr(ROGUE_FWIF_CCB_CMD_MAX_UFOS * sizeof(struct rogue_fwif_ufo));
+  if (remaining_elems) size += pvr_cccb_get_size_of_cmd_with_hdr(remaining_elems * sizeof(struct rogue_fwif_ufo));
+  return size;
+}
+u32 job_cmds_size(const Job *job, u32 ufo_wait_count)
+{
+  return ufo_cmds_size(ufo_wait_count) + pvr_cccb_get_size_of_cmd_with_hdr(job->cmd_len) + ufo_cmds_size(1);
+}
+
+// pvr_job_release(); called without gJobs.lock (dropping the last context reference destroys the queues).
+void pvr_job_release(Job *job)
+{
+  if (job->id) native_powervr_xa_erase(&gJobs.dev.job_ids, job->id);
+  pvr_hwrt_data_put(job->hwrt);
+  pvr_context_put(job->ctx);
+  kfree(job->cmd);
+  kfree(job);
+}
+
+// create_job() with pvr_queue_job_init()
+int create_job(native_powervr_jobs_file *file, const native_powervr_job_submit *s, Job **out)
+{
+  const struct drm_pvr_job *args = s->args;
+  *out = nullptr;
+  if (!args || !s->ctx || !args->cmd_stream || !args->cmd_stream_len || !s->cmd_stream) return -EINVAL;
+  if (args->type != DRM_PVR_JOB_TYPE_GEOMETRY && args->type != DRM_PVR_JOB_TYPE_FRAGMENT &&
+      (args->hwrt.set_handle || args->hwrt.data_index))
+    return -EINVAL;
+  if (args->sync_ops.count) return -EINVAL;   // NativePowerVRABI.h version 1
+  if (!args->hwrt.set_handle != !s->hwrt) return -EINVAL;
+  Job *job = static_cast<Job *>(kzalloc(sizeof(*job), GFP_KERNEL));
+  if (!job) return -ENOMEM;
+  job->type = static_cast<enum drm_pvr_job_type>(args->type);
+  int err = xa_alloc(&gJobs.dev.job_ids, &job->id, job, xa_limit_32b, GFP_KERNEL);
+  if (err) {
+    job->id = 0;
+    goto err_put_job;
+  }
+  job->ctx = pvr_context_lookup(&file->pf, s->ctx->handle);
+  if (!job->ctx) {
+    err = -EINVAL;
+    goto err_put_job;
+  }
+  if (args->hwrt.set_handle) {
+    // pvr_hwrt_data_lookup() on the dataset the user-client layer resolved.
+    pvr_hwrt_dataset *hwrt_dataset = reinterpret_cast<pvr_hwrt_dataset *>(s->hwrt);
+    if (args->hwrt.data_index >= ARRAY_SIZE(hwrt_dataset->data)) {
+      err = -EINVAL;
+      goto err_put_job;
+    }
+    kref_get(&hwrt_dataset->ref_count);
+    job->hwrt = &hwrt_dataset->data[args->hwrt.data_index];
+  }
+  err = pvr_job_fw_cmd_init(job, args, s->cmd_stream);
+  if (err) goto err_put_job;
+  {
+    // pvr_queue_job_init(): fragment jobs need at least one native fence wait on the geometry job fence.
+    const u32 min_native_dep_count = job->type == DRM_PVR_JOB_TYPE_FRAGMENT ? 1 : 0;
+    if (atomic_read(&job->ctx->faulty)) {
+      err = -EIO;
+      goto err_put_job;
+    }
+    job->queue = pvr_context_get_queue_for_job(job->ctx, job->type);
+    if (!job->queue) {
+      err = -EINVAL;
+      goto err_put_job;
+    }
+    if (!pvr_cccb_cmdseq_can_fit(&job->queue->cccb, job_cmds_size(job, min_native_dep_count))) {
+      err = -E2BIG;
+      goto err_put_job;
+    }
+  }
+  *out = job;
+  return 0;
+
+err_put_job:
+  pvr_job_release(job);
+  return err;
+}
+
+// can_combine_jobs(): the explicit geometry -> fragment dependency Linux requires is implied by NativePowerVRABI.h.
+bool can_combine_jobs(const Job *a, const Job *b)
+{
+  return a->type == DRM_PVR_JOB_TYPE_GEOMETRY && b->type == DRM_PVR_JOB_TYPE_FRAGMENT && a->ctx == b->ctx && a->hwrt == b->hwrt;
+}
+
+// ---- dependencies (gJobs.lock held) ----
+// Room for extra more entries, so that trackFor() cannot fail while a call writes its jobs.
+bool reserveTracks(uint32_t extra)
+{
+  if (gJobs.ntracks + extra <= gJobs.captracks) return true;
+  uint32_t cap = gJobs.captracks ? gJobs.captracks : 32;
+  while (cap < gJobs.ntracks + extra) cap *= 2;
+  HwrtTrack *t = static_cast<HwrtTrack *>(kcalloc(cap, sizeof(HwrtTrack), GFP_KERNEL));
+  if (!t) return false;
+  if (gJobs.tracks) memcpy(t, gJobs.tracks, gJobs.ntracks * sizeof(HwrtTrack));
+  kfree(gJobs.tracks);
+  gJobs.tracks = t;
+  gJobs.captracks = cap;
+  return true;
+}
+
+// The entry of an HWRT data, called right before its job is written (an entry without pending work is free for reuse,
+// so entries must not be taken ahead). reserveTracks() made room.
+HwrtTrack *trackFor(pvr_hwrt_data *hwrt)
+{
+  HwrtTrack *spare = nullptr;
+  for (uint32_t i = 0; i < gJobs.ntracks; i++) {
+    HwrtTrack &t = gJobs.tracks[i];
+    if (t.hwrt == hwrt) return &t;
+    if (spare) continue;
+    // An entry whose jobs have all completed carries no dependency; it may belong to a dataset that is gone.
+    bool idle = depDone(t.write);
+    for (uint32_t r = 0; idle && r < t.nreads; r++) idle = depDone(t.reads[r]);
+    if (idle) spare = &t;
+  }
+  if (!spare) {
+    if (WARN_ON(gJobs.ntracks == gJobs.captracks)) return nullptr;
+    spare = &gJobs.tracks[gJobs.ntracks++];
+  }
+  memset(spare, 0, sizeof(*spare));
+  spare->hwrt = hwrt;
+  return spare;
+}
+
+void addDep(UfoList &l, const Dep &d, const pvr_queue *self)
+{
+  if (!d.queue || d.queue == self || depDone(d)) return;   // one queue runs its jobs in order
+  for (uint32_t i = 0; i < l.n; i++) {
+    if (l.queue[i] == d.queue) {
+      if (int32_t(d.seqno - l.ufo[i].value) > 0) l.ufo[i].value = d.seqno;
+      return;
+    }
+  }
+  if (WARN_ON(l.n == kMaxUfosPerJob)) return;
+  pvr_fw_object_get_fw_addr(d.queue->timeline_ufo.fw_obj, &l.ufo[l.n].addr);
+  l.ufo[l.n].value = d.seqno;
+  l.queue[l.n] = d.queue;
+  l.n++;
+}
+
+// The waits dma_resv gives the job on Linux: geometry (DMA_RESV_USAGE_WRITE) waits for every earlier job on the HWRT
+// data, fragment (READ) for the last geometry job.
+void hwrtDeps(const Job *j, HwrtTrack *t, UfoList &l)
+{
+  if (!t) return;
+  addDep(l, t->write, j->queue);
+  if (j->type == DRM_PVR_JOB_TYPE_GEOMETRY)
+    for (uint32_t r = 0; r < t->nreads; r++) addDep(l, t->reads[r], j->queue);
+}
+
+// update_job_resvs()
+void hwrtUpdate(const Job *j, HwrtTrack *t)
+{
+  if (!t) return;
+  if (j->type == DRM_PVR_JOB_TYPE_GEOMETRY) {
+    t->write = {j->queue, j->seqno};
+    t->nreads = 0;
+    return;
+  }
+  for (uint32_t r = 0; r < t->nreads; r++) {
+    if (t->reads[r].queue == j->queue) {
+      t->reads[r].seqno = j->seqno;
+      return;
+    }
+  }
+  for (uint32_t r = 0; r < t->nreads;) {   // completed readers need no wait
+    if (depDone(t->reads[r])) t->reads[r] = t->reads[--t->nreads];
+    else r++;
+  }
+  if (t->nreads == kHwrtReaders) {
+    // More reader queues than remembered: wait here for the oldest to finish (the firmware makes progress without
+    // this lock).
+    native_powervr_log("powervr: jobs: more than %u reader queues on one HWRT data; waiting on the CPU\n", kHwrtReaders);
+    while (!depDone(t->reads[0])) IOSleep(1);
+    t->reads[0] = t->reads[--t->nreads];
+  }
+  t->reads[t->nreads++] = {j->queue, j->seqno};
+}
+
+// pvr_queue_submit_job_to_cccb(); the caller checked the space.
+void submit_job_to_cccb(Job *job, UfoList &deps)
+{
+  struct pvr_cccb *cccb = &job->queue->cccb;
+  for (u32 off = 0; off < deps.n; off += ROGUE_FWIF_CCB_CMD_MAX_UFOS) {
+    const u32 count = deps.n - off < ROGUE_FWIF_CCB_CMD_MAX_UFOS ? deps.n - off : ROGUE_FWIF_CCB_CMD_MAX_UFOS;
+    pvr_cccb_write_command_with_header(cccb, ROGUE_FWIF_CCB_CMD_TYPE_FENCE_PR, u32(sizeof(deps.ufo[0]) * count),
+                                       &deps.ufo[off], 0, 0);
+  }
+  if (job->type == DRM_PVR_JOB_TYPE_GEOMETRY && job->paired) {
+    rogue_fwif_cmd_geom *cmd = static_cast<rogue_fwif_cmd_geom *>(job->cmd);
+    // Reference value for the partial render test is the current queue fence seqno minus one.
+    pvr_fw_object_get_fw_addr(job->queue->timeline_ufo.fw_obj, &cmd->partial_render_geom_frag_fence.addr);
+    cmd->partial_render_geom_frag_fence.value = job->seqno - 1;
+  }
+  // Submit job to FW
+  pvr_cccb_write_command_with_header(cccb, job->fw_ccb_cmd_type, job->cmd_len, job->cmd, job->id, job->id);
+  // Update command to signal the job fence.
+  struct rogue_fwif_ufo ufo;
+  pvr_fw_object_get_fw_addr(job->queue->timeline_ufo.fw_obj, &ufo.addr);
+  ufo.value = job->seqno;
+  pvr_cccb_write_command_with_header(cccb, ROGUE_FWIF_CCB_CMD_TYPE_UPDATE, u32(sizeof(ufo)), &ufo, 0, 0);
+}
+
+// Write one job (or a geometry job and its paired fragment job) and kick it (pvr_queue_run_job()).
+void run_job(Job *job, HwrtTrack *track)
+{
+  UfoList deps;
+  deps.n = 0;
+  job->seqno = ++job->queue->seqno;
+  hwrtDeps(job, track, deps);
+  submit_job_to_cccb(job, deps);
+  hwrtUpdate(job, track);
+  const u32 ctx_fw_addr = pvr_context_get_fw_addr(job->ctx);
+  if (job->paired) {
+    Job *frag_job = job->paired;
+    // The fragment job waits for its geometry job: the HWRT data's last writer is that job now.
+    UfoList frag_deps;
+    frag_deps.n = 0;
+    frag_job->seqno = ++frag_job->queue->seqno;
+    hwrtDeps(frag_job, track, frag_deps);
+    submit_job_to_cccb(frag_job, frag_deps);
+    hwrtUpdate(frag_job, track);
+    pvr_cccb_send_kccb_combined_kick(&gJobs.dev, &job->queue->cccb, &frag_job->queue->cccb, ctx_fw_addr + job->queue->ctx_offset,
+                                     ctx_fw_addr + frag_job->queue->ctx_offset, job->hwrt,
+                                     frag_job->fw_ccb_cmd_type == ROGUE_FWIF_CCB_CMD_TYPE_FRAG_PR);
+  } else {
+    pvr_cccb_send_kccb_kick(&gJobs.dev, &job->queue->cccb, ctx_fw_addr + job->queue->ctx_offset, job->hwrt);
+  }
+}
+
+void recordFailed(native_powervr_jobs_file *f, uint64_t fence)
+{
+  f->failed[f->failedNext % kFailedFences] = fence;
+  f->failedNext++;
+}
+bool wasFailed(const native_powervr_jobs_file *f, uint64_t fence)
+{
+  for (uint32_t i = 0; i < kFailedFences; i++)
+    if (f->failed[i] == fence) return true;
+  return false;
+}
+
+// Reset notifications (gJobs.lock held): the named job fails and its context becomes faulty when the context is
+// guilty of the reset.
+void applyResets(const ResetNote *notes, uint32_t count)
+{
+  for (uint32_t n = 0; n < count; n++) {
+    const ResetNote &r = notes[n];
+    const bool guilty = r.reason == ROGUE_CONTEXT_RESET_REASON_GUILTY_LOCKUP ||
+                        r.reason == ROGUE_CONTEXT_RESET_REASON_GUILTY_OVERRUNING ||
+                        (r.flags & ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_PF);
+    if (!guilty || (r.flags & ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_ALL_CTXS)) continue;
+    Job *j;
+    list_for_each_entry(j, &gJobs.jobs, dev_link) {
+      if (j->ctx->ctx_id != r.ctx_id) continue;
+      atomic_set(&j->ctx->faulty, 1);
+      if (j->id == r.job_ref) j->failed = true;
+    }
+  }
+}
+
+// The completion thread: pvr_queue_signal_done_fences(), the drm_sched timeout and the FWCCB.
+void completionThread(void *, wait_result_t)
+{
+  for (;;) {
+    pvr_fwccb_process(&gJobs.dev);
+    ResetNote notes[kResetNotes];
+    IOLockLock(gJobs.fwccbLock);
+    const uint32_t nnotes = gJobs.resetCount;
+    memcpy(notes, gJobs.resets, nnotes * sizeof(notes[0]));
+    gJobs.resetCount = 0;
+    IOLockUnlock(gJobs.fwccbLock);
+    list_head done;
+    INIT_LIST_HEAD(&done);
+    bool dump = false;
+    IOLockLock(gJobs.lock);
+    applyResets(notes, nnotes);
+    const uint64_t now = nowAbs();
+    Job *j, *n;
+    list_for_each_entry_safe(j, n, &gJobs.jobs, dev_link) {
+      if (queueReached(j->queue, j->seqno)) {
+        list_del(&j->dev_link);
+        if (j->file) {
+          list_del(&j->file_link);
+          if (j->failed) recordFailed(j->file, j->fence);
+        }
+        list_add_tail(&j->dev_link, &done);
+      } else if (!j->timed_out && now - j->kicked > gJobs.timeoutAbs) {
+        // pvr_queue_timedout_job() + pvr_queue_start(): an unfinished job after the timeout makes its context faulty.
+        j->timed_out = true;
+        j->failed = true;
+        atomic_set(&j->ctx->faulty, 1);
+        native_powervr_log("powervr: jobs: job %u (type %d, fence %llu) timed out; queue at %u, job seqno %u\n", j->id,
+                           int(j->type), static_cast<unsigned long long>(j->fence), READ_ONCE(*j->queue->timeline_ufo.value),
+                           j->seqno);
+        dump = true;
+      }
+    }
+    const bool active = !list_empty(&gJobs.jobs);
+    IOLockUnlock(gJobs.lock);
+    list_for_each_entry_safe(j, n, &done, dev_link) {
+      list_del(&j->dev_link);
+      pvr_job_release(j);
+    }
+    if (dump) native_powervr_dump_firmware("job timeout", 1500);
+    IOSleep(active ? 1 : 10);
+  }
+}
+
+// One-time set-up, at the first file (after the firmware boot and the service publication).
+int jobsInit(void)
+{
+  for (;;) {
+    int32_t state = __atomic_load_n(&gJobsState, __ATOMIC_ACQUIRE);
+    if (state == 2) return 0;
+    if (state == 0 && __atomic_compare_exchange_n(&gJobsState, &state, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) break;
+    IOSleep(1);
+  }
+  const pvr_device_features *features = native_powervr_device_features();
+  const pvr_device_quirks *quirks = native_powervr_device_quirks();
+  const pvr_device_enhancements *enhancements = native_powervr_device_enhancements();
+  native_powervr_fw_obj ctl, cmds;
+  if (!native_powervr_kernel_fw_mem_ctx() || !features || !quirks || !enhancements || native_powervr_fwccb(&ctl, &cmds)) {
+    native_powervr_log("powervr: jobs: firmware or device information not ready\n");
+    __atomic_store_n(&gJobsState, 0, __ATOMIC_RELEASE);
+    return -ENODEV;
+  }
+  memset(&gJobs, 0, sizeof(gJobs));
+  gJobs.dev.features = *features;
+  gJobs.dev.quirks = *quirks;
+  gJobs.dev.enhancements = *enhancements;
+  pvr_stream_create_musthave_masks(&gJobs.dev);
+  pvr_context_device_init(&gJobs.dev);
+  xa_init_flags(&gJobs.dev.free_list_ids, XA_FLAGS_ALLOC1);
+  xa_init_flags(&gJobs.dev.job_ids, XA_FLAGS_ALLOC1);
+  gJobs.lock = IOLockAlloc();
+  gJobs.fwccbLock = IOLockAlloc();
+  INIT_LIST_HEAD(&gJobs.jobs);
+  INIT_LIST_HEAD(&gJobs.files);
+  nanoseconds_to_absolutetime(uint64_t(kSchedTimeoutMs) * 1000000ULL, &gJobs.timeoutAbs);
+  // The FWCCB through a write-combined alias as well (its control words are shared with the firmware line by line).
+  native_powervr_invalidate(ctl.cpu, ctl.size);
+  native_powervr_invalidate(cmds.cpu, cmds.size);
+  if (gJobs.lock && gJobs.fwccbLock && wcMap(ctl.phys, ctl.size, gJobs.fwccbCtlMap) && wcMap(cmds.phys, cmds.size, gJobs.fwccbMap)) {
+    gJobs.fwccbCtl = reinterpret_cast<rogue_fwif_ccb_ctl *>(gJobs.fwccbCtlMap.cpu);
+    gJobs.fwccb = reinterpret_cast<rogue_fwif_fwccb_cmd *>(gJobs.fwccbMap.cpu);
+    gJobs.fwccbSlots = cmds.size / u32(sizeof(rogue_fwif_fwccb_cmd));
+  }
+  thread_t thread = nullptr;
+  if (!gJobs.fwccbCtl || kernel_thread_start(completionThread, nullptr, &thread) != KERN_SUCCESS) {
+    native_powervr_log("powervr: jobs: set-up failed\n");
+    __atomic_store_n(&gJobsState, 0, __ATOMIC_RELEASE);   // the locks and maps of this attempt stay allocated
+    return -ENOMEM;
+  }
+  thread_deallocate(thread);
+  native_powervr_log("powervr: jobs: ready (FWCCB %u slots)\n", gJobs.fwccbSlots);
+  __atomic_store_n(&gJobsState, 2, __ATOMIC_RELEASE);
+  return 0;
+}
+
+}  // namespace
+static_assert(offsetof(native_powervr_jobs_file, pf) == 0, "pvr_file first");
+
+// ---- native_powervr_jobs.h ----
+// pvr_drm_driver_open()
+extern "C" struct native_powervr_jobs_file *native_powervr_jobs_file_create(void)
+{
+  if (jobsInit()) return nullptr;
+  native_powervr_jobs_file *f = static_cast<native_powervr_jobs_file *>(kzalloc(sizeof(*f), GFP_KERNEL));
+  if (!f) return nullptr;
+  f->pf.file = &f->df;
+  f->pf.pvr_dev = &gJobs.dev;
+  INIT_LIST_HEAD(&f->pf.contexts);
+  xa_init_flags(&f->pf.ctx_handles, XA_FLAGS_ALLOC1);
+  xa_init_flags(&f->pf.free_list_handles, XA_FLAGS_ALLOC1);
+  xa_init_flags(&f->pf.hwrt_handles, XA_FLAGS_ALLOC1);
+  xa_init_flags(&f->pf.vm_ctx_handles, XA_FLAGS_ALLOC1);
+  INIT_LIST_HEAD(&f->jobs);
+  f->nextFence = 1;
+  IOLockLock(gJobs.lock);
+  list_add_tail(&f->link, &gJobs.files);
+  IOLockUnlock(gJobs.lock);
+  return f;
+}
+
+// pvr_drm_driver_postclose(). The user-client layer has destroyed the contexts, datasets and free lists; the Linux
+// clean-up still runs for anything left. Queued jobs keep their objects until they complete; the file waits for them
+// up to MAX_DEADLINE_MS and then leaves the rest to the completion thread.
+extern "C" void native_powervr_jobs_file_destroy(struct native_powervr_jobs_file *file)
+{
+  if (!file) return;
+  pvr_destroy_contexts_for_file(&file->pf);
+  pvr_destroy_free_lists_for_file(&file->pf);
+  pvr_destroy_hwrt_datasets_for_file(&file->pf);
+  bool empty = false;
+  for (uint32_t ms = 0; ms < kMaxDeadlineMs; ms++) {
+    IOLockLock(gJobs.lock);
+    empty = list_empty(&file->jobs);
+    IOLockUnlock(gJobs.lock);
+    if (empty) break;
+    IOSleep(1);
+  }
+  IOLockLock(gJobs.lock);
+  uint32_t left = 0;
+  while (!list_empty(&file->jobs)) {
+    Job *j = list_first_entry(&file->jobs, Job, file_link);
+    list_del(&j->file_link);
+    j->file = nullptr;
+    left++;
+  }
+  list_del(&file->link);
+  IOLockUnlock(gJobs.lock);
+  if (left) native_powervr_log("powervr: jobs: file closed with %u jobs still queued\n", left);
+  xa_destroy(&file->pf.ctx_handles);
+  xa_destroy(&file->pf.free_list_handles);
+  xa_destroy(&file->pf.hwrt_handles);
+  xa_destroy(&file->pf.vm_ctx_handles);
+  kfree(file);
+}
+
+// pvr_ioctl_create_context() -> pvr_context_create()
+extern "C" int native_powervr_context_create(struct native_powervr_jobs_file *file, struct native_powervr_vm_context *vm_ctx,
+                                             const struct drm_pvr_ioctl_create_context_args *args,
+                                             const void *static_context_state, struct native_powervr_context **out)
+{
+  if (!file || !vm_ctx || !args || !out || (args->static_context_state_len && !static_context_state)) return -EINVAL;
+  *out = nullptr;
+  native_powervr_context *w = static_cast<native_powervr_context *>(kzalloc(sizeof(*w), GFP_KERNEL));
+  if (!w) return -ENOMEM;
+  struct drm_pvr_ioctl_create_context_args a = *args;
+  a.static_context_state = u64(uintptr_t(static_context_state));   // read by memdup_user() in pvr_context.c
+  a.handle = 0;
+  // pvr_vm_context_lookup(pvr_file, args->vm_context_handle) finds the resolved VM context.
+  int err = xaInsert(&file->pf.vm_ctx_handles, a.vm_context_handle, vm_ctx);
+  if (!err) {
+    err = pvr_context_create(&file->pf, &a);
+    native_powervr_xa_erase(&file->pf.vm_ctx_handles, a.vm_context_handle);
+  }
+  if (err) {
+    kfree(w);
+    return err;
+  }
+  w->file = file;
+  w->handle = a.handle;   // in this file's pvr_file, which holds the reference the user-client handle stands for
+  xa_lock(&file->pf.ctx_handles);
+  w->ctx = xa_load(&file->pf.ctx_handles, a.handle);
+  xa_unlock(&file->pf.ctx_handles);
+  *out = w;
+  return 0;
+}
+
+// pvr_ioctl_destroy_context() -> pvr_context_destroy()
+extern "C" void native_powervr_context_destroy(struct native_powervr_context *ctx)
+{
+  if (!ctx) return;
+  const int err = pvr_context_destroy(&ctx->file->pf, ctx->handle);
+  if (err) native_powervr_log("powervr: jobs: context %u destroy: %d\n", ctx->handle, err);
+  kfree(ctx);
+}
+
+// pvr_ioctl_create_free_list() -> pvr_free_list_create(); the handle is the user-client layer's.
+extern "C" int native_powervr_free_list_create(struct native_powervr_jobs_file *file, struct native_powervr_vm_context *vm_ctx,
+                                               const struct drm_pvr_ioctl_create_free_list_args *args,
+                                               struct native_powervr_free_list **out)
+{
+  if (!file || !vm_ctx || !args || !out) return -EINVAL;
+  *out = nullptr;
+  struct drm_pvr_ioctl_create_free_list_args a = *args;
+  int err = xaInsert(&file->pf.vm_ctx_handles, a.vm_context_handle, vm_ctx);
+  if (err) return err;
+  struct pvr_free_list *free_list = pvr_free_list_create(&file->pf, &a);
+  native_powervr_xa_erase(&file->pf.vm_ctx_handles, a.vm_context_handle);
+  if (IS_ERR(free_list)) return int(PTR_ERR(free_list));
+  *out = reinterpret_cast<native_powervr_free_list *>(free_list);
+  return 0;
+}
+extern "C" void native_powervr_free_list_put(struct native_powervr_free_list *free_list)
+{
+  pvr_free_list_put(reinterpret_cast<pvr_free_list *>(free_list));
+}
+
+// pvr_ioctl_create_hwrt_dataset() -> pvr_hwrt_dataset_create(); pvr_free_list_lookup() finds the resolved free lists
+// under args->free_list_handles.
+extern "C" int native_powervr_hwrt_dataset_create(struct native_powervr_jobs_file *file,
+                                                  const struct drm_pvr_ioctl_create_hwrt_dataset_args *args,
+                                                  struct native_powervr_free_list *const free_lists[2],
+                                                  struct native_powervr_hwrt_dataset **out)
+{
+  static_assert(ARRAY_SIZE(args->free_list_handles) == 2, "two free lists");
+  if (!file || !args || !free_lists || !free_lists[0] || !free_lists[1] || !out) return -EINVAL;
+  *out = nullptr;
+  struct drm_pvr_ioctl_create_hwrt_dataset_args a = *args;
+  const bool same = a.free_list_handles[0] == a.free_list_handles[1];
+  if (same && free_lists[0] != free_lists[1]) return -EINVAL;
+  int err = xaInsert(&file->pf.free_list_handles, a.free_list_handles[0], free_lists[0]);
+  if (err) return err;
+  if (!same) {
+    err = xaInsert(&file->pf.free_list_handles, a.free_list_handles[1], free_lists[1]);
+    if (err) {
+      native_powervr_xa_erase(&file->pf.free_list_handles, a.free_list_handles[0]);
+      return err;
+    }
+  }
+  struct pvr_hwrt_dataset *hwrt = pvr_hwrt_dataset_create(&file->pf, &a);
+  native_powervr_xa_erase(&file->pf.free_list_handles, a.free_list_handles[0]);
+  if (!same) native_powervr_xa_erase(&file->pf.free_list_handles, a.free_list_handles[1]);
+  if (IS_ERR(hwrt)) return int(PTR_ERR(hwrt));
+  *out = reinterpret_cast<native_powervr_hwrt_dataset *>(hwrt);
+  return 0;
+}
+extern "C" void native_powervr_hwrt_dataset_put(struct native_powervr_hwrt_dataset *hwrt)
+{
+  pvr_hwrt_dataset_put(reinterpret_cast<pvr_hwrt_dataset *>(hwrt));
+}
+
+// pvr_submit_jobs()
+extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file, const struct native_powervr_job_submit *jobs,
+                                          uint32_t count, uint64_t *fences)
+{
+  if (!file || !jobs || !fences || !count || count > NativePowerVRAbiMaxJobs) return -EINVAL;
+  Job *js[NativePowerVRAbiMaxJobs] = {};
+  int err = 0;
+  // pvr_job_data_init(): every job is created (and checked) before any is queued.
+  for (uint32_t i = 0; i < count && !err; i++) err = create_job(file, &jobs[i], &js[i]);
+  if (err) {
+    for (uint32_t i = 0; i < count; i++)
+      if (js[i]) pvr_job_release(js[i]);
+    return err;
+  }
+  // pvr_jobs_link_geom_frag()
+  for (uint32_t i = 0; i + 1 < count; i++) {
+    if (!can_combine_jobs(js[i], js[i + 1])) continue;
+    js[i]->paired = js[i + 1];
+    js[i + 1]->paired = js[i];
+    i++;
+  }
+  // Space for the whole call in every queue it uses (the CCCB fence of Linux, taken for all jobs at once so that all
+  // are queued or none is), with the largest dependency count a job can have.
+  uint64_t deadline;
+  nanoseconds_to_absolutetime(uint64_t(kSchedTimeoutMs) * 1000000ULL, &deadline);
+  deadline += nowAbs();
+  IOLockLock(gJobs.lock);
+  for (;;) {
+    pvr_queue *queues[NativePowerVRAbiMaxJobs];
+    u32 need[NativePowerVRAbiMaxJobs];
+    uint32_t nq = 0;
+    for (uint32_t i = 0; i < count && !err; i++) {
+      if (js[i]->queue->killed) {
+        err = -EINVAL;   // the context was destroyed meanwhile
+        break;
+      }
+      uint32_t q = 0;
+      while (q < nq && queues[q] != js[i]->queue) q++;
+      if (q == nq) {
+        queues[nq] = js[i]->queue;
+        need[nq++] = 0;
+      }
+      need[q] += job_cmds_size(js[i], kMaxUfosPerJob);
+    }
+    bool fits = true;
+    for (uint32_t q = 0; q < nq && !err; q++) {
+      if (!pvr_cccb_cmdseq_can_fit(&queues[q]->cccb, need[q])) err = -E2BIG;
+      else if (!pvr_cccb_cmdseq_fits(&queues[q]->cccb, need[q])) fits = false;
+    }
+    if (err || fits) break;
+    if (nowAbs() > deadline) {
+      err = -ETIMEDOUT;
+      break;
+    }
+    IOLockUnlock(gJobs.lock);
+    IOSleep(1);
+    IOLockLock(gJobs.lock);
+  }
+  if (!err && !reserveTracks(count)) err = -ENOMEM;
+  if (err) {
+    IOLockUnlock(gJobs.lock);
+    for (uint32_t i = 0; i < count; i++) pvr_job_release(js[i]);
+    return err;
+  }
+  // Nothing fails from here on (push_jobs()). Fences increase in array order and never read as the tunnel word.
+  for (uint32_t i = 0; i < count; i++) {
+    if (uint32_t(file->nextFence) == NativePowerVRTunnelMagic) file->nextFence++;
+    js[i]->fence = file->nextFence++;
+  }
+  for (uint32_t i = 0; i < count; i++) {
+    Job *j = js[i];
+    if (j->type == DRM_PVR_JOB_TYPE_FRAGMENT && j->paired) continue;   // written with its geometry job
+    run_job(j, j->hwrt ? trackFor(j->hwrt) : nullptr);
+  }
+  const uint64_t kicked = nowAbs();
+  for (uint32_t i = 0; i < count; i++) {
+    Job *j = js[i];
+    j->paired = nullptr;
+    j->kicked = kicked;
+    j->file = file;
+    list_add_tail(&j->dev_link, &gJobs.jobs);
+    list_add_tail(&j->file_link, &file->jobs);
+    fences[i] = j->fence;
+  }
+  IOLockUnlock(gJobs.lock);
+  return 0;
+}
+
+// NativePowerVRMethodWaitFence
+extern "C" int native_powervr_fence_wait(struct native_powervr_jobs_file *file, uint64_t fence, uint64_t timeout_ns)
+{
+  if (!file || !fence || uint32_t(fence) == NativePowerVRTunnelMagic) return -EINVAL;
+  uint64_t deadline = ~0ULL;
+  if (timeout_ns < ~0ULL / 2) {
+    uint64_t abs = 0;
+    nanoseconds_to_absolutetime(timeout_ns, &abs);
+    deadline = nowAbs() + abs;
+  }
+  for (;;) {
+    int status = 1;
+    IOLockLock(gJobs.lock);
+    if (fence >= file->nextFence) {
+      status = -EINVAL;
+    } else {
+      Job *found = nullptr, *j;
+      list_for_each_entry(j, &file->jobs, file_link) {
+        if (j->fence == fence) {
+          found = j;
+          break;
+        }
+      }
+      if (!found) status = wasFailed(file, fence) ? -EIO : 0;
+      else if (found->failed || atomic_read(&found->ctx->faulty)) status = -EIO;
+      else if (queueReached(found->queue, found->seqno)) status = 0;
+    }
+    IOLockUnlock(gJobs.lock);
+    if (status != 1) return status;
+    if (!timeout_ns || nowAbs() >= deadline) return -ETIMEDOUT;
+    IOSleep(1);
+  }
+}

@@ -179,6 +179,9 @@ const pvr_fw_layout_entry *entry(pvr_fw_section_id id)
 }
 
 void vmAndQueueBringUp(void);
+}  // namespace
+extern "C" int native_powervr_publish(void);
+namespace {
 
 bool fail(int stage, const char *what)
 {
@@ -695,6 +698,18 @@ extern "C" void native_powervr_fw_free(const struct native_powervr_fw_obj *obj)
   release(static_cast<uint32_t>(static_cast<uint8_t *>(obj->cpu) - gHeap), obj->size);
 }
 
+extern "C" int native_powervr_fwccb(struct native_powervr_fw_obj *ctl, struct native_powervr_fw_obj *cmds)
+{
+  if (!gFwStarted || !gFwccbCtl || !gFwccb) return -ENODEV;
+  auto view = [](void *cpu, uint32_t size) {
+    const uint32_t off = static_cast<uint32_t>(static_cast<uint8_t *>(cpu) - gHeap);
+    return native_powervr_fw_obj{cpu, (off & kHeapMask) | kMipsHeapBase, gHeapPhys + off, size};
+  };
+  *ctl = view(gFwccbCtl, sizeof(*gFwccbCtl));
+  *cmds = view(gFwccb, (gFwccbCtl->wrap_mask + 1) * static_cast<uint32_t>(sizeof(rogue_fwif_fwccb_cmd)));
+  return 0;
+}
+
 // A GPU VM context (pvr_vm_create_context(pvr_dev, is_userspace_context = true)): the pvr_mmu.c page tables and the
 // firmware memory context that points at them (fw_mem_context_init()).
 struct native_powervr_vm { pvr_mmu_context *mmu; native_powervr_fw_obj memCtx; };
@@ -857,6 +872,8 @@ void vmAndQueueBringUp(void)
         pagePhys == bufPhys ? "MATCH" : "MISMATCH", (clean(gMmuSync->o.cpu, 4), *static_cast<volatile uint32_t *>(gMmuSync->o.cpu)));
   const int q = native_powervr_queue_selftest();
   IOLog("powervr: queue self-test %d\n", q);
+  // The user-client service (NativePowerVRGpu.cpp) once a job has run through the firmware.
+  if (!q) IOLog("powervr: NativePowerVRGpu publish %d\n", native_powervr_publish());
   (void)traceStart;
   native_powervr_dump_firmware("after the queue test", 1500);
   native_powervr_stage = q ? 9 : 10;
