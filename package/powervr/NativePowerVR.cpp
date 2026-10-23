@@ -363,10 +363,6 @@ bool boot(void)
     clean(conn, sizeof(*conn));
     __asm__ volatile("dsb sy" ::: "memory");
     uint32_t result = 0;
-    // Linux's kick, then the DDK's (TASK_COUNTED) if the first one is not taken.
-    const uint32_t kicks[4] = {PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK,
-                               (PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK) | ROGUE_CR_MTS_SCHEDULE_TASK_COUNTED,
-                               PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK, PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK};
     auto mtsState = [&](const char *when) {
       IOLog("powervr: MTS %s: schedule_enable %x bgctx %x intctx %x assoc bg %x/%x int %x/%x counted %llx gpu_int %x event %llx os0_event %x mips_irq %x\n",
             when, rd32(ROGUE_CR_MTS_SCHEDULE_ENABLE), rd32(ROGUE_CR_MTS_BGCTX), rd32(ROGUE_CR_MTS_INTCTX),
