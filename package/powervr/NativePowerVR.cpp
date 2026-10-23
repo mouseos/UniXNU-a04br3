@@ -122,9 +122,9 @@ bool boot(void)
 
   gRegs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kRegBase, kRegSize));
   // The heap and the MIPS page table (ROGUE_MIPSFW_MAX_NUM_PAGETABLE_PAGES x 4 KiB, 4 bytes per 4 KiB heap page).
-  gHeapMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
+  gHeapMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryPhysicallyContiguous),
                                                               kHeapSize, 0x00000000FFFFF000ULL);
-  gPtMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut | kIOMemoryPhysicallyContiguous,
+  gPtMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryPhysicallyContiguous),
                                                             ROGUE_MIPSFW_MAX_NUM_PAGETABLE_PAGES * SZ_4K, 0x00000000FFFFF000ULL);
   if (!gRegs || !gHeapMem || !gPtMem) return fail(2, "memory");
   IOByteCount len = 0;
@@ -154,8 +154,8 @@ bool boot(void)
   }
   const pvr_fw_layout_entry *priv = entry(MIPS_PRIVATE_DATA);
   if (!priv || !codeSize || !dataSize) return fail(3, "layout");
-  const Obj code = fixed(0, (codeSize + SZ_4K - 1) & ~(SZ_4K - 1));
-  const Obj data = fixed(priv->base_addr & kHeapMask, (dataSize + SZ_4K - 1) & ~(SZ_4K - 1));
+  const Obj code = fixed(0, (codeSize + 0xFFFU) & ~0xFFFU);
+  const Obj data = fixed(priv->base_addr & kHeapMask, (dataSize + 0xFFFU) & ~0xFFFU);
   gNext = data.off + data.size;
   if (code.size > data.off) return fail(3, "code overlaps data");
   // pvr_fw_process_elf_command_stream() with pvr_fw_find_mmu_segment()
