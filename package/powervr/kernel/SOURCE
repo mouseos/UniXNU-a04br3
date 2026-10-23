@@ -1,0 +1,2 @@
+Unchanged sources from Linux drivers/gpu/drm/imagination at torvalds/linux 734bef548a96e8774d6eef5dfa2026c6edc4e80b (SPDX: GPL-2.0-only OR MIT; used under the MIT terms). Copyright Imagination Technologies Ltd.
+pvr_mmu.c, pvr_mmu.h: compiled as C by scripts/build-a04br3-board.py through ../compat (Linux API shim) and ../stub (pvr_device stand-in); the API is implemented on IOKit in ../NativePowerVR.cpp.

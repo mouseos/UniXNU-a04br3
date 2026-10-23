@@ -31,6 +31,14 @@
 #include "linux/pvr_rogue_defs.h"
 #include "linux/pvr_rogue_heap_config.h"
 #include "linux/pvr_fw_info.h"
+#include "linux/pvr_rogue_mmu_defs.h"
+#include "compat/native_powervr_linux_kernel.h"
+#include "stub/native_powervr_kernel.h"
+#include "kernel/pvr_mmu.h"
+#include "native_powervr_internal.h"
+#include <stdarg.h>
+#undef min
+#undef max
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" void flush_dcache(vm_offset_t addr, unsigned count, int phys);
@@ -46,6 +54,9 @@ volatile int native_powervr_stage;
 
 #define ROGUE_FWIF_KCCB_NUMCMDS_LOG2_DEFAULT_A04 7   // ROGUE_FWIF_KCCB_NUMCMDS_LOG2_DEFAULT, pvr_fw.h
 #define READ_ONCE_A04(x) (*reinterpret_cast<volatile __typeof__(x) *>(&(x)))
+
+// struct pvr_fw_object of pvr_mmu.c's view (stub/native_powervr_kernel.h): an object in the firmware heap.
+struct pvr_fw_object { native_powervr_fw_obj o; };
 
 namespace {
 constexpr uint64_t kRegBase = 0x13000000, kRegSize = 0x10000;
@@ -66,6 +77,17 @@ uint32_t gNext;          // bump allocator for objects outside the fixed placeme
 IOBufferMemoryDescriptor *gPtMem;
 uint32_t *gPt;
 uint64_t gPtPhys;
+// The KCCB and the state the later parts (pvr_mmu.c, NativePowerVRQueue.cpp) use after boot.
+rogue_fwif_ccb_ctl *gKctl;
+rogue_fwif_kccb_cmd *gKccb;
+uint32_t *gKccbRtn;
+rogue_fwif_osdata *gOsdata;
+bool gFwStarted;
+IOLock *gLock;           // the heap bump allocator and the KCCB
+pvr_device gPvr;         // what pvr_mmu.c reads of struct pvr_device
+pvr_fw_object *gMmuSync; // fw_dev.mem.mmucache_sync_obj
+uint32_t gFwMemCtx;      // FW address of the VM context's rogue_fwif_fwmemcontext
+pvr_mmu_context *gMmuCtx;
 
 uint32_t rd32(uint32_t off) { uint32_t v = *reinterpret_cast<volatile uint32_t *>(gRegs + off); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
 uint64_t rd64(uint32_t off) { uint64_t v = *reinterpret_cast<volatile uint64_t *>(gRegs + off); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
@@ -80,9 +102,11 @@ struct Obj { uint32_t off, size; void *cpu() const { return gHeap + off; } uint3
 // pvr_fw_object_create_and_map(): a zeroed, 64-byte aligned (4 KiB for page-sized ones) piece of the heap.
 bool alloc(uint32_t size, Obj &obj, uint32_t align = 64)
 {
+  if (gLock) IOLockLock(gLock);
   uint32_t off = (gNext + align - 1) & ~(align - 1);
-  if (off + size > kConfigOffset - kReserved) return false;
+  if (off + size > kConfigOffset - kReserved) { if (gLock) IOLockUnlock(gLock); return false; }
   gNext = off + size;
+  if (gLock) IOLockUnlock(gLock);
   obj = {off, size};
   memset(obj.cpu(), 0, size);
   return true;
@@ -96,6 +120,8 @@ const pvr_fw_layout_entry *entry(pvr_fw_section_id id)
   for (uint32_t i = 0; i < gHeader->layout_entry_num; i++) if (gLayout[i].id == id) return &gLayout[i];
   return nullptr;
 }
+
+void vmAndQueueBringUp(void);
 
 bool fail(int stage, const char *what)
 {
@@ -125,6 +151,7 @@ bool boot(void)
   native_powervr_stage = 1;
 
   gRegs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kRegBase, kRegSize));
+  gLock = IOLockAlloc();
   // The heap and the MIPS page table (ROGUE_MIPSFW_MAX_NUM_PAGETABLE_PAGES x 4 KiB, 4 bytes per 4 KiB heap page).
   gHeapMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryPhysicallyContiguous),
                                                               kHeapSize, 0x00000000FFFFF000ULL);
@@ -267,7 +294,10 @@ bool boot(void)
   sys->gpio_validation_mode = ROGUE_FWIF_GPIO_VAL_OFF;
   sys->firmware_started = false;
   sys->marker_val = 1;
-  (void)connCtl; (void)mmuSync;
+  (void)connCtl;
+  static pvr_fw_object mmuSyncObj;
+  mmuSyncObj.o = {mmuSync.cpu(), mmuSync.fw(), mmuSync.phys(), mmuSync.size};
+  gMmuSync = &mmuSyncObj;   // pvr_fw.c: fw_mem->mmucache_sync_obj (PVR_SYNC_OBJ_SIZE, uncached)
   clean(gHeap, kHeapSize);
   clean(gPt, ROGUE_MIPSFW_MAX_NUM_PAGETABLE_PAGES * SZ_4K);
   native_powervr_stage = 5;
@@ -412,8 +442,12 @@ bool boot(void)
       IOLog("powervr: firmware assert %.64s:%u %.64s\n", tc->tracebuf[0].assert_buf.path, tc->tracebuf[0].assert_buf.line_num,
             tc->tracebuf[0].assert_buf.info);
     if (!(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED)) started = false;
+    // Hand the KCCB to native_powervr_kccb_submit() for every later command.
+    gKctl = kctl; gKccb = cmds; gKccbRtn = rtn; gOsdata = od;
   }
+  gFwStarted = started;
   native_powervr_stage = started ? 8 : -8;
+  if (started) vmAndQueueBringUp();
   return started;
 }
 }  // namespace
@@ -431,3 +465,233 @@ void native_powervr_boot(void)
   thread_t thread = nullptr;
   if (kernel_thread_start(bootThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
+
+// ---- The kernel side after firmware boot: the Linux API pvr_mmu.c needs, the KCCB for later commands, the VM context ----
+// Allocation (include/linux/slab.h): IOMalloc with the size kept in front, as IOFree needs it.
+extern "C" void *kmalloc(size_t size, gfp_t flags)
+{
+  if (size > (1U << 30)) return nullptr;
+  auto *p = static_cast<uint64_t *>(IOMalloc(size + 16));
+  if (!p) return nullptr;
+  p[0] = size;
+  if (flags & __GFP_ZERO) memset(p + 2, 0, size);
+  return p + 2;
+}
+extern "C" void *kzalloc(size_t size, gfp_t flags) { return kmalloc(size, flags | __GFP_ZERO); }
+extern "C" void *kcalloc(size_t n, size_t size, gfp_t flags)
+{
+  size_t total = 0;
+  if (__builtin_mul_overflow(n, size, &total)) return nullptr;
+  return kzalloc(total, flags);
+}
+extern "C" void kfree(const void *p)
+{
+  if (!p) return;
+  auto *base = const_cast<uint64_t *>(static_cast<const uint64_t *>(p)) - 2;
+  IOFree(base, base[0] + 16);
+}
+
+// Pages (include/linux/gfp.h, dma-mapping.h, vmalloc.h): one 4 KiB physically contiguous buffer below 4 GiB each (this
+// firmware's device info gives PHYS_BUS_WIDTH 32), mapped once by the kernel. CPU writes reach the GPU through the DMA sync
+// calls (clean to the point of coherency), as on Linux's non-coherent arm64 path.
+struct page { IOBufferMemoryDescriptor *md; void *cpu; uint64_t phys; };
+extern "C" struct page *alloc_page(gfp_t flags)
+{
+  (void)flags;
+  auto *pg = static_cast<struct page *>(kzalloc(sizeof(struct page), GFP_KERNEL));
+  if (!pg) return nullptr;
+  pg->md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryPhysicallyContiguous),
+                                                            SZ_4K, 0x00000000FFFFF000ULL);
+  if (!pg->md) { kfree(pg); return nullptr; }
+  IOByteCount len = 0;
+  pg->cpu = pg->md->getBytesNoCopy();
+  pg->phys = pg->md->getPhysicalSegment(0, &len, kIOMemoryMapperNone);
+  memset(pg->cpu, 0, SZ_4K);   // every caller in pvr_mmu.c asks for __GFP_ZERO
+  return pg;
+}
+extern "C" void __free_page(struct page *pg)
+{
+  if (!pg) return;
+  pg->md->release();
+  kfree(pg);
+}
+extern "C" void *page_address(struct page *pg) { return pg->cpu; }
+extern "C" void *vmap(struct page **pages, unsigned int count, unsigned long flags, pgprot_t prot)
+{
+  (void)flags; (void)prot;
+  return count == 1 ? pages[0]->cpu : nullptr;   // pvr_mmu.c maps single backing pages only
+}
+extern "C" void vunmap(const void *addr) { (void)addr; }
+extern "C" dma_addr_t dma_map_page(struct device *dev, struct page *pg, size_t offset, size_t size, enum dma_data_direction dir)
+{
+  (void)dev; (void)size; (void)dir;
+  return pg->phys + offset;
+}
+extern "C" void dma_unmap_page(struct device *dev, dma_addr_t addr, size_t size, enum dma_data_direction dir) { (void)dev; (void)addr; (void)size; (void)dir; }
+extern "C" void dma_sync_single_for_device(struct device *dev, dma_addr_t addr, size_t size, enum dma_data_direction dir)
+{
+  (void)dev; (void)dir;
+  __asm__ volatile("dsb sy" ::: "memory");
+  flush_dcache(static_cast<vm_offset_t>(addr), static_cast<unsigned>(size), 1);   // physical address
+}
+extern "C" void dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg, int nents, enum dma_data_direction dir)
+{
+  for (int i = 0; i < nents; i++) dma_sync_single_for_device(dev, sg[i].dma_address, sg[i].dma_length, dir);
+}
+
+extern "C" void native_powervr_log(const char *fmt, ...)
+{
+  va_list ap;
+  va_start(ap, fmt);
+  IOLogv(fmt, ap);
+  va_end(ap);
+}
+extern "C" void native_powervr_warn(const char *file, int line, const char *what) { IOLog("powervr: WARN %s:%d %s\n", file, line, what); }
+
+// Firmware heap objects for the other parts (pvr_fw_object_create_and_map()).
+extern "C" int native_powervr_fw_alloc(uint32_t size, uint32_t align, struct native_powervr_fw_obj *out)
+{
+  Obj o;
+  if (!gHeap || !align || (align & (align - 1)) || !alloc(size, o, align < 64 ? 64 : align)) return -ENOMEM;
+  *out = {o.cpu(), o.fw(), o.phys(), o.size};
+  clean(o.cpu(), o.size);
+  return 0;
+}
+extern "C" void native_powervr_clean(const void *p, size_t n) { __asm__ volatile("dsb sy" ::: "memory"); clean(p, n); }
+extern "C" void native_powervr_invalidate(const void *p, size_t n) { clean(p, n); __asm__ volatile("dsb sy" ::: "memory"); }
+
+// pvr_kccb_send_cmd() and pvr_kccb_wait_for_completion() in one step: the command in the next slot, its return slot
+// cleared, the write offset advanced, the GP data master kicked through the MTS, then the wait. Completion is
+// osdata->kccb_cmds_executed advancing past its value before the kick (the bring-up showed the firmware does not write
+// the return slot on this core; Linux's watchdog uses the same counter) or the return slot reporting execution.
+extern "C" int native_powervr_kccb_submit(const struct rogue_fwif_kccb_cmd *cmd, uint32_t timeout_ms)
+{
+  if (!gFwStarted || !gKctl) return -ENODEV;
+  IOLockLock(gLock);
+  clean(gKctl, sizeof(*gKctl));
+  const uint32_t slot = gKctl->write_offset, next = (slot + 1) & gKctl->wrap_mask;
+  if (next == READ_ONCE_A04(gKctl->read_offset)) { IOLockUnlock(gLock); return -EBUSY; }
+  clean(gOsdata, sizeof(*gOsdata));
+  const uint32_t before = READ_ONCE_A04(gOsdata->kccb_cmds_executed);
+  gKccb[slot] = *cmd;
+  gKccbRtn[slot] = ROGUE_FWIF_KCCB_RTN_SLOT_NO_RESPONSE;
+  clean(&gKccb[slot], sizeof(gKccb[slot]));
+  clean(&gKccbRtn[slot], sizeof(gKccbRtn[slot]));
+  __asm__ volatile("dsb sy" ::: "memory");
+  gKctl->write_offset = next;
+  clean(gKctl, sizeof(*gKctl));
+  __asm__ volatile("dsb sy" ::: "memory");
+  wr32(ROGUE_CR_MTS_SCHEDULE, PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK);
+  int err = -ETIMEDOUT;
+  for (uint32_t ms = 0; ms <= timeout_ms; ms++) {
+    clean(gOsdata, sizeof(*gOsdata));
+    clean(&gKccbRtn[slot], sizeof(gKccbRtn[slot]));
+    if (READ_ONCE_A04(gOsdata->kccb_cmds_executed) != before || (READ_ONCE_A04(gKccbRtn[slot]) & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED)) {
+      err = 0;
+      break;
+    }
+    IODelay(1000);
+  }
+  clean(gKctl, sizeof(*gKctl));
+  if (err)
+    IOLog("powervr: KCCB command %x slot %u timed out (read %u write %u, executed %u)\n", cmd->cmd_type, slot, gKctl->read_offset,
+          gKctl->write_offset, gOsdata->kccb_cmds_executed);
+  IOLockUnlock(gLock);
+  return err;
+}
+
+// What pvr_mmu.c calls of the device, FW and power layers (stub/native_powervr_kernel.h).
+static uint32_t gLastSlot;
+extern "C" int pvr_kccb_send_cmd(struct pvr_device *pvr_dev, struct rogue_fwif_kccb_cmd *cmd, u32 *kccb_slot)
+{
+  (void)pvr_dev;
+  // Sent and waited for here; pvr_kccb_wait_for_completion() then returns the result.
+  const int err = native_powervr_kccb_submit(cmd, 1000);
+  if (kccb_slot) *kccb_slot = ++gLastSlot;
+  return err;
+}
+extern "C" int pvr_kccb_wait_for_completion(struct pvr_device *pvr_dev, u32 slot_nr, u32 timeout, u32 *rtn_out)
+{
+  (void)pvr_dev; (void)slot_nr; (void)timeout;
+  if (rtn_out) *rtn_out = ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED;
+  return 0;
+}
+extern "C" void pvr_fw_object_get_fw_addr(struct pvr_fw_object *fw_obj, u32 *fw_addr_out) { *fw_addr_out = fw_obj->o.fw_addr; }
+extern "C" void pvr_device_lost(struct pvr_device *pvr_dev) { (void)pvr_dev; IOLog("powervr: device lost\n"); gFwStarted = false; }
+extern "C" int pvr_power_reset(struct pvr_device *pvr_dev, bool hard_reset)
+{
+  (void)pvr_dev;
+  IOLog("powervr: power reset (%s) requested; not implemented\n", hard_reset ? "hard" : "soft");
+  return -ENODEV;
+}
+static struct drm_device gDrm;
+extern "C" struct drm_device *native_powervr_drm(struct pvr_device *pvr_dev) { (void)pvr_dev; return &gDrm; }
+
+extern "C" uint32_t native_powervr_kernel_fw_mem_ctx(void) { return gFwMemCtx; }
+extern "C" int native_powervr_vm_map(uint64_t device_addr, uint64_t phys, uint64_t size, int uncached)
+{
+  if (!gMmuCtx) return -ENODEV;
+  struct scatterlist sg = {phys, static_cast<unsigned int>(size)};
+  struct sg_table sgt = {&sg, 1, 1};
+  dma_sync_sg_for_device(nullptr, &sg, 1, DMA_BIDIRECTIONAL);   // pvr_mmu_op_context_create() requires synced pages
+  pvr_mmu_op_context *op = pvr_mmu_op_context_create(gMmuCtx, &sgt, device_addr, 0, size);
+  if (IS_ERR(op)) return static_cast<int>(PTR_ERR(op));
+  int err = pvr_mmu_map(op, size, uncached ? DRM_PVR_BO_BYPASS_DEVICE_CACHE : 0, device_addr);
+  pvr_mmu_op_context_destroy(op);
+  if (!err) err = pvr_mmu_flush_exec(&gPvr, true);
+  return err;
+}
+
+
+namespace {
+// The VM context the kernel uses (pvr_vm_create_context(pvr_dev, is_userspace_context = true): with a MIPS firmware
+// Linux has no kernel VM context, and contexts always point at a user VM context's FW memory context). Then a check that
+// the GPU page tables translate as built, the MMU cache flush through the firmware (ROGUE_FWIF_KCCB_CMD_MMUCACHE), and
+// the queue self-test of NativePowerVRQueue.cpp.
+void vmAndQueueBringUp(void)
+{
+  gPvr.fw_dev.initialised = true;
+  gPvr.fw_dev.mem.mmucache_sync_obj = gMmuSync;
+  gMmuCtx = pvr_mmu_context_create(&gPvr);
+  if (IS_ERR(gMmuCtx)) { IOLog("powervr: pvr_mmu_context_create failed %ld\n", PTR_ERR(gMmuCtx)); gMmuCtx = nullptr; return; }
+  const dma_addr_t pc = pvr_mmu_get_root_table_dma_addr(gMmuCtx);
+  Obj memCtx;
+  if (!alloc(sizeof(rogue_fwif_fwmemcontext), memCtx)) { IOLog("powervr: no FW memory context\n"); return; }
+  auto *fmc = static_cast<rogue_fwif_fwmemcontext *>(memCtx.cpu());   // pvr_vm.c fw_mem_context_init()
+  fmc->pc_dev_paddr = pc;
+  fmc->page_cat_base_reg_set = ROGUE_FW_BIF_INVALID_PCSET;
+  clean(fmc, sizeof(*fmc));
+  gFwMemCtx = memCtx.fw();
+  IOLog("powervr: VM context page catalogue %llx, FW memory context %x\n", static_cast<unsigned long long>(pc), gFwMemCtx);
+
+  // A 64 KiB buffer at the start of the general heap, mapped and then looked up through the three levels by hand.
+  IOBufferMemoryDescriptor *buf = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryPhysicallyContiguous),
+                                                                                   SZ_64K, 0x00000000FFFFF000ULL);
+  if (!buf) return;
+  IOByteCount len = 0;
+  const uint64_t bufPhys = buf->getPhysicalSegment(0, &len, kIOMemoryMapperNone);
+  const uint64_t va = ROGUE_GENERAL_HEAP_BASE;
+  const int err = native_powervr_vm_map(va, bufPhys, SZ_64K, 0);
+  // Walk: PC index va[39:30], PD index va[29:21], PT index va[20:12] (4 KiB device pages); entries hold the next table's
+  // or the page's physical address >> 12 in bits [39:12] (pvr_rogue_mmu_defs.h ROGUE_MMUCTRL_*).
+  auto entry = [](uint64_t tablePhys, uint32_t index, bool wide) -> uint64_t {
+    const vm_offset_t kva = ml_io_map(static_cast<vm_offset_t>(tablePhys & ~0xFFFULL), SZ_4K);
+    uint64_t v = wide ? reinterpret_cast<volatile uint64_t *>(kva)[index] : reinterpret_cast<volatile uint32_t *>(kva)[index];
+    return v;
+  };
+  const uint64_t pce = entry(pc, uint32_t((va >> 30) & 0x3FF), false);
+  const uint64_t pdPhys = (pce >> ROGUE_MMUCTRL_PC_DATA_PD_BASE_SHIFT) << ROGUE_MMUCTRL_PC_DATA_PD_BASE_ALIGNSHIFT;
+  const uint64_t pde = pdPhys ? entry(pdPhys & ~0xFFFULL, uint32_t((va >> 21) & 0x1FF), true) : 0;
+  const uint64_t ptPhys = pde & ~ROGUE_MMUCTRL_PD_DATA_PT_BASE_CLRMSK;
+  const uint64_t pte = ptPhys ? entry(ptPhys, uint32_t((va >> 12) & 0x1FF), true) : 0;
+  const uint64_t pagePhys = pte & ~ROGUE_MMUCTRL_PT_DATA_PAGE_CLRMSK;
+  IOLog("powervr: map %llx -> %llx: %d; walk PCE %llx PDE %llx PTE %llx -> %llx %s; mmucache sync %x\n",
+        static_cast<unsigned long long>(va), static_cast<unsigned long long>(bufPhys), err, static_cast<unsigned long long>(pce),
+        static_cast<unsigned long long>(pde), static_cast<unsigned long long>(pte), static_cast<unsigned long long>(pagePhys),
+        pagePhys == bufPhys ? "MATCH" : "MISMATCH", *static_cast<volatile uint32_t *>(gMmuSync->o.cpu));
+  const int q = native_powervr_queue_selftest();
+  IOLog("powervr: queue self-test %d\n", q);
+  native_powervr_stage = q ? 9 : 10;
+}
+}  // namespace
+

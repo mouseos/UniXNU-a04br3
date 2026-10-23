@@ -138,7 +138,19 @@ check_object(fw_obj)
 objects.append(fw_obj)
 powervr_flags = CXX_FLAGS + ['-I', str(KIT / 'powervr' / 'compat'), '-I', str(KIT / 'powervr' / 'linux'), '-Wno-missing-field-initializers',
                              '-Wno-gnu-variable-sized-type-not-at-end', '-Wno-c99-extensions']
+powervr_flags += ['-I', str(KIT / 'powervr')]
 objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVR.cpp', powervr_flags))
+objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRQueue.cpp', powervr_flags))
+# The unchanged Linux kernel sources (package/powervr/kernel: pvr_mmu.c) as C with the kern_exec.c record, through the
+# Linux API shim (compat/native_powervr_linux_kernel.h) and the pvr_device stand-in (stub/). Their own warnings that the
+# kernel's -Werror set rejects (signed/unsigned comparisons, packed member addresses, C23 static_assert) are not changed
+# in the sources, only disabled for them.
+powervr_c_flags = C_FLAGS + ['-Wno-unknown-warning-option', '-Wno-sign-compare', '-Wno-address-of-packed-member',
+                             '-Wno-c23-extensions', '-Wno-c2x-extensions', '-Wno-unused-parameter',
+                             '-I', str(KIT / 'powervr' / 'stub'), '-I', str(KIT / 'powervr' / 'compat'),
+                             '-I', str(KIT / 'powervr' / 'linux'), '-I', str(KIT / 'powervr' / 'kernel')]
+for name in ('pvr_mmu.c',):
+    objects.append(compile_one(c_record, KIT / 'powervr' / 'kernel' / name, powervr_c_flags))
 # UniXNU-tb128fu's process pass (BootProcessProbe.c) needs the Mach-private task and thread layout: the osfmk record, as
 # tb128fu's build-boot-progress.py compiles it. Its rows go to UART through a04br3-proclog (A04BR3Board.cpp).
 osfmk_record = record('osfmk/DEVELOPMENT/startup.o.json')
