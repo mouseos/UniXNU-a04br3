@@ -80,8 +80,6 @@
 #undef max
 
 extern "C" {
-int copyin(uint64_t uaddr, void *kaddr, size_t len);
-int copyout(const void *kaddr, uint64_t uaddr, size_t len);
 void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 // The firmware image (scripts/build-a04br3-board.py) and the core's CORE_ID register (A04BR3Gpu.cpp).
 extern const uint8_t native_powervr_fw[];

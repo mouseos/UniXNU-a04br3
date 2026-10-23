@@ -36,7 +36,7 @@ struct pvr_device {
 		const struct pvr_device *_pvr_dev = pvr_dev;       \
 		int _ret = -EINVAL;                                \
 		if (_pvr_dev->features.has_##feature) {            \
-			*(value_out) = _pvr_dev->features.feature; \
+			*(value_out) = (__typeof__(*(value_out)))_pvr_dev->features.feature; \
 			_ret = 0;                                  \
 		}                                                  \
 		_ret;                                              \
