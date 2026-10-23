@@ -234,6 +234,10 @@ kernel_args = [
   "a04br3-input=1",
   # NativeHidInput registers its touch sink and digitizer collection only with this (UniXNU-tb128fu, UniXNU-qemu).
   "sheng-touch-hid=1",
+  # Bring-up: unattended Home presses (package/HidInputProbe.cpp), 60 s after the second presented frame, three times 20 s
+  # apart, to test the Home path from the lock screen without anyone at the tablet. Remove for a release image.
+  "offline-hid-auto-home=60",
+  "offline-hid-auto-home-count=3",
   # launchd's disabled jobs (package/BootWatchdogPolicy.c labels; written into the Data seed by
   # scripts/a04br3-seed-launch-policy.py, and by unixnu_board_launch() once CONFIG_XNU_BOARD_LAUNCH reaches UniXNU).
   # watchdogd: no AppleARMWatchdogTimer here (not in [kernel.prelink] roots); on tb128fu it trapped about 5 minutes in
