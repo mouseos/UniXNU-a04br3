@@ -44,6 +44,7 @@ extern "C" {   // pvr_mmu.h is C (compiled from kernel/pvr_mmu.c)
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" void flush_dcache(vm_offset_t addr, unsigned count, int phys);
+extern "C" vm_offset_t phystokv(uint64_t pa);
 
 extern "C" {
 // The 22.67.54.30 firmware, embedded by scripts/build-a04br3-board.py from imagination/linux-firmware (pinned SHA-256).
@@ -85,6 +86,7 @@ rogue_fwif_kccb_cmd *gKccb;
 uint32_t *gKccbRtn;
 rogue_fwif_osdata *gOsdata;
 bool gFwStarted;
+uint32_t gKccbExpected;  // osdata->kccb_cmds_executed once every queued command has run (timed-out ones included)
 IOLock *gLock;           // the heap bump allocator and the KCCB
 pvr_device gPvr;         // what pvr_mmu.c reads of struct pvr_device
 pvr_fw_object *gMmuSync; // fw_dev.mem.mmucache_sync_obj
@@ -574,31 +576,29 @@ extern "C" int native_powervr_kccb_submit(const struct rogue_fwif_kccb_cmd *cmd,
   const uint32_t slot = gKctl->write_offset, next = (slot + 1) & gKctl->wrap_mask;
   if (next == READ_ONCE_A04(gKctl->read_offset)) { IOLockUnlock(gLock); return -EBUSY; }
   clean(gOsdata, sizeof(*gOsdata));
-  const uint32_t before = READ_ONCE_A04(gOsdata->kccb_cmds_executed);
+  // The target counts every command queued so far, so one that timed out and runs late is not taken for this one.
+  const uint32_t executed = READ_ONCE_A04(gOsdata->kccb_cmds_executed);
+  if (int32_t(gKccbExpected - executed) < 0 || !gKccbExpected) gKccbExpected = executed;
+  const uint32_t target = ++gKccbExpected;
   gKccb[slot] = *cmd;
-  gKccbRtn[slot] = ROGUE_FWIF_KCCB_RTN_SLOT_NO_RESPONSE;
   clean(&gKccb[slot], sizeof(gKccb[slot]));
-  clean(&gKccbRtn[slot], sizeof(gKccbRtn[slot]));
   __asm__ volatile("dsb sy" ::: "memory");
   gKctl->write_offset = next;
   clean(gKctl, sizeof(*gKctl));
   __asm__ volatile("dsb sy" ::: "memory");
   wr32(ROGUE_CR_MTS_SCHEDULE, PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK);
+  IOLockUnlock(gLock);
+  // Wait outside the lock, sleeping (thread context only: callers are kernel threads).
   int err = -ETIMEDOUT;
   for (uint32_t ms = 0; ms <= timeout_ms; ms++) {
     clean(gOsdata, sizeof(*gOsdata));
-    clean(&gKccbRtn[slot], sizeof(gKccbRtn[slot]));
-    if (READ_ONCE_A04(gOsdata->kccb_cmds_executed) != before || (READ_ONCE_A04(gKccbRtn[slot]) & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED)) {
-      err = 0;
-      break;
-    }
-    IODelay(1000);
+    if (int32_t(READ_ONCE_A04(gOsdata->kccb_cmds_executed) - target) >= 0) { err = 0; break; }
+    IOSleep(1);
   }
   clean(gKctl, sizeof(*gKctl));
   if (err)
-    IOLog("powervr: KCCB command %x slot %u timed out (read %u write %u, executed %u)\n", cmd->cmd_type, slot, gKctl->read_offset,
-          gKctl->write_offset, gOsdata->kccb_cmds_executed);
-  IOLockUnlock(gLock);
+    IOLog("powervr: KCCB command %x slot %u timed out (read %u write %u, executed %u, expected %u)\n", cmd->cmd_type, slot,
+          gKctl->read_offset, gKctl->write_offset, gOsdata->kccb_cmds_executed, target);
   return err;
 }
 
@@ -677,7 +677,8 @@ void vmAndQueueBringUp(void)
   // Walk: PC index va[39:30], PD index va[29:21], PT index va[20:12] (4 KiB device pages); entries hold the next table's
   // or the page's physical address >> 12 in bits [39:12] (pvr_rogue_mmu_defs.h ROGUE_MMUCTRL_*).
   auto entry = [](uint64_t tablePhys, uint32_t index, bool wide) -> uint64_t {
-    const vm_offset_t kva = ml_io_map(static_cast<vm_offset_t>(tablePhys & ~0xFFFULL), SZ_4K);
+    const vm_offset_t kva = phystokv(tablePhys & ~0xFFFULL);   // the physmap (no lasting alias mapping)
+    flush_dcache(kva, SZ_4K, 0);
     uint64_t v = wide ? reinterpret_cast<volatile uint64_t *>(kva)[index] : reinterpret_cast<volatile uint32_t *>(kva)[index];
     return v;
   };
@@ -690,7 +691,7 @@ void vmAndQueueBringUp(void)
   IOLog("powervr: map %llx -> %llx: %d; walk PCE %llx PDE %llx PTE %llx -> %llx %s; mmucache sync %x\n",
         static_cast<unsigned long long>(va), static_cast<unsigned long long>(bufPhys), err, static_cast<unsigned long long>(pce),
         static_cast<unsigned long long>(pde), static_cast<unsigned long long>(pte), static_cast<unsigned long long>(pagePhys),
-        pagePhys == bufPhys ? "MATCH" : "MISMATCH", *static_cast<volatile uint32_t *>(gMmuSync->o.cpu));
+        pagePhys == bufPhys ? "MATCH" : "MISMATCH", (clean(gMmuSync->o.cpu, 4), *static_cast<volatile uint32_t *>(gMmuSync->o.cpu)));
   const int q = native_powervr_queue_selftest();
   IOLog("powervr: queue self-test %d\n", q);
   native_powervr_stage = q ? 9 : 10;
