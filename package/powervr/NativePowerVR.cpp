@@ -361,9 +361,9 @@ bool boot(void)
     __asm__ volatile("dsb sy" ::: "memory");
     uint32_t result = 0;
     // Linux's kick, then the DDK's (TASK_COUNTED) if the first one is not taken.
-    const uint32_t kicks[3] = {PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK,
+    const uint32_t kicks[4] = {PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK,
                                (PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK) | ROGUE_CR_MTS_SCHEDULE_TASK_COUNTED,
-                               PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK};
+                               PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK, PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK};
     auto mtsState = [&](const char *when) {
       IOLog("powervr: MTS %s: schedule_enable %x bgctx %x intctx %x assoc bg %x/%x int %x/%x counted %llx gpu_int %x event %llx os0_event %x mips_irq %x\n",
             when, rd32(ROGUE_CR_MTS_SCHEDULE_ENABLE), rd32(ROGUE_CR_MTS_BGCTX), rd32(ROGUE_CR_MTS_INTCTX),
@@ -373,7 +373,14 @@ bool boot(void)
             rd32(ROGUE_CR_IRQ_OS0_EVENT_STATUS), rd32(ROGUE_CR_MIPS_WRAPPER_IRQ_STATUS));
     };
     mtsState("before kick");
-    for (unsigned k = 0; k < 3 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); k++) {
+    for (unsigned k = 0; k < 4 && !(result & ROGUE_FWIF_KCCB_RTN_SLOT_CMD_EXECUTED); k++) {
+      if (k == 3) {
+        // Fourth try: thread 0 associated with every data master in both contexts (the firmware had left all of them 0,
+        // and pvr_fw_stop() writes the cleared form, so the host side owns these registers).
+        wr32(ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC_MASKFULL);
+        wr32(ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC, ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC_MASKFULL);
+        mtsState("after thread 0 DM association");
+      }
       if (k == 2) {
         // Third try: every data master enabled for scheduling, in case the firmware left the MTS gated.
         wr32(ROGUE_CR_MTS_SCHEDULE_ENABLE, 0xff);
