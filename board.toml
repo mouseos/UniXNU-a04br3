@@ -183,6 +183,9 @@ kernel_args = [
   # Publish the original PMGR nub through the bridge (build-platform-power.py); it reads and writes no hardware.
   "sheng-pmgr=2",
   # Bring-up: the process list on UART every 20 s (package/A04BR3Board.cpp); remove for a release image.
+  # Start the secondary CPUs listed in [payload.adt] cpu_regs (ArmCpu, PSCI CPU_ON), as on UniXNU-tb128fu. On one core the
+  # first-boot LaunchServices database build in lsd did not finish within 45 minutes and SpringBoard waits on it.
+  "sheng-smp=1",
   "a04br3-proclog=20",
   # Bring-up: trace lsd in the UI trace (UniXNU docs/guide/debugging.md "UI stack trace", package/BootProcessProbe.c
   # boot-ui-focus3, role 2): SpringBoard's main thread, runningboardd and backboardd wait on synchronous XPC replies from lsd;
@@ -243,7 +246,9 @@ chip_id = "8167"
 owned_memory_size = "0x2DE00000"
 # The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
-cpu_regs = "0"
+# All four Cortex-A35 cores (MPIDR Aff0 0..3, boot CPU 0 first). ArmCpu starts the others with PSCI CPU_ON under
+# sheng-smp=1 (GICv2 path, CONFIG_XNU_ARMCPU_GICV2), as tb128fu does with its eight; "0" keeps the boot CPU only.
+cpu_regs = "0,1,2,3"
 psci_method = "smc"
 packed_data_ramdisk = true
 ipad_identity = true
