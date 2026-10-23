@@ -1,0 +1,11 @@
+{
+  "mesa": {
+    "repository": "https://gitlab.freedesktop.org/mesa/mesa.git",
+    "commit": "0d94b3f397fb9cf8470bb5600ada8af79ff5361a",
+    "tree": "f6a8011a63fc386a431214898dd8fb93d9ae7c54"
+  },
+  "patches": [
+    "patches/mesa/pvr-darwin-winsys.patch"
+  ],
+  "abi": "package/powervr/NativePowerVRABI.h"
+}

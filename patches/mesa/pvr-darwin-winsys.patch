@@ -1,0 +1,1885 @@
+diff --git a/meson.build b/meson.build
+index b36ec91..e44492c 100644
+--- a/meson.build
++++ b/meson.build
+@@ -309,6 +309,7 @@ with_virtio_vk = _vulkan_drivers.contains('virtio')
+ with_broadcom_vk = _vulkan_drivers.contains('broadcom')
+ with_imagination_vk = _vulkan_drivers.contains('imagination')
+ with_imagination_srv = get_option('imagination-srv')
++with_imagination_darwin = with_imagination_vk and get_option('imagination-kmds').contains('darwin')
+ with_microsoft_vk = _vulkan_drivers.contains('microsoft-experimental')
+ with_nouveau_vk = _vulkan_drivers.contains('nouveau')
+ with_asahi_vk = _vulkan_drivers.contains('asahi')
+@@ -338,6 +339,16 @@ if freedreno_kmds.length() != 0 and freedreno_kmds != [ 'msm' ] and with_freedre
+   endif
+ endif
+ 
++if with_imagination_darwin
++  if get_option('imagination-kmds').contains('powervr') or with_imagination_srv
++    error('imagination-kmds=darwin cannot be combined with the powervr or Services backends')
++  endif
++  if _vulkan_drivers == ['imagination'] and not with_gallium_drm
++    # The darwin interface has no DRM device; as for freedreno-kmds without msm, do not link libdrm.
++    system_has_kms_drm = false
++  endif
++endif
++
+ # This has to be below the freedreno_kmds check since that can change system_has_kms_drm
+ with_gallium_kmsro = with_gallium_drm or (system_has_kms_drm and with_gallium_zink)
+ 
+diff --git a/meson.options b/meson.options
+index 90f1c1d..3594e36 100644
+--- a/meson.options
++++ b/meson.options
+@@ -235,6 +235,24 @@ option(
+                 'vulkan driver',
+ )
+ 
++option(
++  'imagination-kmds',
++  type : 'array',
++  value : ['powervr'],
++  choices : ['powervr', 'darwin'],
++  description : 'Kernel interface of the Imagination Technologies vulkan ' +
++                'driver: powervr (Linux DRM) or darwin (the NativePowerVR ' +
++                'IOKit user client)',
++)
++
++option(
++  'imagination-darwin-abi-dir',
++  type : 'string',
++  value : '',
++  description : 'Directory holding NativePowerVRABI.h for the darwin ' +
++                'kernel interface (imagination-kmds=darwin)',
++)
++
+ option('imagination-uscgen-devices',
+   type : 'array',
+   value : [],
+diff --git a/src/imagination/common/device_info/ge8300.h b/src/imagination/common/device_info/ge8300.h
+index d620ee6..91bb006 100644
+--- a/src/imagination/common/device_info/ge8300.h
++++ b/src/imagination/common/device_info/ge8300.h
+@@ -136,6 +136,40 @@ static const struct pvr_device_info pvr_device_info_22_68_54_30 = {
+    .quirks = pvr_device_quirks_22_68_54_30,
+ };
+ 
++/* 22.40.54.30 (MediaTek MT8167). The features are those of the 22.V.54.30 configuration above: the DDK defines
++ * them per B.N.C (rgxconfig_km_22.V.54.30.h). No user-mode errata list for V 40 is available, so the enhancements
++ * and quirks below are those of 22.67 and 22.68, which are identical. The kernel-mode core files of the PowerVR DDK
++ * in the MT8167 Android kernel (drivers/misc/mediatek/gpu/gpu_rgx/m1.11ED5425693/hwdefs/km/cores,
++ * rgxcore_km_22.40.54.30.h and rgxcore_km_22.67.54.30.h) differ only in BRN 61450 (22.40) and ERN 61389 (22.67),
++ * neither of which this driver models. pvr_drm_override_quirks() and pvr_drm_override_enhancements() replace
++ * BRN 48545, 49927, 51764, 62269 and ERN 35421 with the kernel's answer. */
++static const struct pvr_device_enhancements
++   pvr_device_enhancements_22_40_54_30 = {
++      .has_ern35421 = true,
++      .has_ern38748 = true,
++      .has_ern42307 = true,
++   };
++
++static const struct pvr_device_quirks pvr_device_quirks_22_40_54_30 = {
++   .has_brn49927 = true,
++   .has_brn66011 = true,
++   .has_brn70165 = true,
++   .has_brn74056 = true,
++};
++
++static const struct pvr_device_info pvr_device_info_22_40_54_30 = {
++   .ident = {
++      PVR_DEVICE_IDENT_22_V_54_30,
++      .b = 22,
++      .v = 40,
++      .n = 54,
++      .c = 30,
++   },
++   .features = pvr_device_features_22_V_54_30,
++   .enhancements = pvr_device_enhancements_22_40_54_30,
++   .quirks = pvr_device_quirks_22_40_54_30,
++};
++
+ #define PVR_DEVICE_IDENT_22_V_54_38 \
+    .device_id = 0x22054038, .series_name = "Rogue", \
+    .public_name = "GE8300", .arch = PVR_DEVICE_ARCH_ROGUE
+diff --git a/src/imagination/common/pvr_device_info.c b/src/imagination/common/pvr_device_info.c
+index eb586eb..3f11440 100644
+--- a/src/imagination/common/pvr_device_info.c
++++ b/src/imagination/common/pvr_device_info.c
+@@ -51,6 +51,7 @@ static const struct pvr_device_info *device_infos[] = {
+    &pvr_device_info_4_46_6_62,
+    &pvr_device_info_5_9_1_46,
+    &pvr_device_info_15_5_1_64,
++   &pvr_device_info_22_40_54_30,
+    &pvr_device_info_22_67_54_30,
+    &pvr_device_info_22_68_54_30,
+    &pvr_device_info_22_102_54_38,
+@@ -85,6 +86,7 @@ int pvr_device_info_init(struct pvr_device_info *info, uint64_t bvnc)
+       CASE_PACKED_BVNC_DEVICE_INFO(4, 46, 6, 62);
+       CASE_PACKED_BVNC_DEVICE_INFO(5, 9, 1, 46);
+       CASE_PACKED_BVNC_DEVICE_INFO(15, 5, 1, 64);
++      CASE_PACKED_BVNC_DEVICE_INFO(22, 40, 54, 30);
+       CASE_PACKED_BVNC_DEVICE_INFO(22, 67, 54, 30);
+       CASE_PACKED_BVNC_DEVICE_INFO(22, 68, 54, 30);
+       CASE_PACKED_BVNC_DEVICE_INFO(22, 102, 54, 38);
+diff --git a/src/imagination/vulkan/meson.build b/src/imagination/vulkan/meson.build
+index 2c5cf4c..43d27a3 100644
+--- a/src/imagination/vulkan/meson.build
++++ b/src/imagination/vulkan/meson.build
+@@ -82,6 +82,25 @@ pvr_flags = [
+   no_override_init_args,
+ ]
+ 
++pvr_link_args = []
++
++if with_imagination_darwin
++  if get_option('imagination-darwin-abi-dir') == ''
++    error('imagination-kmds=darwin needs imagination-darwin-abi-dir (the directory of NativePowerVRABI.h)')
++  endif
++  # The powervr winsys builds the uAPI requests; winsys/darwin carries them to the NativePowerVR user client.
++  pvr_files += files('winsys/darwin/pvr_darwin.c')
++  pvr_flags += '-DPVR_WINSYS_DARWIN'
++  pvr_includes += include_directories(get_option('imagination-darwin-abi-dir'), is_system : false)
++  if host_machine.system() == 'darwin'
++    # linux/const.h and linux/types.h for the unchanged pvr_drm.h uAPI header.
++    pvr_includes += include_directories('winsys/darwin/compat')
++    pvr_deps += dependency('appleframeworks', modules : ['IOKit', 'CoreFoundation'])
++    # As for Turnip on Darwin: the wsi device entrypoint table references weak symbols that nothing defines.
++    pvr_link_args += ['-Wl,-undefined,dynamic_lookup']
++  endif
++endif
++
+ common_per_arch_files = [
+   pvr_entrypoints[0],
+   pvr_drirc[1],
+@@ -204,7 +223,8 @@ libvulkan_powervr_mesa = shared_library(
+     vulkan_icd_link_args,
+     ld_args_build_id,
+     ld_args_bsymbolic,
+-    ld_args_gc_sections
++    ld_args_gc_sections,
++    pvr_link_args,
+   ],
+   link_depends : vulkan_icd_link_depends,
+   gnu_symbol_visibility : 'hidden',
+diff --git a/src/imagination/vulkan/pvr_device.h b/src/imagination/vulkan/pvr_device.h
+index 5b9e96d..29bedfa 100644
+--- a/src/imagination/vulkan/pvr_device.h
++++ b/src/imagination/vulkan/pvr_device.h
+@@ -14,7 +14,9 @@
+ #ifndef PVR_DEVICE_H
+ #define PVR_DEVICE_H
+ 
++#ifndef PVR_WINSYS_DARWIN
+ #include <xf86drm.h>
++#endif
+ 
+ #include "vk_device.h"
+ #include "vk_device_memory.h"
+diff --git a/src/imagination/vulkan/pvr_instance.c b/src/imagination/vulkan/pvr_instance.c
+index da1f495..f1a6711 100644
+--- a/src/imagination/vulkan/pvr_instance.c
++++ b/src/imagination/vulkan/pvr_instance.c
+@@ -13,8 +13,10 @@
+ #include "pvr_instance.h"
+ 
+ #include <fcntl.h>
++#ifndef PVR_WINSYS_DARWIN
+ #include <xf86drm.h>
+ #include <xf86drmMode.h>
++#endif
+ 
+ #include "vk_alloc.h"
+ #include "vk_log.h"
+@@ -65,6 +67,37 @@ static const struct vk_instance_extension_table pvr_instance_extensions = {
+    .EXT_swapchain_colorspace = PVR_USE_WSI_PLATFORM,
+ };
+ 
++#ifdef PVR_WINSYS_DARWIN
++/* One device: the NativePowerVR user client, which pvr_winsys_create() opens. */
++static VkResult
++pvr_physical_device_enumerate(struct vk_instance *const vk_instance)
++{
++   struct pvr_instance *const instance =
++      container_of(vk_instance, struct pvr_instance, vk);
++   struct pvr_physical_device *pdevice;
++   VkResult result;
++
++   pdevice = vk_alloc(&vk_instance->alloc,
++                      sizeof(*pdevice),
++                      8,
++                      VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
++   if (!pdevice)
++      return vk_error(instance, VK_ERROR_OUT_OF_HOST_MEMORY);
++
++   result = pvr_physical_device_init(pdevice, instance, NULL, NULL);
++   if (result != VK_SUCCESS) {
++      vk_free(&vk_instance->alloc, pdevice);
++      return result == VK_ERROR_INCOMPATIBLE_DRIVER ? VK_SUCCESS : result;
++   }
++
++   if (PVR_IS_DEBUG_SET(INFO))
++      pvr_physical_device_dump_info(pdevice, NULL, NULL);
++
++   list_add(&pdevice->vk.link, &vk_instance->physical_devices.list);
++
++   return VK_SUCCESS;
++}
++#else
+ static VkResult pvr_get_drm_devices(void *const obj,
+                                     drmDevicePtr *const devices,
+                                     const int max_devices,
+@@ -297,6 +330,7 @@ out_free_drm_device_ptrs:
+ out:
+    return result;
+ }
++#endif /* PVR_WINSYS_DARWIN */
+ 
+ static bool
+ pvr_get_driver_build_sha(struct pvr_instance *instance)
+@@ -460,6 +494,17 @@ vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName)
+    return pvr_GetInstanceProcAddr(instance, pName);
+ }
+ 
++#ifdef PVR_WINSYS_DARWIN
++/* iPadOS has no Khronos loader: the consumer (metal2vulkan behind the native Metal device) opens this library and
++ * looks up the loader's entry point, as with Turnip's darwin backend. */
++PUBLIC
++VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
++vkGetInstanceProcAddr(VkInstance instance, const char *pName)
++{
++   return pvr_GetInstanceProcAddr(instance, pName);
++}
++#endif
++
+ VkResult pvr_EnumerateInstanceLayerProperties(uint32_t *pPropertyCount,
+                                               VkLayerProperties *pProperties)
+ {
+diff --git a/src/imagination/vulkan/pvr_physical_device.c b/src/imagination/vulkan/pvr_physical_device.c
+index ad6625a..0431d99 100644
+--- a/src/imagination/vulkan/pvr_physical_device.c
++++ b/src/imagination/vulkan/pvr_physical_device.c
+@@ -12,7 +12,9 @@
+ 
+ #include "pvr_physical_device.h"
+ 
++#ifdef MAJOR_IN_SYSMACROS
+ #include <sys/sysmacros.h>
++#endif
+ 
+ #include "git_sha1.h"
+ 
+@@ -43,6 +45,20 @@ void pvr_physical_device_dump_info(const struct pvr_physical_device *pdevice,
+                                    char *const *comp_display,
+                                    char *const *comp_render)
+ {
++#ifdef PVR_WINSYS_DARWIN
++   static char *const no_compatible[] = { NULL };
++   const struct pvr_device_dump_info darwin_info = {
++      .device_info = &pdevice->dev_info,
++      .device_runtime_info = &pdevice->dev_runtime_info,
++      .drm_render = {
++         .name = "darwin",
++         .date = "",
++         .comp = comp_render ? comp_render : no_compatible,
++      },
++   };
++
++   pvr_dump_physical_device_info(&darwin_info);
++#else
+    drmVersionPtr version_display = NULL, version_render;
+    struct pvr_device_dump_info info = { 0 };
+ 
+@@ -76,6 +92,7 @@ void pvr_physical_device_dump_info(const struct pvr_physical_device *pdevice,
+ 
+    drmFreeVersion(version_display);
+    drmFreeVersion(version_render);
++#endif
+ }
+ 
+ void pvr_physical_device_destroy(struct vk_physical_device *vk_pdevice)
+@@ -135,11 +152,11 @@ static void pvr_physical_device_get_supported_extensions(
+       .KHR_driver_properties = true,
+       .KHR_dynamic_rendering = true,
+       .KHR_external_fence = true,
+-      .KHR_external_fence_fd = true,
++      .KHR_external_fence_fd = PVR_WINSYS_HAS_FD,
+       .KHR_external_memory = true,
+-      .KHR_external_memory_fd = true,
++      .KHR_external_memory_fd = PVR_WINSYS_HAS_FD,
+       .KHR_external_semaphore = true,
+-      .KHR_external_semaphore_fd = true,
++      .KHR_external_semaphore_fd = PVR_WINSYS_HAS_FD,
+       .KHR_format_feature_flags2 = true,
+       .KHR_get_memory_requirements2 = true,
+       .KHR_global_priority = true,
+@@ -202,7 +219,7 @@ static void pvr_physical_device_get_supported_extensions(
+       .EXT_extended_dynamic_state = true,
+       .EXT_extended_dynamic_state2 = true,
+       .EXT_extended_dynamic_state3 = true,
+-      .EXT_external_memory_dma_buf = true,
++      .EXT_external_memory_dma_buf = PVR_WINSYS_HAS_FD,
+       .EXT_global_priority = true,
+       .EXT_global_priority_query = true,
+       .EXT_host_query_reset = true,
+@@ -212,9 +229,9 @@ static void pvr_physical_device_get_supported_extensions(
+       .EXT_index_type_uint8 = true,
+       .EXT_inline_uniform_block = true,
+       .EXT_line_rasterization = true,
+-      .EXT_map_memory_placed = true,
++      .EXT_map_memory_placed = PVR_WINSYS_HAS_FD,
+       .EXT_non_seamless_cube_map = true,
+-      .EXT_physical_device_drm = true,
++      .EXT_physical_device_drm = PVR_WINSYS_HAS_FD,
+       .EXT_primitive_topology_list_restart = true,
+       .EXT_private_data = true,
+       .EXT_provoking_vertex = true,
+@@ -1181,6 +1198,17 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
+    char *render_path;
+    VkResult result;
+ 
++#ifdef PVR_WINSYS_DARWIN
++   /* The NativePowerVR user client is the device: there are no DRM nodes. */
++   (void)primary_path;
++   (void)primary_stat;
++   (void)render_stat;
++   render_path = NULL;
++   display_path = NULL;
++   pdevice->has_primary = false;
++   pdevice->primary_devid = 0;
++   pdevice->render_devid = 0;
++#else
+    render_path = vk_strdup(&instance->vk.alloc,
+                            drm_render_device->nodes[DRM_NODE_RENDER],
+                            VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+@@ -1217,6 +1245,7 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
+       goto err_vk_free_display_path;
+    }
+    pdevice->render_devid = render_stat.st_rdev;
++#endif
+ 
+    result =
+       pvr_winsys_create(render_path, display_path, true,
+@@ -1339,10 +1368,12 @@ err_pvr_winsys_destroy:
+ err_vk_free_display_path:
+    vk_free(&instance->vk.alloc, display_path);
+ 
++#ifndef PVR_WINSYS_DARWIN
+ err_vk_free_render_path:
+    vk_free(&instance->vk.alloc, render_path);
+ 
+ err_out:
++#endif
+    return result;
+ }
+ 
+diff --git a/src/imagination/vulkan/pvr_physical_device.h b/src/imagination/vulkan/pvr_physical_device.h
+index 20f410b..210a716 100644
+--- a/src/imagination/vulkan/pvr_physical_device.h
++++ b/src/imagination/vulkan/pvr_physical_device.h
+@@ -18,7 +18,12 @@
+ 
+ #include <stdint.h>
+ #include <sys/types.h>
++#ifdef PVR_WINSYS_DARWIN
++/* No DRM devices: pvr_winsys_create() opens the NativePowerVR user client itself. */
++typedef struct _drmDevice *drmDevicePtr;
++#else
+ #include <xf86drm.h>
++#endif
+ 
+ #include "util/mesa-blake3.h"
+ 
+@@ -36,6 +41,13 @@
+ #   define PVR_USE_WSI_PLATFORM false
+ #endif
+ 
++/* File descriptors (dma-buf, sync files, DRM nodes, placed mmap()) exist only with a DRM kernel interface. */
++#if defined(PVR_WINSYS_DARWIN)
++#   define PVR_WINSYS_HAS_FD false
++#else
++#   define PVR_WINSYS_HAS_FD true
++#endif
++
+ #if defined(VK_USE_PLATFORM_DISPLAY_KHR)
+ #   define PVR_USE_WSI_PLATFORM_DISPLAY true
+ #else
+diff --git a/src/imagination/vulkan/pvr_wsi.c b/src/imagination/vulkan/pvr_wsi.c
+index 55132ab..e3665ee 100644
+--- a/src/imagination/vulkan/pvr_wsi.c
++++ b/src/imagination/vulkan/pvr_wsi.c
+@@ -30,7 +30,9 @@
+ #include <stddef.h>
+ #include <stdbool.h>
+ #include <vulkan/vulkan.h>
++#ifndef PVR_WINSYS_DARWIN
+ #include <xf86drm.h>
++#endif
+ 
+ #include "pvr_device.h"
+ #include "pvr_entrypoints.h"
+@@ -51,6 +53,7 @@ static PFN_vkVoidFunction pvr_wsi_proc_addr(VkPhysicalDevice physicalDevice,
+    return vk_instance_get_proc_addr_unchecked(&pdevice->instance->vk, pName);
+ }
+ 
++#ifndef PVR_WINSYS_DARWIN
+ static bool pvr_can_present_on_device(VkPhysicalDevice pdevice, int fd)
+ {
+    drmDevicePtr device;
+@@ -64,6 +67,7 @@ static bool pvr_can_present_on_device(VkPhysicalDevice pdevice, int fd)
+ 
+    return match;
+ }
++#endif
+ 
+ VkResult pvr_wsi_init(struct pvr_physical_device *pdevice)
+ {
+@@ -80,7 +84,9 @@ VkResult pvr_wsi_init(struct pvr_physical_device *pdevice)
+       return result;
+ 
+    pdevice->wsi_device.supports_modifiers = true;
++#ifndef PVR_WINSYS_DARWIN
+    pdevice->wsi_device.can_present_on_device = pvr_can_present_on_device;
++#endif
+    pdevice->vk.wsi_device = &pdevice->wsi_device;
+ 
+    return VK_SUCCESS;
+diff --git a/src/imagination/vulkan/winsys/darwin/compat/linux/const.h b/src/imagination/vulkan/winsys/darwin/compat/linux/const.h
+new file mode 100644
+index 0000000..31ab0ad
+--- /dev/null
++++ b/src/imagination/vulkan/winsys/darwin/compat/linux/const.h
+@@ -0,0 +1,17 @@
++/* SPDX-License-Identifier: MIT */
++/* Darwin stand-in for the two Linux uAPI headers that drm-uapi/pvr_drm.h includes. The definitions are those of
++ * Linux include/uapi/linux/const.h. */
++#ifndef PVR_DARWIN_COMPAT_LINUX_CONST_H
++#define PVR_DARWIN_COMPAT_LINUX_CONST_H
++
++#define __AC(X, Y) (X##Y)
++#define _AC(X, Y) __AC(X, Y)
++#define _AT(T, X) ((T)(X))
++
++#define _UL(x) (_AC(x, UL))
++#define _ULL(x) (_AC(x, ULL))
++
++#define _BITUL(x) (_UL(1) << (x))
++#define _BITULL(x) (_ULL(1) << (x))
++
++#endif
+diff --git a/src/imagination/vulkan/winsys/darwin/compat/linux/types.h b/src/imagination/vulkan/winsys/darwin/compat/linux/types.h
+new file mode 100644
+index 0000000..dafbb55
+--- /dev/null
++++ b/src/imagination/vulkan/winsys/darwin/compat/linux/types.h
+@@ -0,0 +1,9 @@
++/* SPDX-License-Identifier: MIT */
++/* Darwin stand-in for Linux include/uapi/linux/types.h: drm-uapi/drm.h, which pvr_drm.h includes first, already
++ * defines __u8 .. __u64 and __s8 .. __s64 on non-Linux systems. */
++#ifndef PVR_DARWIN_COMPAT_LINUX_TYPES_H
++#define PVR_DARWIN_COMPAT_LINUX_TYPES_H
++
++#include <stdint.h>
++
++#endif
+diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.c b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
+new file mode 100644
+index 0000000..be223e0
+--- /dev/null
++++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
+@@ -0,0 +1,764 @@
++/*
++ * Darwin kernel interface of the PowerVR winsys: talks to the NativePowerVR IOKit user client (NativePowerVRABI.h,
++ * version 1). Modelled on Turnip's darwin backend (tu_knl_darwin.cc).
++ *
++ * SPDX-License-Identifier: MIT
++ */
++
++#include <assert.h>
++#include <errno.h>
++#include <pthread.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/mman.h>
++#include <time.h>
++#include <unistd.h>
++
++#include <IOKit/IOKitLib.h>
++#include <mach/mach.h>
++
++#include "drm-uapi/pvr_drm.h"
++#include "NativePowerVRABI.h"
++
++#include "pvr_darwin.h"
++#include "pvr_winsys.h"
++#include "util/macros.h"
++#include "util/os_time.h"
++#include "vk_log.h"
++#include "vk_sync.h"
++#include "vk_sync_timeline.h"
++
++/* Process state shared by every connection: the tunnel selector of a sandboxed process and the lock and condition
++ * that resolve syncs. */
++static struct {
++   pthread_mutex_t lock;
++   pthread_cond_t resolved; /* broadcast whenever a sync gets its fences */
++   bool tunnel;
++   bool probed;
++   uint32_t selector;
++   uint32_t max_jobs;
++} pvr_dw = {
++   .lock = PTHREAD_MUTEX_INITIALIZER,
++   .resolved = PTHREAD_COND_INITIALIZER,
++};
++
++static inline io_connect_t pvr_darwin_conn(int fd)
++{
++   return (io_connect_t)(uint32_t)fd;
++}
++
++/* Largest method input: drm_pvr_ioctl_create_hwrt_dataset_args (136 bytes). */
++#define PVR_DARWIN_MAX_INPUT 256
++
++static kern_return_t pvr_darwin_call(int fd,
++                                     uint32_t method,
++                                     const void *in,
++                                     size_t in_size,
++                                     void *out,
++                                     size_t out_size)
++{
++   size_t out_bytes = out_size;
++
++   if (!pvr_dw.tunnel) {
++      return IOConnectCallStructMethod(pvr_darwin_conn(fd),
++                                       method,
++                                       in,
++                                       in_size,
++                                       out_size ? out : NULL,
++                                       out_size ? &out_bytes : NULL);
++   }
++
++   uint8_t buffer[8 + PVR_DARWIN_MAX_INPUT];
++   const uint32_t header[2] = { NativePowerVRTunnelMagic, method };
++
++   if (in_size > PVR_DARWIN_MAX_INPUT)
++      return kIOReturnBadArgument;
++
++   memcpy(buffer, header, sizeof(header));
++   if (in_size)
++      memcpy(buffer + sizeof(header), in, in_size);
++
++   return IOConnectCallStructMethod(pvr_darwin_conn(fd),
++                                    pvr_dw.selector,
++                                    buffer,
++                                    sizeof(header) + in_size,
++                                    out_size ? out : NULL,
++                                    out_size ? &out_bytes : NULL);
++}
++
++/* A sandboxed process reaches the driver through one admitted selector (NativeAdreno's tunnel). */
++static bool pvr_darwin_probe_selector(io_connect_t conn)
++{
++   const uint32_t header[2] = { NativePowerVRTunnelMagic,
++                                NativePowerVRTunnelProbe };
++
++   for (uint32_t s = 0; s < 256; s++) {
++      if (IOConnectCallStructMethod(conn, s, header, sizeof(header), NULL, NULL) ==
++          KERN_SUCCESS) {
++         pvr_dw.selector = s;
++         return true;
++      }
++   }
++
++   return false;
++}
++
++VkResult pvr_darwin_open(int *const fd_out)
++{
++   /* PVR_DARWIN_SERVICE names the IOKit service (default: the direct user client) and PVR_DARWIN_OPEN_TYPE its
++    * open type; any other service than the direct one is reached through the tunnel. */
++   const char *service_name = getenv("PVR_DARWIN_SERVICE");
++   const char *type_text = getenv("PVR_DARWIN_OPEN_TYPE");
++   struct NativePowerVRAbiParams params = { 0 };
++   io_service_t service;
++   io_connect_t conn = 0;
++   uint32_t open_type;
++   kern_return_t kr;
++   bool direct;
++
++   if (!service_name || !*service_name)
++      service_name = NativePowerVRServiceName;
++   direct = !strcmp(service_name, NativePowerVRServiceName);
++   open_type = type_text && *type_text ? (uint32_t)strtoul(type_text, NULL, 0) : 0;
++
++   service = IOServiceGetMatchingService(kIOMainPortDefault,
++                                         IOServiceMatching(service_name));
++   if (!service)
++      return VK_ERROR_INCOMPATIBLE_DRIVER;
++
++   kr = IOServiceOpen(service, mach_task_self(), open_type, &conn);
++   IOObjectRelease(service);
++   if (kr != KERN_SUCCESS) {
++      return vk_errorf(NULL,
++                       VK_ERROR_INITIALIZATION_FAILED,
++                       "IOServiceOpen(%s, 0x%x) failed: 0x%x",
++                       service_name,
++                       open_type,
++                       kr);
++   }
++
++   pthread_mutex_lock(&pvr_dw.lock);
++   if (!pvr_dw.probed) {
++      pvr_dw.tunnel = !direct;
++      if (pvr_dw.tunnel && !pvr_darwin_probe_selector(conn)) {
++         pthread_mutex_unlock(&pvr_dw.lock);
++         IOServiceClose(conn);
++         return vk_errorf(NULL,
++                          VK_ERROR_INITIALIZATION_FAILED,
++                          "No external-method selector is admitted for this process");
++      }
++      pvr_dw.probed = true;
++   }
++   pthread_mutex_unlock(&pvr_dw.lock);
++
++   kr = pvr_darwin_call((int)conn,
++                        NativePowerVRMethodGetParams,
++                        NULL,
++                        0,
++                        &params,
++                        sizeof(params));
++   if (kr != KERN_SUCCESS || params.abi_version != NativePowerVRAbiVersion ||
++       params.max_jobs == 0) {
++      IOServiceClose(conn);
++      return vk_errorf(NULL,
++                       VK_ERROR_INCOMPATIBLE_DRIVER,
++                       "NativePowerVR ABI query failed: 0x%x, version %u",
++                       kr,
++                       params.abi_version);
++   }
++
++   pthread_mutex_lock(&pvr_dw.lock);
++   pvr_dw.max_jobs = MIN2(params.max_jobs, NativePowerVRAbiMaxJobs);
++   pthread_mutex_unlock(&pvr_dw.lock);
++
++   *fd_out = (int)conn;
++
++   return VK_SUCCESS;
++}
++
++void pvr_darwin_close(int fd)
++{
++   IOServiceClose(pvr_darwin_conn(fd));
++}
++
++static int pvr_darwin_errno(kern_return_t kr)
++{
++   switch (kr) {
++   case kIOReturnBadArgument:
++      return EINVAL;
++   case kIOReturnNoMemory:
++   case kIOReturnNoResources:
++      return ENOMEM;
++   case kIOReturnUnsupported:
++      return ENOTTY;
++   case kIOReturnNotPermitted:
++      return EPERM;
++   case kIOReturnBusy:
++      return EBUSY;
++   case kIOReturnTimeout:
++      return ETIMEDOUT;
++   default:
++      return EIO;
++   }
++}
++
++int pvr_darwin_ioctl(int fd, unsigned long request, void *arg)
++{
++   uint32_t method;
++   size_t size;
++   bool out;
++
++   switch (request) {
++#define PVR_DARWIN_REQUEST(_request, _method, _type, _out) \
++   case _request:                                          \
++      method = _method;                                    \
++      size = sizeof(_type);                                \
++      out = _out;                                          \
++      break
++
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_DEV_QUERY,
++                         NativePowerVRMethodDevQuery,
++                         struct drm_pvr_ioctl_dev_query_args,
++                         true);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_CREATE_BO,
++                         NativePowerVRMethodCreateBo,
++                         struct drm_pvr_ioctl_create_bo_args,
++                         true);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_GET_BO_MMAP_OFFSET,
++                         NativePowerVRMethodGetBoMmapOffset,
++                         struct drm_pvr_ioctl_get_bo_mmap_offset_args,
++                         true);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_CREATE_VM_CONTEXT,
++                         NativePowerVRMethodCreateVmContext,
++                         struct drm_pvr_ioctl_create_vm_context_args,
++                         true);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_DESTROY_VM_CONTEXT,
++                         NativePowerVRMethodDestroyVmContext,
++                         struct drm_pvr_ioctl_destroy_vm_context_args,
++                         false);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_VM_MAP,
++                         NativePowerVRMethodVmMap,
++                         struct drm_pvr_ioctl_vm_map_args,
++                         false);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_VM_UNMAP,
++                         NativePowerVRMethodVmUnmap,
++                         struct drm_pvr_ioctl_vm_unmap_args,
++                         false);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_CREATE_CONTEXT,
++                         NativePowerVRMethodCreateContext,
++                         struct drm_pvr_ioctl_create_context_args,
++                         true);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_DESTROY_CONTEXT,
++                         NativePowerVRMethodDestroyContext,
++                         struct drm_pvr_ioctl_destroy_context_args,
++                         false);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_CREATE_FREE_LIST,
++                         NativePowerVRMethodCreateFreeList,
++                         struct drm_pvr_ioctl_create_free_list_args,
++                         true);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_DESTROY_FREE_LIST,
++                         NativePowerVRMethodDestroyFreeList,
++                         struct drm_pvr_ioctl_destroy_free_list_args,
++                         false);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_CREATE_HWRT_DATASET,
++                         NativePowerVRMethodCreateHwrtDataset,
++                         struct drm_pvr_ioctl_create_hwrt_dataset_args,
++                         true);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_PVR_DESTROY_HWRT_DATASET,
++                         NativePowerVRMethodDestroyHwrtDataset,
++                         struct drm_pvr_ioctl_destroy_hwrt_dataset_args,
++                         false);
++      PVR_DARWIN_REQUEST(DRM_IOCTL_GEM_CLOSE,
++                         NativePowerVRMethodGemClose,
++                         struct drm_gem_close,
++                         false);
++
++#undef PVR_DARWIN_REQUEST
++
++   default:
++      /* DRM_IOCTL_PVR_SUBMIT_JOBS goes through pvr_darwin_submit_jobs(), which keeps the fences. */
++      errno = ENOTTY;
++      return -1;
++   }
++
++   const kern_return_t kr =
++      pvr_darwin_call(fd, method, arg, size, out ? arg : NULL, out ? size : 0);
++   if (kr != KERN_SUCCESS) {
++      errno = pvr_darwin_errno(kr);
++      return -1;
++   }
++
++   return 0;
++}
++
++VkResult pvr_darwin_bo_map(int fd,
++                           void *addr,
++                           uint64_t size,
++                           uint64_t token,
++                           void **const map_out)
++{
++   mach_vm_address_t address = 0;
++   mach_vm_size_t mapped = 0;
++   kern_return_t kr;
++
++   /* The user client offers no mapping at a caller-chosen address (VK_EXT_map_memory_placed is not exposed). */
++   if (addr || token > UINT32_MAX)
++      return vk_error(NULL, VK_ERROR_MEMORY_MAP_FAILED);
++
++   kr = IOConnectMapMemory64(pvr_darwin_conn(fd),
++                             (uint32_t)token,
++                             mach_task_self(),
++                             &address,
++                             &mapped,
++                             kIOMapAnywhere);
++   if (kr != KERN_SUCCESS) {
++      return vk_errorf(NULL,
++                       VK_ERROR_MEMORY_MAP_FAILED,
++                       "IOConnectMapMemory64 failed: 0x%x",
++                       kr);
++   }
++
++   if (mapped < size) {
++      IOConnectUnmapMemory64(pvr_darwin_conn(fd),
++                             (uint32_t)token,
++                             mach_task_self(),
++                             address);
++      return vk_errorf(NULL,
++                       VK_ERROR_MEMORY_MAP_FAILED,
++                       "BO mapping covers 0x%llx of 0x%llx bytes",
++                       (unsigned long long)mapped,
++                       (unsigned long long)size);
++   }
++
++   *map_out = (void *)(uintptr_t)address;
++
++   return VK_SUCCESS;
++}
++
++VkResult pvr_darwin_bo_unmap(int fd,
++                             uint64_t token,
++                             void *map,
++                             uint64_t size,
++                             bool reserve)
++{
++   const kern_return_t kr =
++      IOConnectUnmapMemory64(pvr_darwin_conn(fd),
++                             (uint32_t)token,
++                             mach_task_self(),
++                             (mach_vm_address_t)(uintptr_t)map);
++   if (kr != KERN_SUCCESS)
++      return vk_errorf(NULL, VK_ERROR_UNKNOWN, "IOConnectUnmapMemory64 failed: 0x%x", kr);
++
++   /* As pvr_munmap(): keep the range reserved. */
++   if (reserve &&
++       mmap(map, size, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0) ==
++          MAP_FAILED) {
++      return vk_errorf(NULL, VK_ERROR_UNKNOWN, "mmap(reserve) failed (errno %d)", errno);
++   }
++
++   return VK_SUCCESS;
++}
++
++/* ---- synchronization ----
++ *
++ * A sync is unsignaled until a submission resolves it; then it is complete once all of its fences are (none:
++ * signaled). Fences carry their connection, because the physical device and every logical device have their own. */
++
++#define PVR_DARWIN_SYNC_FENCES 8
++
++struct pvr_darwin_fence {
++   int fd;
++   uint64_t value;
++};
++
++struct pvr_darwin_sync {
++   struct vk_sync base;
++   bool resolved;
++   uint32_t count;
++   struct pvr_darwin_fence fences[PVR_DARWIN_SYNC_FENCES];
++};
++
++static inline struct pvr_darwin_sync *to_pvr_darwin_sync(struct vk_sync *sync)
++{
++   return container_of(sync, struct pvr_darwin_sync, base);
++}
++
++/* Absolute monotonic deadline -> absolute realtime one for pthread_cond_timedwait() (Darwin has no
++ * pthread_condattr_setclock). */
++static struct timespec pvr_darwin_realtime_deadline(uint64_t abs_timeout_ns)
++{
++   const uint64_t now = os_time_get_nano();
++   const uint64_t relative = abs_timeout_ns > now ? abs_timeout_ns - now : 0;
++   struct timespec abstime;
++   uint64_t nsec;
++
++   clock_gettime(CLOCK_REALTIME, &abstime);
++   nsec = (uint64_t)abstime.tv_nsec + relative % 1000000000ull;
++   abstime.tv_sec += relative / 1000000000ull + nsec / 1000000000ull;
++   abstime.tv_nsec = nsec % 1000000000ull;
++
++   return abstime;
++}
++
++/* Waits under pvr_dw.lock until "sync" is resolved. */
++static VkResult pvr_darwin_wait_resolved_locked(struct pvr_darwin_sync *sync,
++                                                uint64_t abs_timeout_ns)
++{
++   if (sync->resolved)
++      return VK_SUCCESS;
++   if (abs_timeout_ns == 0)
++      return VK_TIMEOUT;
++
++   const struct timespec abstime = pvr_darwin_realtime_deadline(abs_timeout_ns);
++
++   while (!sync->resolved) {
++      const int ret =
++         abs_timeout_ns == UINT64_MAX
++            ? pthread_cond_wait(&pvr_dw.resolved, &pvr_dw.lock)
++            : pthread_cond_timedwait(&pvr_dw.resolved, &pvr_dw.lock, &abstime);
++      if (ret == ETIMEDOUT)
++         return sync->resolved ? VK_SUCCESS : VK_TIMEOUT;
++      if (ret)
++         return vk_errorf(NULL, VK_ERROR_DEVICE_LOST, "pthread_cond_wait failed: %d", ret);
++   }
++
++   return VK_SUCCESS;
++}
++
++/* NativePowerVRMethodWaitFence in slices, so a deadline is honoured without one long kernel wait. */
++static VkResult pvr_darwin_wait_fence(const struct pvr_darwin_fence *fence,
++                                      uint64_t abs_timeout_ns)
++{
++   for (;;) {
++      const uint64_t now = os_time_get_nano();
++      uint64_t slice = 100000000ull; /* 100 ms */
++
++      if (abs_timeout_ns != UINT64_MAX)
++         slice = abs_timeout_ns > now ? MIN2(slice, abs_timeout_ns - now) : 0;
++
++      const struct NativePowerVRAbiWaitFence req = {
++         .fence = fence->value,
++         .timeout_ns = slice,
++      };
++      const kern_return_t kr = pvr_darwin_call(fence->fd,
++                                               NativePowerVRMethodWaitFence,
++                                               &req,
++                                               sizeof(req),
++                                               NULL,
++                                               0);
++      if (kr == KERN_SUCCESS)
++         return VK_SUCCESS;
++      if (kr != kIOReturnTimeout) {
++         return vk_errorf(NULL,
++                          VK_ERROR_DEVICE_LOST,
++                          "NativePowerVR fence %llu failed: 0x%x",
++                          (unsigned long long)fence->value,
++                          kr);
++      }
++      if (slice == 0)
++         return VK_TIMEOUT;
++   }
++}
++
++/* Copies the fences of a resolved sync, waiting first for its resolution. */
++static VkResult pvr_darwin_sync_snapshot(struct pvr_darwin_sync *sync,
++                                         uint64_t abs_timeout_ns,
++                                         struct pvr_darwin_fence *fences,
++                                         uint32_t *const count_out)
++{
++   pthread_mutex_lock(&pvr_dw.lock);
++   const VkResult result = pvr_darwin_wait_resolved_locked(sync, abs_timeout_ns);
++   if (result == VK_SUCCESS) {
++      *count_out = sync->count;
++      memcpy(fences, sync->fences, sizeof(sync->fences[0]) * sync->count);
++   }
++   pthread_mutex_unlock(&pvr_dw.lock);
++
++   return result;
++}
++
++static VkResult pvr_darwin_sync_wait_one(struct pvr_darwin_sync *sync,
++                                         uint64_t abs_timeout_ns)
++{
++   struct pvr_darwin_fence fences[PVR_DARWIN_SYNC_FENCES];
++   uint32_t count = 0;
++   VkResult result;
++
++   result = pvr_darwin_sync_snapshot(sync, abs_timeout_ns, fences, &count);
++   if (result != VK_SUCCESS)
++      return result;
++
++   for (uint32_t i = 0; i < count; i++) {
++      result = pvr_darwin_wait_fence(&fences[i], abs_timeout_ns);
++      if (result != VK_SUCCESS)
++         return result;
++   }
++
++   return VK_SUCCESS;
++}
++
++static VkResult pvr_darwin_sync_poll_resolved(struct pvr_darwin_sync *sync)
++{
++   pthread_mutex_lock(&pvr_dw.lock);
++   const bool resolved = sync->resolved;
++   pthread_mutex_unlock(&pvr_dw.lock);
++
++   return resolved ? VK_SUCCESS : VK_TIMEOUT;
++}
++
++static VkResult pvr_darwin_sync_init(struct vk_device *device,
++                                     struct vk_sync *vk_sync,
++                                     uint64_t initial_value)
++{
++   struct pvr_darwin_sync *sync = to_pvr_darwin_sync(vk_sync);
++
++   sync->resolved = initial_value != 0;
++   sync->count = 0;
++
++   return VK_SUCCESS;
++}
++
++static void pvr_darwin_sync_finish(struct vk_device *device,
++                                   struct vk_sync *vk_sync)
++{
++}
++
++static VkResult pvr_darwin_sync_signal(struct vk_device *device,
++                                       struct vk_sync *vk_sync,
++                                       uint64_t value)
++{
++   struct pvr_darwin_sync *sync = to_pvr_darwin_sync(vk_sync);
++
++   pthread_mutex_lock(&pvr_dw.lock);
++   sync->resolved = true;
++   sync->count = 0;
++   pthread_cond_broadcast(&pvr_dw.resolved);
++   pthread_mutex_unlock(&pvr_dw.lock);
++
++   return VK_SUCCESS;
++}
++
++static VkResult pvr_darwin_sync_reset(struct vk_device *device,
++                                      struct vk_sync *vk_sync)
++{
++   struct pvr_darwin_sync *sync = to_pvr_darwin_sync(vk_sync);
++
++   pthread_mutex_lock(&pvr_dw.lock);
++   sync->resolved = false;
++   sync->count = 0;
++   pthread_mutex_unlock(&pvr_dw.lock);
++
++   return VK_SUCCESS;
++}
++
++static VkResult pvr_darwin_sync_move(struct vk_device *device,
++                                     struct vk_sync *vk_dst,
++                                     struct vk_sync *vk_src)
++{
++   struct pvr_darwin_sync *dst = to_pvr_darwin_sync(vk_dst);
++   struct pvr_darwin_sync *src = to_pvr_darwin_sync(vk_src);
++
++   pthread_mutex_lock(&pvr_dw.lock);
++   dst->resolved = src->resolved;
++   dst->count = src->count;
++   memcpy(dst->fences, src->fences, sizeof(src->fences[0]) * src->count);
++   src->resolved = false;
++   src->count = 0;
++   if (dst->resolved)
++      pthread_cond_broadcast(&pvr_dw.resolved);
++   pthread_mutex_unlock(&pvr_dw.lock);
++
++   return VK_SUCCESS;
++}
++
++static VkResult pvr_darwin_sync_wait_many(struct vk_device *device,
++                                          uint32_t wait_count,
++                                          const struct vk_sync_wait *waits,
++                                          enum vk_sync_wait_flags wait_flags,
++                                          uint64_t abs_timeout_ns)
++{
++   if (wait_flags & VK_SYNC_WAIT_ANY) {
++      for (;;) {
++         for (uint32_t i = 0; i < wait_count; i++) {
++            struct pvr_darwin_sync *sync = to_pvr_darwin_sync(waits[i].sync);
++            const VkResult result = (wait_flags & VK_SYNC_WAIT_PENDING)
++                                       ? pvr_darwin_sync_poll_resolved(sync)
++                                       : pvr_darwin_sync_wait_one(sync, 0);
++            if (result != VK_TIMEOUT)
++               return result;
++         }
++
++         if (abs_timeout_ns != UINT64_MAX && os_time_get_nano() >= abs_timeout_ns)
++            return VK_TIMEOUT;
++
++         usleep(200);
++      }
++   }
++
++   for (uint32_t i = 0; i < wait_count; i++) {
++      struct pvr_darwin_sync *sync = to_pvr_darwin_sync(waits[i].sync);
++      VkResult result;
++
++      if (wait_flags & VK_SYNC_WAIT_PENDING) {
++         pthread_mutex_lock(&pvr_dw.lock);
++         result = pvr_darwin_wait_resolved_locked(sync, abs_timeout_ns);
++         pthread_mutex_unlock(&pvr_dw.lock);
++      } else {
++         result = pvr_darwin_sync_wait_one(sync, abs_timeout_ns);
++      }
++
++      if (result != VK_SUCCESS)
++         return result;
++   }
++
++   return VK_SUCCESS;
++}
++
++static const struct vk_sync_type pvr_darwin_sync_type = {
++   .size = sizeof(struct pvr_darwin_sync),
++   .features = VK_SYNC_FEATURE_BINARY | VK_SYNC_FEATURE_GPU_WAIT |
++               VK_SYNC_FEATURE_GPU_MULTI_WAIT | VK_SYNC_FEATURE_CPU_WAIT |
++               VK_SYNC_FEATURE_CPU_RESET | VK_SYNC_FEATURE_CPU_SIGNAL |
++               VK_SYNC_FEATURE_WAIT_ANY | VK_SYNC_FEATURE_WAIT_PENDING,
++   .init = pvr_darwin_sync_init,
++   .finish = pvr_darwin_sync_finish,
++   .signal = pvr_darwin_sync_signal,
++   .reset = pvr_darwin_sync_reset,
++   .move = pvr_darwin_sync_move,
++   .wait_many = pvr_darwin_sync_wait_many,
++};
++
++void pvr_darwin_init_sync_types(struct pvr_winsys *ws)
++{
++   /* Binary syncs, and timelines emulated on top of them, as the pvrsrvkm winsys does. */
++   ws->syncobj_type = pvr_darwin_sync_type;
++   ws->sync_types[0] = &ws->syncobj_type;
++   ws->timeline_syncobj_type = vk_sync_timeline_get_type(&ws->syncobj_type);
++   ws->sync_types[1] = &ws->timeline_syncobj_type.sync;
++   ws->sync_types[2] = NULL;
++}
++
++VkResult pvr_darwin_submit_jobs(int fd,
++                                const struct drm_pvr_ioctl_submit_jobs_args *args,
++                                struct vk_sync *const *waits,
++                                uint32_t wait_count,
++                                const struct pvr_darwin_signal *signals,
++                                uint32_t signal_count,
++                                const char *what)
++{
++   struct NativePowerVRAbiSubmitReply reply = { 0 };
++   kern_return_t kr;
++
++   /* No kernel sync objects in version 1: the dependencies complete before the submission. */
++   for (uint32_t i = 0; i < wait_count; i++) {
++      if (!waits[i])
++         continue;
++
++      assert(!(waits[i]->flags & VK_SYNC_IS_TIMELINE));
++      const VkResult result =
++         pvr_darwin_sync_wait_one(to_pvr_darwin_sync(waits[i]), UINT64_MAX);
++      if (result != VK_SUCCESS) {
++         return vk_errorf(NULL,
++                          VK_ERROR_DEVICE_LOST,
++                          "Wait before the %s job failed",
++                          what);
++      }
++   }
++
++   if (args->jobs.count == 0 || args->jobs.count > pvr_dw.max_jobs ||
++       args->jobs.stride != sizeof(struct drm_pvr_job)) {
++      return vk_errorf(NULL,
++                       VK_ERROR_OUT_OF_DEVICE_MEMORY,
++                       "Unsupported %s submission: %u jobs",
++                       what,
++                       args->jobs.count);
++   }
++
++   kr = pvr_darwin_call(fd,
++                        NativePowerVRMethodSubmitJobs,
++                        args,
++                        sizeof(*args),
++                        &reply,
++                        sizeof(reply));
++   if (kr != KERN_SUCCESS) {
++      /* VK_ERROR_OUT_OF_DEVICE_MEMORY as the powervr winsys returns, to match pvrsrv. */
++      return vk_errorf(NULL,
++                       VK_ERROR_OUT_OF_DEVICE_MEMORY,
++                       "Failed to submit %s job: 0x%x",
++                       what,
++                       kr);
++   }
++
++   pthread_mutex_lock(&pvr_dw.lock);
++   for (uint32_t i = 0; i < signal_count; i++) {
++      struct vk_sync *const vk_sync = signals[i].sync;
++
++      if (!vk_sync)
++         continue;
++
++      assert(!(vk_sync->flags & VK_SYNC_IS_TIMELINE));
++      assert(signals[i].job < args->jobs.count && reply.fence[signals[i].job]);
++
++      struct pvr_darwin_sync *sync = to_pvr_darwin_sync(vk_sync);
++      sync->fences[0] = (struct pvr_darwin_fence){
++         .fd = fd,
++         .value = reply.fence[signals[i].job],
++      };
++      sync->count = 1;
++      sync->resolved = true;
++   }
++   pthread_cond_broadcast(&pvr_dw.resolved);
++   pthread_mutex_unlock(&pvr_dw.lock);
++
++   return VK_SUCCESS;
++}
++
++/* The signal resolves to the union of the waits' fences; a wait that does not fit is waited for here. */
++VkResult pvr_darwin_null_job_submit(struct vk_sync_wait *waits,
++                                    uint32_t wait_count,
++                                    struct vk_sync_signal *signal_sync)
++{
++   struct pvr_darwin_fence fences[PVR_DARWIN_SYNC_FENCES];
++   uint32_t count = 0;
++
++   for (uint32_t i = 0; i < wait_count; i++) {
++      struct pvr_darwin_fence wait_fences[PVR_DARWIN_SYNC_FENCES];
++      uint32_t wait_fence_count = 0;
++      VkResult result;
++
++      if (!waits[i].sync)
++         continue;
++
++      assert(!(waits[i].sync->flags & VK_SYNC_IS_TIMELINE));
++      result = pvr_darwin_sync_snapshot(to_pvr_darwin_sync(waits[i].sync),
++                                        UINT64_MAX,
++                                        wait_fences,
++                                        &wait_fence_count);
++      if (result != VK_SUCCESS)
++         return result;
++
++      for (uint32_t j = 0; j < wait_fence_count; j++) {
++         if (count < ARRAY_SIZE(fences)) {
++            fences[count++] = wait_fences[j];
++            continue;
++         }
++
++         result = pvr_darwin_wait_fence(&wait_fences[j], UINT64_MAX);
++         if (result != VK_SUCCESS)
++            return result;
++      }
++   }
++
++   assert(!(signal_sync->sync->flags & VK_SYNC_IS_TIMELINE));
++
++   struct pvr_darwin_sync *sync = to_pvr_darwin_sync(signal_sync->sync);
++
++   pthread_mutex_lock(&pvr_dw.lock);
++   memcpy(sync->fences, fences, sizeof(fences[0]) * count);
++   sync->count = count;
++   sync->resolved = true;
++   pthread_cond_broadcast(&pvr_dw.resolved);
++   pthread_mutex_unlock(&pvr_dw.lock);
++
++   return VK_SUCCESS;
++}
+diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.h b/src/imagination/vulkan/winsys/darwin/pvr_darwin.h
+new file mode 100644
+index 0000000..09ea4a6
+--- /dev/null
++++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.h
+@@ -0,0 +1,55 @@
++/*
++ * Darwin kernel interface of the PowerVR winsys: the requests of winsys/powervr travel to the NativePowerVR IOKit
++ * user client (NativePowerVRABI.h, version 1) instead of the Linux DRM device. Modelled on Turnip's darwin backend
++ * (tu_knl_darwin.cc): no libdrm, fences returned by the submission and waited for through the user client.
++ *
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef PVR_DARWIN_H
++#define PVR_DARWIN_H
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <vulkan/vulkan.h>
++
++#include "drm-uapi/pvr_drm.h"
++
++struct pvr_winsys;
++struct vk_sync;
++struct vk_sync_signal;
++struct vk_sync_wait;
++
++/* The connection is the winsys's render_fd (the io_connect_t, a Mach port name). */
++VkResult pvr_darwin_open(int *const fd_out);
++void pvr_darwin_close(int fd);
++
++/* Declared in pvr_winsys_helper.h, which routes pvr_ioctl() here: 0, or -1 with errno set. */
++int pvr_darwin_ioctl(int fd, unsigned long request, void *arg);
++
++/* Maps the whole BO; "token" is the offset that DRM_IOCTL_PVR_GET_BO_MMAP_OFFSET returned (the memory type). */
++VkResult pvr_darwin_bo_map(int fd, void *addr, uint64_t size, uint64_t token, void **const map_out);
++VkResult pvr_darwin_bo_unmap(int fd, uint64_t token, void *map, uint64_t size, bool reserve);
++
++void pvr_darwin_init_sync_types(struct pvr_winsys *ws);
++
++/* A sync that resolves to the fence of jobs.array[job]. A NULL sync is skipped. */
++struct pvr_darwin_signal {
++   struct vk_sync *sync;
++   uint32_t job;
++};
++
++/* Waits for "waits" on the CPU (NULL entries are skipped), submits and resolves "signals". */
++VkResult pvr_darwin_submit_jobs(int fd,
++                                const struct drm_pvr_ioctl_submit_jobs_args *args,
++                                struct vk_sync *const *waits,
++                                uint32_t wait_count,
++                                const struct pvr_darwin_signal *signals,
++                                uint32_t signal_count,
++                                const char *what);
++
++VkResult pvr_darwin_null_job_submit(struct vk_sync_wait *waits,
++                                    uint32_t wait_count,
++                                    struct vk_sync_signal *signal_sync);
++
++#endif /* PVR_DARWIN_H */
+diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm.c b/src/imagination/vulkan/winsys/powervr/pvr_drm.c
+index c45a538..42841d1 100644
+--- a/src/imagination/vulkan/winsys/powervr/pvr_drm.c
++++ b/src/imagination/vulkan/winsys/powervr/pvr_drm.c
+@@ -25,7 +25,11 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <vulkan/vulkan.h>
++#ifdef PVR_WINSYS_DARWIN
++#include "drm-uapi/drm.h"
++#else
+ #include <xf86drm.h>
++#endif
+ 
+ #include "drm-uapi/pvr_drm.h"
+ #include "pvr_device_info.h"
+@@ -40,7 +44,11 @@
+ #include "pvr_winsys.h"
+ #include "pvr_winsys_helper.h"
+ #include "vk_alloc.h"
++#ifdef PVR_WINSYS_DARWIN
++#include "darwin/pvr_darwin.h"
++#else
+ #include "vk_drm_syncobj.h"
++#endif
+ #include "vk_log.h"
+ 
+ static void pvr_drm_finish_heaps(struct pvr_drm_winsys *const drm_ws)
+@@ -703,9 +711,13 @@ VkResult pvr_drm_winsys_create(const int render_fd,
+    os_get_page_size(&drm_ws->base.page_size);
+    drm_ws->base.log2_page_size = util_logbase2(drm_ws->base.page_size);
+ 
++#ifdef PVR_WINSYS_DARWIN
++   pvr_darwin_init_sync_types(&drm_ws->base);
++#else
+    drm_ws->base.syncobj_type = vk_drm_syncobj_get_type(render_fd);
+    drm_ws->base.sync_types[0] = &drm_ws->base.syncobj_type;
+    drm_ws->base.sync_types[1] = NULL;
++#endif
+ 
+    err = u_rwlock_init(&drm_ws->dmabuf_bo_lock);
+    if (err) {
+diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c
+index 15d4299..ccd6e0f 100644
+--- a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c
++++ b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c
+@@ -30,13 +30,20 @@
+ #include <sys/types.h>
+ #include <vulkan/vulkan.h>
+ #include <unistd.h>
++#ifdef PVR_WINSYS_DARWIN
++#include "drm-uapi/drm.h"
++#else
+ #include <xf86drm.h>
++#endif
+ 
+ #include "drm-uapi/pvr_drm.h"
+ #include "pvr_drm.h"
+ #include "pvr_drm_bo.h"
+ #include "pvr_macros.h"
+ #include "pvr_winsys_helper.h"
++#ifdef PVR_WINSYS_DARWIN
++#include "darwin/pvr_darwin.h"
++#endif
+ #include "util/bitscan.h"
+ #include "util/macros.h"
+ #include "vk_alloc.h"
+@@ -139,6 +146,10 @@ pvr_drm_display_buffer_create(struct pvr_drm_winsys *drm_ws,
+                               uint64_t size,
+                               struct pvr_winsys_bo **const bo_out)
+ {
++#ifdef PVR_WINSYS_DARWIN
++   /* No display device and no dma-buf: scanout memory comes from the Metal side. */
++   return vk_error(NULL, VK_ERROR_FEATURE_NOT_PRESENT);
++#else
+    uint32_t handle;
+    VkResult result;
+    int ret;
+@@ -162,6 +173,7 @@ pvr_drm_display_buffer_create(struct pvr_drm_winsys *drm_ws,
+    assert((*bo_out)->size >= size);
+ 
+    return VK_SUCCESS;
++#endif
+ }
+ 
+ static uint64_t pvr_drm_get_alloc_flags(uint32_t ws_flags)
+@@ -231,6 +243,9 @@ pvr_drm_winsys_buffer_create_from_fd(struct pvr_winsys *ws,
+                                      int fd,
+                                      struct pvr_winsys_bo **const bo_out)
+ {
++#ifdef PVR_WINSYS_DARWIN
++   return vk_error(NULL, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++#else
+    struct pvr_drm_winsys *drm_ws = to_pvr_drm_winsys(ws);
+    struct pvr_drm_winsys_bo *drm_bo;
+    uint32_t handle;
+@@ -273,6 +288,7 @@ pvr_drm_winsys_buffer_create_from_fd(struct pvr_winsys *ws,
+    *bo_out = &drm_bo->base;
+ 
+    return VK_SUCCESS;
++#endif
+ }
+ 
+ void pvr_drm_winsys_buffer_destroy(struct pvr_winsys_bo *bo)
+@@ -285,6 +301,9 @@ void pvr_drm_winsys_buffer_destroy(struct pvr_winsys_bo *bo)
+ VkResult pvr_drm_winsys_buffer_get_fd(struct pvr_winsys_bo *bo,
+                                       int *const fd_out)
+ {
++#ifdef PVR_WINSYS_DARWIN
++   return vk_error(NULL, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++#else
+    struct pvr_drm_winsys_bo *drm_bo = to_pvr_drm_winsys_bo(bo);
+    struct pvr_drm_winsys *drm_ws = to_pvr_drm_winsys(bo->ws);
+    int ret;
+@@ -297,6 +316,7 @@ VkResult pvr_drm_winsys_buffer_get_fd(struct pvr_winsys_bo *bo,
+       return vk_error(NULL, VK_ERROR_OUT_OF_HOST_MEMORY);
+ 
+    return VK_SUCCESS;
++#endif
+ }
+ 
+ VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr)
+@@ -313,6 +333,9 @@ VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr)
+    if (result != VK_SUCCESS)
+       goto err_out;
+ 
++#ifdef PVR_WINSYS_DARWIN
++   result = pvr_darwin_bo_map(drm_ws->base.render_fd, addr, bo->size, offset, &map);
++#else
+    result = pvr_mmap(addr,
+                      bo->size,
+                      PROT_READ | PROT_WRITE,
+@@ -320,6 +343,7 @@ VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr)
+                      drm_ws->base.render_fd,
+                      offset,
+                      &map);
++#endif
+    if (result != VK_SUCCESS)
+       goto err_out;
+ 
+@@ -341,7 +365,21 @@ VkResult pvr_drm_winsys_buffer_unmap(struct pvr_winsys_bo *bo, bool reserve)
+ 
+    assert(bo->map);
+ 
++#ifdef PVR_WINSYS_DARWIN
++   {
++      struct pvr_drm_winsys *drm_ws = to_pvr_drm_winsys(bo->ws);
++      uint64_t offset = 0;
++
++      /* The mapping's memory type; it is the BO's for its whole lifetime. */
++      result = pvr_drm_get_bo_mmap_offset(drm_ws, drm_bo->handle, &offset);
++      if (result == VK_SUCCESS) {
++         result = pvr_darwin_bo_unmap(drm_ws->base.render_fd, offset, bo->map,
++                                      bo->size, reserve);
++      }
++   }
++#else
+    result = pvr_munmap(bo->map, bo->size, reserve);
++#endif
+ 
+    VG(VALGRIND_FREELIKE_BLOCK(bo->map, 0));
+ 
+diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c
+index b25c66f..c9e099e 100644
+--- a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c
++++ b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c
+@@ -27,7 +27,11 @@
+ #include <stdint.h>
+ #include <string.h>
+ #include <vulkan/vulkan.h>
++#ifdef PVR_WINSYS_DARWIN
++#include "drm-uapi/drm.h"
++#else
+ #include <xf86drm.h>
++#endif
+ 
+ #include "drm-uapi/pvr_drm.h"
+ #include "pvr_drm.h"
+@@ -37,7 +41,11 @@
+ #include "pvr_winsys_helper.h"
+ #include "util/macros.h"
+ #include "vk_alloc.h"
++#ifdef PVR_WINSYS_DARWIN
++#include "darwin/pvr_darwin.h"
++#else
+ #include "vk_drm_syncobj.h"
++#endif
+ #include "vk_log.h"
+ 
+ struct pvr_drm_winsys_compute_ctx {
+@@ -192,6 +200,18 @@ VkResult pvr_drm_winsys_compute_submit(
+       .jobs = DRM_PVR_OBJ_ARRAY(1, &job_args),
+    };
+ 
++#ifdef PVR_WINSYS_DARWIN
++   /* Version 1 of the user client has no kernel sync objects (NativePowerVRABI.h). */
++   const struct pvr_darwin_signal signal = { signal_sync, 0 };
++
++   return pvr_darwin_submit_jobs(drm_ws->base.render_fd,
++                                 &args,
++                                 &submit_info->wait,
++                                 1,
++                                 &signal,
++                                 1,
++                                 "compute");
++#else
+    if (submit_info->wait) {
+       struct vk_sync *sync = submit_info->wait;
+ 
+@@ -220,4 +240,5 @@ VkResult pvr_drm_winsys_compute_submit(
+                      &args,
+                      VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                      "Failed to submit compute job");
++#endif
+ }
+diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_null.c b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_null.c
+index 4c93d18..37b77bc 100644
+--- a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_null.c
++++ b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_null.c
+@@ -25,7 +25,11 @@
+ #include <stdint.h>
+ #include <unistd.h>
+ #include <vulkan/vulkan.h>
++#ifdef PVR_WINSYS_DARWIN
++#include "drm-uapi/drm.h"
++#else
+ #include <xf86drm.h>
++#endif
+ 
+ #include "drm-uapi/pvr_drm.h"
+ #include "pvr_drm.h"
+@@ -33,7 +37,11 @@
+ #include "pvr_winsys.h"
+ #include "util/libsync.h"
+ #include "vk_alloc.h"
++#ifdef PVR_WINSYS_DARWIN
++#include "darwin/pvr_darwin.h"
++#else
+ #include "vk_drm_syncobj.h"
++#endif
+ #include "vk_log.h"
+ #include "vk_sync.h"
+ #include "vk_util.h"
+@@ -43,6 +51,9 @@ VkResult pvr_drm_winsys_null_job_submit(struct pvr_winsys *ws,
+                                         uint32_t wait_count,
+                                         struct vk_sync_signal *signal_sync)
+ {
++#ifdef PVR_WINSYS_DARWIN
++   return pvr_darwin_null_job_submit(waits, wait_count, signal_sync);
++#else
+    const struct pvr_drm_winsys *drm_ws = to_pvr_drm_winsys(ws);
+    uint32_t tmp_syncobj;
+    VkResult result;
+@@ -122,4 +133,5 @@ VkResult pvr_drm_winsys_null_job_submit(struct pvr_winsys *ws,
+ out_destroy_tmp_syncobj:
+    drmSyncobjDestroy(drm_ws->base.render_fd, tmp_syncobj);
+    return result;
++#endif
+ }
+diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_render.c b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_render.c
+index 321bdbc..68ffd23 100644
+--- a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_render.c
++++ b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_render.c
+@@ -27,7 +27,11 @@
+ #include <stdint.h>
+ #include <string.h>
+ #include <vulkan/vulkan.h>
++#ifdef PVR_WINSYS_DARWIN
++#include "drm-uapi/drm.h"
++#else
+ #include <xf86drm.h>
++#endif
+ 
+ #include "drm-uapi/pvr_drm.h"
+ #include "pvr_drm.h"
+@@ -38,7 +42,11 @@
+ #include "pvr_winsys_helper.h"
+ #include "util/macros.h"
+ #include "vk_alloc.h"
++#ifdef PVR_WINSYS_DARWIN
++#include "darwin/pvr_darwin.h"
++#else
+ #include "vk_drm_syncobj.h"
++#endif
+ #include "vk_log.h"
+ #include "vk_util.h"
+ #include "vk_sync.h"
+@@ -213,7 +221,7 @@ VkResult pvr_drm_winsys_render_ctx_create(
+    };
+ 
+    struct pvr_drm_winsys_render_ctx *drm_ctx;
+-   uint32_t geom_to_pr_syncobj;
++   uint32_t geom_to_pr_syncobj = 0;
+    VkResult result;
+    int ret;
+ 
+@@ -226,7 +234,12 @@ VkResult pvr_drm_winsys_render_ctx_create(
+       goto err_out;
+    }
+ 
++#ifdef PVR_WINSYS_DARWIN
++   /* The user client orders a submission's partial render after its geometry job itself (NativePowerVRABI.h). */
++   ret = 0;
++#else
+    ret = drmSyncobjCreate(ws->render_fd, 0, &geom_to_pr_syncobj);
++#endif
+    if (ret < 0) {
+       result = vk_errorf(NULL,
+                          VK_ERROR_OUT_OF_HOST_MEMORY,
+@@ -261,7 +274,11 @@ VkResult pvr_drm_winsys_render_ctx_create(
+    return VK_SUCCESS;
+ 
+ err_destroy_syncobj:
++#ifdef PVR_WINSYS_DARWIN
++   ret = 0;
++#else
+    ret = drmSyncobjDestroy(ws->render_fd, geom_to_pr_syncobj);
++#endif
+    if (ret < 0) {
+       mesa_loge("DRM_IOCTL_SYNCOBJ_DESTROY failed: %s - leaking it",
+                 strerror(errno));
+@@ -284,7 +301,11 @@ void pvr_drm_winsys_render_ctx_destroy(struct pvr_winsys_render_ctx *ctx)
+    };
+    int ret;
+ 
++#ifdef PVR_WINSYS_DARWIN
++   ret = 0;
++#else
+    ret = drmSyncobjDestroy(ctx->ws->render_fd, drm_ctx->geom_to_pr_syncobj);
++#endif
+    if (ret < 0) {
+       mesa_loge("DRM_IOCTL_SYNCOBJ_DESTROY failed: %s - leaking it",
+                 strerror(errno));
+@@ -485,7 +506,9 @@ VkResult pvr_drm_winsys_render_submit(
+ 
+    struct drm_pvr_sync_op geom_sync_ops[2], pr_sync_ops[1], frag_sync_ops[3];
+    unsigned num_geom_syncs = 0, num_pr_syncs = 0, num_frag_syncs = 0;
++#ifndef PVR_WINSYS_DARWIN
+    uint32_t geom_to_pr_syncobj;
++#endif
+ 
+    struct drm_pvr_job jobs_args[3] = {
+       [0] = {
+@@ -519,6 +542,7 @@ VkResult pvr_drm_winsys_render_submit(
+       .jobs = DRM_PVR_OBJ_ARRAY(2, jobs_args),
+    };
+ 
++#ifndef PVR_WINSYS_DARWIN
+    /* Geom syncs */
+ 
+    if (submit_info->geometry.wait) {
+@@ -565,6 +589,7 @@ VkResult pvr_drm_winsys_render_submit(
+                DRM_PVR_SYNC_OP_FLAG_HANDLE_TYPE_SYNCOBJ,
+       .value = 0,
+    };
++#endif
+ 
+    /* Frag job */
+ 
+@@ -592,6 +617,7 @@ VkResult pvr_drm_winsys_render_submit(
+        * they aren't needed.
+        */
+ 
++#ifndef PVR_WINSYS_DARWIN
+       if (submit_info->fragment.wait) {
+          struct vk_sync *sync = submit_info->fragment.wait;
+ 
+@@ -613,6 +639,7 @@ VkResult pvr_drm_winsys_render_submit(
+             .value = 0,
+          };
+       }
++#endif
+    }
+ 
+    jobs_args[0].sync_ops.count = num_geom_syncs;
+@@ -621,10 +648,31 @@ VkResult pvr_drm_winsys_render_submit(
+    if (submit_info->has_fragment_job)
+       jobs_args[2].sync_ops.count = num_frag_syncs;
+ 
++#ifdef PVR_WINSYS_DARWIN
++   /* Version 1 of the user client has no kernel sync objects (NativePowerVRABI.h): the geometry job's fence is
++    * jobs_args[0]'s, the fragment job's jobs_args[2]'s. */
++   struct vk_sync *const waits[2] = {
++      submit_info->geometry.wait,
++      submit_info->has_fragment_job ? submit_info->fragment.wait : NULL,
++   };
++   const struct pvr_darwin_signal signals[2] = {
++      { signal_sync_geom, 0 },
++      { submit_info->has_fragment_job ? signal_sync_frag : NULL, 2 },
++   };
++
++   return pvr_darwin_submit_jobs(drm_ws->base.render_fd,
++                                 &args,
++                                 waits,
++                                 ARRAY_SIZE(waits),
++                                 signals,
++                                 ARRAY_SIZE(signals),
++                                 "render");
++#else
+    /* Returns VK_ERROR_OUT_OF_DEVICE_MEMORY to match pvrsrv. */
+    return pvr_ioctlf(drm_ws->base.render_fd,
+                      DRM_IOCTL_PVR_SUBMIT_JOBS,
+                      &args,
+                      VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                      "Failed to submit render job");
++#endif
+ }
+diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_transfer.c b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_transfer.c
+index 9ae0f64..854a470 100644
+--- a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_transfer.c
++++ b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_transfer.c
+@@ -25,7 +25,11 @@
+ #include <stddef.h>
+ #include <stdint.h>
+ #include <vulkan/vulkan.h>
++#ifdef PVR_WINSYS_DARWIN
++#include "drm-uapi/drm.h"
++#else
+ #include <xf86drm.h>
++#endif
+ 
+ #include "drm-uapi/pvr_drm.h"
+ #include "pvr_drm.h"
+@@ -35,7 +39,11 @@
+ #include "pvr_winsys_helper.h"
+ #include "util/macros.h"
+ #include "vk_alloc.h"
++#ifdef PVR_WINSYS_DARWIN
++#include "darwin/pvr_darwin.h"
++#else
+ #include "vk_drm_syncobj.h"
++#endif
+ #include "vk_log.h"
+ 
+ struct pvr_drm_winsys_transfer_ctx {
+@@ -149,6 +157,18 @@ VkResult pvr_drm_winsys_transfer_submit(
+ 
+    assert(submit_info->cmd_count == 1);
+ 
++#ifdef PVR_WINSYS_DARWIN
++   /* Version 1 of the user client has no kernel sync objects (NativePowerVRABI.h). */
++   const struct pvr_darwin_signal signal = { signal_sync, 0 };
++
++   return pvr_darwin_submit_jobs(drm_ws->base.render_fd,
++                                 &args,
++                                 &submit_info->wait,
++                                 1,
++                                 &signal,
++                                 1,
++                                 "transfer");
++#else
+    if (submit_info->wait) {
+       struct vk_sync *sync = submit_info->wait;
+ 
+@@ -177,4 +197,5 @@ VkResult pvr_drm_winsys_transfer_submit(
+                      &args,
+                      VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                      "Failed to submit transfer job");
++#endif
+ }
+diff --git a/src/imagination/vulkan/winsys/pvr_winsys.c b/src/imagination/vulkan/winsys/pvr_winsys.c
+index 64c5c76..5179f05 100644
+--- a/src/imagination/vulkan/winsys/pvr_winsys.c
++++ b/src/imagination/vulkan/winsys/pvr_winsys.c
+@@ -24,12 +24,47 @@
+ #include <fcntl.h>
+ #include <stdbool.h>
+ #include <vulkan/vulkan.h>
++#ifndef PVR_WINSYS_DARWIN
+ #include <xf86drm.h>
++#endif
+ 
+ #include "powervr/pvr_drm_public.h"
+ #include "pvr_winsys.h"
+ #include "vk_log.h"
+ 
++#if defined(PVR_WINSYS_DARWIN)
++#   include "darwin/pvr_darwin.h"
++
++/* The powervr winsys on the NativePowerVR user client: render_fd is the connection, there is no display device. */
++void pvr_winsys_destroy(struct pvr_winsys *ws)
++{
++   const int render_fd = ws->render_fd;
++
++   ws->ops->destroy(ws);
++   pvr_darwin_close(render_fd);
++}
++
++VkResult pvr_winsys_create(const char *render_path,
++                           const char *display_path,
++                           bool keep_display_master,
++                           const VkAllocationCallbacks *alloc,
++                           struct pvr_winsys **const ws_out)
++{
++   VkResult result;
++   int render_fd;
++
++   result = pvr_darwin_open(&render_fd);
++   if (result != VK_SUCCESS)
++      return result;
++
++   result = pvr_drm_winsys_create(render_fd, -1, alloc, ws_out);
++   if (result != VK_SUCCESS)
++      pvr_darwin_close(render_fd);
++
++   return result;
++}
++#else
++
+ #if defined(PVR_SUPPORT_SERVICES_DRIVER)
+ #   include "pvrsrvkm/pvr_srv_public.h"
+ #endif
+@@ -125,3 +160,4 @@ err_close_render_fd:
+ err_out:
+    return result;
+ }
++#endif /* PVR_WINSYS_DARWIN */
+diff --git a/src/imagination/vulkan/winsys/pvr_winsys_helper.c b/src/imagination/vulkan/winsys/pvr_winsys_helper.c
+index 5dcd402..2e0a21a 100644
+--- a/src/imagination/vulkan/winsys/pvr_winsys_helper.c
++++ b/src/imagination/vulkan/winsys/pvr_winsys_helper.c
+@@ -25,7 +25,11 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <vulkan/vulkan.h>
++#ifdef PVR_WINSYS_DARWIN
++#include "drm-uapi/drm.h"
++#else
+ #include <xf86drm.h>
++#endif
+ 
+ #include "pco/pco_data.h"
+ #include "pco_uscgen_programs.h"
+diff --git a/src/imagination/vulkan/winsys/pvr_winsys_helper.h b/src/imagination/vulkan/winsys/pvr_winsys_helper.h
+index d975be1..c1a95f5 100644
+--- a/src/imagination/vulkan/winsys/pvr_winsys_helper.h
++++ b/src/imagination/vulkan/winsys/pvr_winsys_helper.h
+@@ -31,7 +31,11 @@
+ #include <string.h>
+ #include <sys/mman.h>
+ #include <sys/types.h>
++#ifdef PVR_WINSYS_DARWIN
++#include "drm-uapi/drm.h"
++#else
+ #include <xf86drm.h>
++#endif
+ 
+ #include "pvr_types.h"
+ #include "vk_log.h"
+@@ -144,12 +148,20 @@ pvr_munmap(void *const addr, const size_t len, bool reserve)
+    return VK_SUCCESS;
+ }
+ 
++#ifdef PVR_WINSYS_DARWIN
++/* winsys/darwin/pvr_darwin.c: the request as a NativePowerVR external method. */
++int pvr_darwin_ioctl(int fd, unsigned long request, void *arg);
++#   define pvr_winsys_ioctl pvr_darwin_ioctl
++#else
++#   define pvr_winsys_ioctl drmIoctl
++#endif
++
+ #define pvr_ioctlf(fd, request, arg, error, fmt, args...) \
+    ({                                                     \
+       VkResult _result = VK_SUCCESS;                      \
+       int _ret;                                           \
+                                                           \
+-      _ret = drmIoctl(fd, request, arg);                  \
++      _ret = pvr_winsys_ioctl(fd, request, arg);          \
+       if (_ret) {                                         \
+          _ret = errno;                                    \
+          _result = vk_errorf(NULL,                        \

@@ -272,9 +272,9 @@ bool boot(void)
   auto *tc = static_cast<rogue_fwif_tracebuf *>(traceCtl.cpu());
   tc->tracebuf_size_in_dwords = ROGUE_FW_TRACE_BUF_DEFAULT_SIZE_IN_DWORDS;
   tc->tracebuf_flags = 0;
-  // Every group but MTS for the bring-up: the MTS group logs a background/interrupt task pair about 700 times a second
-  // here, which overwrites the 12000-word ring within seconds and hides the kicks.
-  tc->log_type = ROGUE_FWIF_LOG_TYPE_TRACE | (ROGUE_FWIF_LOG_TYPE_GROUP_MASK & ~ROGUE_FWIF_LOG_TYPE_GROUP_MTS);
+  // Every group for the bring-up. The MTS group logs a background/interrupt task pair about 700 times a second here, so
+  // the 12000-word ring keeps about 5 s: dumpFirmware() reads the whole ring right after the tests.
+  tc->log_type = ROGUE_FWIF_LOG_TYPE_TRACE | ROGUE_FWIF_LOG_TYPE_GROUP_MASK;
   for (uint32_t t = 0; t < MAX_THREAD_NUM; t++) {
     tc->tracebuf[t].trace_buffer_fw_addr = trace[t].fw();
     tc->tracebuf[t].trace_buffer = static_cast<u32 *>(trace[t].cpu());
@@ -682,6 +682,10 @@ void dumpFirmware(const char *when, uint32_t from)
         unsigned(gSysdata->pow_state), gSysdata->fw_faults, gHwrInfo->hwr_counter, gFwccbCtl->read_offset, gFwccbCtl->write_offset,
         gTc->tracebuf[0].assert_buf.path, gTc->tracebuf[0].assert_buf.line_num, gTc->tracebuf[0].assert_buf.info,
         gSysdata->fault_info[0].fault_buf.path, gSysdata->fault_info[0].fault_buf.line_num);
+  IOLog("powervr: %s: MTS schedule_enable %x bgctx %x intctx %x assoc bg %x int %x counted %llx gpu_int %x event %llx\n", when,
+        rd32(ROGUE_CR_MTS_SCHEDULE_ENABLE), rd32(ROGUE_CR_MTS_BGCTX), rd32(ROGUE_CR_MTS_INTCTX), rd32(ROGUE_CR_MTS_BGCTX_THREAD0_DM_ASSOC),
+        rd32(ROGUE_CR_MTS_INTCTX_THREAD0_DM_ASSOC), rd64(ROGUE_CR_MTS_BGCTX_COUNTED_SCHEDULE), rd32(ROGUE_CR_MTS_GPU_INT_STATUS),
+        rd64(ROGUE_CR_EVENT_STATUS));
   for (uint32_t i = gFwccbCtl->read_offset; i != gFwccbCtl->write_offset; i = (i + 1) & gFwccbCtl->wrap_mask) {
     clean(&gFwccb[i], sizeof(gFwccb[i]));
     const uint32_t *raw = reinterpret_cast<const uint32_t *>(&gFwccb[i]);
