@@ -232,6 +232,8 @@ kernel_args = [
   "offline-hid-home=1",
   # The touch panel (BU21025) and the Home and volume up keys (package/A04BR3Input.cpp, ported from the iOS 16 bring-up of
   # this tablet) feeding NativeHidInput.
+  # GPU bring-up step 1 (package/A04BR3Gpu.cpp): power the MFG domains and print the Rogue BVNC.
+  "a04br3-gpu=1",
   "a04br3-input=1",
   # NativeHidInput registers its touch sink and digitizer collection only with this (UniXNU-tb128fu, UniXNU-qemu).
   "sheng-touch-hid=1",

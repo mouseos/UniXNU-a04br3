@@ -22,6 +22,7 @@
 
 extern "C" {
 void a04br3_autoreset_init(void);
+void a04br3_gpu_init(void);
 void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
 extern volatile uint32_t native_keyevents_stage;
@@ -145,6 +146,7 @@ extern "C" void unixnu_board_init(void)
 {
   a04br3_autoreset_init();
   a04br3_proclog_init();
+  a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)
   unsigned events = 0;
   if (PE_parse_boot_argn("offline-key-events", &events, sizeof(events)) && events == 1) {
     native_keystore_probe();
