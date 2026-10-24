@@ -67,6 +67,11 @@ archives = [
   # archive with KeyStoreProbe.cpp (offline-key-events=1, sheng-aks=1).
   "build-arm-driver.py NativeKeyStoreEvents",
   "build-a04br3-board.py",
+  # The PowerVR accelerator for the original Metal discovery (package/powervr/NativePowerVRAccelerator.cpp): a subclass of the
+  # original IOAcceleratorES of IOGPUFamily, so its static initializer is staged (UniXNU build-native-adreno-accelerator.py with
+  # --source) and added to the board archive, where package/powervr/NativePowerVRMetal.cpp runs it after loading IOGPUFamily
+  # (kernel argument a04br3-gpu-metal=1). Without that argument the class is linked and never registered.
+  "build-native-adreno-accelerator.py --source kits/a04br3/powervr/NativePowerVRAccelerator.cpp --into build/a04br3-board/libA04BR3Board.a",
   # The original-PMGR bridge (CONFIG_XNU_SHENG_PMGR, kernel argument sheng-pmgr=2): AMFI requires a published PMGR
   # ("AMFI: No PMGR?" without it). Generic and hardware-free; from UniXNU-tb128fu/UniXNU-sheng.
   "build-platform-power.py",

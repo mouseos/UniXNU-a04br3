@@ -86,6 +86,10 @@ extern const uint8_t native_powervr_fw[];
 extern const uint32_t native_powervr_fw_size;
 extern volatile uint64_t a04br3_gpu_bvnc;
 int native_powervr_publish(void);
+// The display hand-off of UniXNU drivers/NativeMobileDisplay/NativeGOPPresenter.cpp (the legacy display archive,
+// build-a04br3-legacy-display.py). Weak: a kernel linked with the first-pass display stub has neither.
+IOReturn native_gop_handoff_call(uint32_t op, task_t task, const void *in, size_t inSize, void *out, size_t outSize) __attribute__((weak));
+IOMemoryDescriptor *native_gop_handoff_memory(void) __attribute__((weak));
 }
 
 #ifndef ENOENT
@@ -527,6 +531,10 @@ struct native_powervr_bo {
   native_powervr_sg *sg;          // physical runs of the whole BO
   uint32_t nents, sgCapacity;
   NativePowerVRBoView *view;      // created at the first user mapping (under the owning connection's lock)
+  // A host import (NativePowerVRMethodImportHostMemory): the caller's own pages, pinned (prepare()) until the BO goes. Such a BO
+  // has no md, no kernel view (cpu is null, so the job layer refuses it as a firmware object) and no user view.
+  IOMemoryDescriptor *host;
+  bool hostPrepared, readOnly;
 };
 
 namespace {
@@ -534,6 +542,12 @@ void boDestroy(native_powervr_bo *bo)
 {
   if (bo->view) bo->view->release();   // the pages live on while user mappings of the view do
   if (bo->md) bo->md->release();
+  if (bo->host) {
+    // complete() unwires the pages; a failure leaves them wired, which only leaks them.
+    if (bo->hostPrepared && bo->host->complete() != kIOReturnSuccess)
+      IOLog("powervr: host import of 0x%llx bytes not released\n", static_cast<unsigned long long>(bo->size));
+    bo->host->release();
+  }
   kfreeBytes(bo->sg, sizeof(native_powervr_sg) * bo->sgCapacity);
   kfreeBytes(bo, sizeof(*bo));
 }
@@ -579,6 +593,63 @@ int boCreate(uint64_t size, uint64_t flags, native_powervr_bo **out)
       flush_dcache(static_cast<vm_offset_t>(bo->sg[i].phys + done), static_cast<unsigned>(n), 1);
     }
   __asm__ volatile("dsb sy" ::: "memory");
+  *out = bo;
+  return 0;
+}
+
+// The pages of a host import, as UniXNU's NativeAdreno imports them (drivers/NativeAdreno/NativeAdrenoMemory.cpp importRange(),
+// hardware-proven with IOSurfaces and the scanout mapping): a persistent memory entry first, so the owner may unmap its range while
+// the GPU still holds the import, and a plain one where no memory entry can be made of the range.
+IOMemoryDescriptor *hostRange(task_t task, uint64_t address, uint64_t size, IODirection direction)
+{
+  const IOOptionBits options = static_cast<IOOptionBits>(direction) | static_cast<IOOptionBits>(kIOMemoryMapperNone);
+  IOMemoryDescriptor *range = IOMemoryDescriptor::withAddressRange(address, size, options | kIOMemoryPersistent, task);
+  return range ? range : IOMemoryDescriptor::withAddressRange(address, size, options, task);
+}
+// A BO over [address, address + size) of task, pinned. No cache maintenance: the owner cleans and invalidates its own mapping
+// around GPU use (the Metal frontend's surface flush), as with NativeAdreno's imports.
+int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, native_powervr_bo **out)
+{
+  auto *bo = static_cast<native_powervr_bo *>(kzallocBytes(sizeof(native_powervr_bo)));
+  if (!bo) return -ENOMEM;
+  bo->refs = 1;
+  bo->size = size;
+  bo->flags = flags;
+  bo->host = hostRange(task, address, size, kIODirectionInOut);
+  if (!bo->host) { boDestroy(bo); return -ENOMEM; }
+  IOReturn status = bo->host->prepare();
+  if (status == KERN_PROTECTION_FAILURE) {
+    // Read-only memory of the owner (a mapped file, constant data): pinned for reading. Metal's no-copy buffers over such memory
+    // are only read by shaders; this MMU has no read-only mapping, so the GPU must not be told to write it (reported to the caller).
+    bo->host->release();
+    bo->host = hostRange(task, address, size, kIODirectionOut);
+    if (!bo->host) { boDestroy(bo); return -ENOMEM; }
+    status = bo->host->prepare();
+    bo->readOnly = status == kIOReturnSuccess;
+  }
+  if (status != kIOReturnSuccess) { boDestroy(bo); return -EFAULT; }
+  bo->hostPrepared = true;
+  if (bo->host->getLength() != size) { boDestroy(bo); return -EINVAL; }
+  const uint64_t pages = size / kDevicePageSize;
+  bo->sgCapacity = pages > 0xffffffffULL ? 0 : static_cast<uint32_t>(pages);
+  bo->sg = static_cast<native_powervr_sg *>(kzallocBytes(sizeof(native_powervr_sg) * bo->sgCapacity));
+  if (!bo->sg) { boDestroy(bo); return -ENOMEM; }
+  for (uint64_t offset = 0; offset < size;) {
+    IOByteCount length = 0;
+    const uint64_t phys = bo->host->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
+    if (!phys || !length || (phys & (kDevicePageSize - 1))) { boDestroy(bo); return -EFAULT; }
+    if (length > size - offset) length = size - offset;
+    length &= kDevicePageMask;
+    // The GPU's bus is 32 bits wide (PHYS_BUS_WIDTH 32): a page above 4 GiB cannot be mapped.
+    if (!length || phys + length > (1ULL << 32)) { boDestroy(bo); return -ENOTTY; }
+    if (bo->nents && bo->sg[bo->nents - 1].phys + bo->sg[bo->nents - 1].size == phys) {
+      bo->sg[bo->nents - 1].size += length;
+    } else {
+      if (bo->nents == bo->sgCapacity) { boDestroy(bo); return -ENOMEM; }
+      bo->sg[bo->nents++] = {phys, length};
+    }
+    offset += length;
+  }
   *out = bo;
   return 0;
 }
@@ -752,13 +823,18 @@ class NativePowerVRUserClient : public IOUserClient {
   OSDeclareDefaultStructors(NativePowerVRUserClient)
   IOLock *lock_;
   bool closing_;
+  // A connection of the Metal plugin that serves only the display hand-off (NativePowerVRMetal.cpp, open type
+  // NativePowerVRMetalHandoffOpenType): no handles, no GPU work, the NGP methods and the scanout memory type only.
+  bool handoffOnly_;
   native_powervr_jobs_file *jobs_;
   HandleTable bos_, vmCtxs_, ctxs_, freeLists_, hwrts_;
 
   IOReturn run(uint32_t method, const void *input, uint32_t inputSize, void *output, uint32_t outputSize);
+  IOReturn handoff(uint32_t method, const void *input, uint32_t inputSize, void *output, uint32_t outputSize);
   int call(uint32_t method, void *args, void *reply);
   int devQuery(drm_pvr_ioctl_dev_query_args *args);
   int createBo(drm_pvr_ioctl_create_bo_args *args);
+  int importHost(NativePowerVRAbiImportHost *args);
   int getBoMmapOffset(drm_pvr_ioctl_get_bo_mmap_offset_args *args);
   int gemClose(const drm_gem_close *args);
   int createVmContext(drm_pvr_ioctl_create_vm_context_args *args);
@@ -775,7 +851,7 @@ class NativePowerVRUserClient : public IOUserClient {
   void teardown();
 public:
   using IOUserClient::clientMemoryForType;
-  bool open();
+  bool open(bool handoffOnly);
   IOReturn clientClose() APPLE_KEXT_OVERRIDE;
   void free() APPLE_KEXT_OVERRIDE;
   IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
@@ -798,10 +874,12 @@ NativePowerVRGpu *gService;
 }
 
 // pvr_drm_driver_open()
-bool NativePowerVRUserClient::open()
+bool NativePowerVRUserClient::open(bool handoffOnly)
 {
   lock_ = IOLockAlloc();
   if (!lock_) return false;
+  handoffOnly_ = handoffOnly;
+  if (handoffOnly) return true;
   if (native_powervr_jobs_file_create) {
     jobs_ = native_powervr_jobs_file_create();
     if (!jobs_) return false;
@@ -809,30 +887,50 @@ bool NativePowerVRUserClient::open()
   return true;
 }
 
-IOReturn NativePowerVRGpu::newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
-                                         IOUserClient **handler)
+// One connection on provider: this service's own (open type 0), or the Metal accelerator's (NativePowerVRMetal.cpp), which
+// attaches its connections to itself so that the sandbox grant of the accelerator covers them.
+static IOReturn newConnection(IOService *provider, task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
+                              bool handoffOnly, IOUserClient **handler)
 {
   if (!handler) return kIOReturnBadArgument;
   *handler = nullptr;
-  if (type != 0) return kIOReturnUnsupported;   // NativePowerVRABI.h: open type 0
   NativePowerVRUserClient *client = new NativePowerVRUserClient;
   if (!client) return kIOReturnNoMemory;
-  if (!client->initWithTask(owningTask, securityID, type, properties) || !client->open()) {
+  if (!client->initWithTask(owningTask, securityID, type, properties) || !client->open(handoffOnly)) {
     client->release();
     return kIOReturnNoMemory;
   }
-  if (!client->attach(this)) {
+  if (!client->attach(provider)) {
     client->release();
     return kIOReturnError;
   }
-  if (!client->start(this)) {
-    client->detach(this);
+  if (!client->start(provider)) {
+    client->detach(provider);
     client->release();
     return kIOReturnError;
   }
   *handler = client;
   return kIOReturnSuccess;
 }
+
+IOReturn NativePowerVRGpu::newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
+                                         IOUserClient **handler)
+{
+  if (handler) *handler = nullptr;
+  if (type != 0) return kIOReturnUnsupported;   // NativePowerVRABI.h: open type 0
+  return newConnection(this, owningTask, securityID, type, properties, false, handler);
+}
+
+// For the Metal accelerator (NativePowerVRMetal.cpp): a GPU connection, or one that serves only the display hand-off. Refused
+// until this service is published (the firmware runs).
+extern "C" IOReturn native_powervr_new_connection(IOService *provider, task_t owningTask, void *securityID, UInt32 type,
+                                                  OSDictionary *properties, bool handoffOnly, IOUserClient **handler)
+{
+  if (handler) *handler = nullptr;
+  if (!gService || !provider) return kIOReturnNotReady;
+  return newConnection(provider, owningTask, securityID, type, properties, handoffOnly, handler);
+}
+extern "C" bool native_powervr_published(void) { return gService != nullptr; }
 
 // pvr_drm_driver_postclose(), after drm_gem_release(): the contexts first, so that no job runs on what is freed after them.
 void NativePowerVRUserClient::teardown()
@@ -879,6 +977,16 @@ IOReturn NativePowerVRUserClient::clientMemoryForType(UInt32 type, IOOptionBits 
   if (!options || !memory) return kIOReturnBadArgument;
   *memory = nullptr;
   if (!lock_) return kIOReturnNotReady;
+  if (handoffOnly_) {
+    // The scanout, writable, for the GPU copy of the hand-off (as NativeAdreno's NativeAdrenoScanoutType): device memory, never
+    // cached by the CPU. Only in GPU hand-off mode (sheng-fb-gpu=1) does the presenter hand it out.
+    if (type != NativePowerVRMetalScanoutType) return kIOReturnBadArgument;
+    IOMemoryDescriptor *scanout = native_gop_handoff_memory ? native_gop_handoff_memory() : nullptr;
+    if (!scanout) return kIOReturnNotReady;
+    *memory = scanout;                             // already retained for the caller
+    *options = kIOMapAnywhere | kIOMapInhibitCache;
+    return kIOReturnSuccess;
+  }
   IOReturn status = kIOReturnSuccess;
   IOLockLock(lock_);
   auto *bo = closing_ ? nullptr : static_cast<native_powervr_bo *>(handleLookup(bos_, type));
@@ -923,8 +1031,22 @@ IOReturn NativePowerVRUserClient::externalMethod(uint32_t selector, IOExternalMe
   return run(method, inputSize ? input : nullptr, inputSize, arguments->structureOutput, arguments->structureOutput ? arguments->structureOutputSize : 0);
 }
 
+// The display hand-off (UniXNU drivers/NativeMobileDisplay/NativeGOPPresenter.cpp handoffCall()): methods
+// NativePowerVRMetalHandoffBase + NGP_METHOD_* forwarded unchanged; a wait sleeps, so no connection lock is held.
+IOReturn NativePowerVRUserClient::handoff(uint32_t method, const void *input, uint32_t inputSize, void *output, uint32_t outputSize)
+{
+  if (method < NativePowerVRMetalHandoffBase || method > NativePowerVRMetalHandoffLast) return kIOReturnUnsupported;
+  if (!native_gop_handoff_call) return kIOReturnNotReady;   // no display hand-off linked
+  IOLockLock(lock_);
+  const bool closing = closing_;
+  IOLockUnlock(lock_);
+  if (closing) return kIOReturnNotReady;
+  return native_gop_handoff_call(method - NativePowerVRMetalHandoffBase, current_task(), input, inputSize, output, outputSize);
+}
+
 IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32_t inputSize, void *output, uint32_t outputSize)
 {
+  if (lock_ && handoffOnly_) return handoff(method, input, inputSize, output, outputSize);
   // The records of NativePowerVRABI.h: in/out methods take and return the same struct, input-only methods return nothing.
   struct Shape { uint32_t method, input, output; };
   static const Shape kShapes[] = {
@@ -945,6 +1067,7 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
     {NativePowerVRMethodGemClose, sizeof(drm_gem_close), 0},
     {NativePowerVRMethodWaitFence, sizeof(NativePowerVRAbiWaitFence), 0},
     {NativePowerVRMethodGetParams, 0, sizeof(NativePowerVRAbiParams)},
+    {NativePowerVRMethodImportHostMemory, sizeof(NativePowerVRAbiImportHost), sizeof(NativePowerVRAbiImportHost)},
   };
   const Shape *shape = nullptr;
   for (const Shape &s : kShapes) if (s.method == method) shape = &s;
@@ -977,6 +1100,7 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
   // The largest record is drm_pvr_ioctl_create_hwrt_dataset_args (136 bytes).
   uint64_t args[136 / 8] = {};
   static_assert(sizeof(drm_pvr_ioctl_create_hwrt_dataset_args) <= sizeof(args), "argument buffer");
+  static_assert(sizeof(NativePowerVRAbiImportHost) <= sizeof(args), "argument buffer");
   memcpy(args, input, shape->input);
   NativePowerVRAbiSubmitReply reply = {};
   IOLockLock(lock_);
@@ -1008,6 +1132,7 @@ int NativePowerVRUserClient::call(uint32_t method, void *args, void *reply)
   case NativePowerVRMethodSubmitJobs:
     return submitJobs(static_cast<drm_pvr_ioctl_submit_jobs_args *>(args), static_cast<NativePowerVRAbiSubmitReply *>(reply));
   case NativePowerVRMethodGemClose: return gemClose(static_cast<drm_gem_close *>(args));
+  case NativePowerVRMethodImportHostMemory: return importHost(static_cast<NativePowerVRAbiImportHost *>(args));
   default: return -ENOTTY;
   }
 }
@@ -1156,6 +1281,24 @@ int NativePowerVRUserClient::createBo(drm_pvr_ioctl_create_bo_args *args)
   err = handleInsert(bos_, bo, &handle);
   if (err) { native_powervr_bo_put(bo); return err; }
   args->handle = handle;
+  return 0;
+}
+
+// NativePowerVRMethodImportHostMemory (NativePowerVRABI.h): a BO over pages of the calling task; the handle is a BO handle.
+int NativePowerVRUserClient::importHost(NativePowerVRAbiImportHost *args)
+{
+  if (args->handle || args->read_only || !args->address || !args->size || ((args->address | args->size) & (kDevicePageSize - 1)) ||
+      args->address + args->size < args->address || args->size > SIZE_MAX ||
+      (args->flags & ~static_cast<uint64_t>(DRM_PVR_BO_BYPASS_DEVICE_CACHE)))
+    return -EINVAL;
+  native_powervr_bo *bo = nullptr;
+  int err = boImportHost(current_task(), args->address, args->size, args->flags, &bo);
+  if (err) return err;
+  uint32_t handle = 0;
+  err = handleInsert(bos_, bo, &handle);
+  if (err) { native_powervr_bo_put(bo); return err; }
+  args->handle = handle;
+  args->read_only = bo->readOnly ? 1 : 0;
   return 0;
 }
 

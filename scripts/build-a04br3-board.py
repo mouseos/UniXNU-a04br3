@@ -146,6 +146,11 @@ objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRQueue.cpp
 # queries). Its classes derive from kernel classes, so the kernel's own C++ start-up registers them (the archive is
 # force-loaded); native_powervr_publish() publishes the service once the firmware runs.
 objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRGpu.cpp', powervr_flags))
+# The Metal accelerator's publication and connections (NativePowerVRMetal.cpp, a04br3-gpu-metal=1). The accelerator class itself
+# (NativePowerVRAccelerator.cpp) derives from the original IOAcceleratorES of IOGPUFamily, so it is built staged by UniXNU
+# scripts/build-native-adreno-accelerator.py --source kits/a04br3/powervr/NativePowerVRAccelerator.cpp --into <this archive>
+# (board.toml, after this script); without it NativePowerVRMetal.cpp publishes nothing (weak references).
+objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRMetal.cpp', powervr_flags))
 # The job layer (NativePowerVRJobs.cpp: native_powervr_jobs.h, Linux pvr_queue.c/pvr_job.c without drm_sched) includes
 # the headers of the unchanged kernel/ sources it drives and the pvr_device stand-in (stub/).
 objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRJobs.cpp',

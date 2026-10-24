@@ -57,6 +57,10 @@ enum {
     NativePowerVRMethodWaitFence = 0x41,         /* in NativePowerVRAbiWaitFence */
     /* Version handshake, the first call on a connection (NativeAdrenoMethodQuery). */
     NativePowerVRMethodGetParams = 0x42,         /* out NativePowerVRAbiParams */
+    /* Optional (VK_EXT_external_memory_host): a BO over pages of the calling task, as the Turnip Darwin KMD's
+     * NativeAdrenoMethodBoImport. A kernel without it answers kIOReturnUnsupported (unknown method); one with it answers
+     * kIOReturnBadArgument to a call without input, which is how the user side probes for it (ABI version stays 1). */
+    NativePowerVRMethodImportHostMemory = 0x43,  /* in/out NativePowerVRAbiImportHost */
 
     NativePowerVRAbiMaxJobs = 8                  /* jobs per SubmitJobs call */
 };
@@ -100,6 +104,21 @@ struct NativePowerVRAbiParams {
     uint32_t max_jobs;                           /* NativePowerVRAbiMaxJobs */
 };
 
+/* ImportHostMemory. address and size are 4 KiB aligned and nonzero; the range belongs to the calling task (an IOSurface's
+ * pages, a Metal no-copy buffer, a mapping of the scanout). The kernel pins it (IOMemoryDescriptor::withAddressRange() and
+ * prepare(), read-only when the owner's range cannot be pinned for writing) and returns a BO handle that VmMap, VmUnmap and
+ * GemClose take like any other; the pages stay pinned until the handle and every GPU mapping of it are gone. The BO has no
+ * CPU mapping of its own (GetBoMmapOffset refuses it): the owner keeps using its own mapping, and cleans and invalidates its
+ * CPU caches around GPU use, as the owner of an IOSurface does. flags: only DRM_PVR_BO_BYPASS_DEVICE_CACHE is accepted. Every
+ * physical page must lie below 4 GiB (the GPU's 32-bit bus); otherwise kIOReturnUnsupported. */
+struct NativePowerVRAbiImportHost {
+    uint64_t address;
+    uint64_t size;
+    uint64_t flags;
+    uint32_t handle;                             /* out */
+    uint32_t read_only;                          /* out: 1 when the pages were pinned for reading only */
+};
+
 /* Sandboxed callers reach the driver through one external-method selector admitted by their sandbox profile, as with
  * NativeAdreno (NativeAdrenoPublish.cpp): the input is {NativePowerVRTunnelMagic, selector} followed by the method's
  * input, the output is the method's output. Method NativePowerVRTunnelProbe with no payload succeeds on every
@@ -107,6 +126,25 @@ struct NativePowerVRAbiParams {
 enum {
     NativePowerVRTunnelMagic = 0x4e544e4c,       /* 'NTNL', the NativeAdreno tunnel word */
     NativePowerVRTunnelProbe = 0xffffffff
+};
+
+/* The Metal plugin's connections (package/powervr/NativePowerVRMetal.cpp: the accelerator AGXAccelerator that the original Metal
+ * discovery finds through IOServiceMatching("IOAcceleratorES"), sandbox-granted to the processes it names). Its open types:
+ *  - NativePowerVRMetalOpenType: a GPU connection with this ABI, reached through the tunnel (Mesa: PVR_DARWIN_SERVICE=IOAcceleratorES,
+ *    PVR_DARWIN_OPEN_TYPE=0x5056);
+ *  - NativePowerVRMetalHandoffOpenType: the display hand-off only (UniXNU NativeGOPPresenter.cpp, boot argument sheng-fb-gpu=1):
+ *    methods NativePowerVRMetalHandoffBase + NGP_METHOD_MODE/WAIT_SWAP/COMPLETE_SWAP (NativeGOPWire.h) through the tunnel and
+ *    memory type NativePowerVRMetalScanoutType, the writable scanout. The same numbers as NativeAdreno's hand-off;
+ *  - NativePowerVRMetalMarkBase | value (value 1..0xffff): a progress marker or text character of the plugin, logged on the
+ *    console and refused (no connection). 0x7ffe/0x7fff start a text line, 0x7000 | c appends the character c (1..0x7f),
+ *    0x7ffd ends the line. */
+enum {
+    NativePowerVRMetalOpenType = 0x5056,
+    NativePowerVRMetalHandoffOpenType = 0x4148,
+    NativePowerVRMetalMarkBase = 0x41470000,
+    NativePowerVRMetalHandoffBase = 0x7000,
+    NativePowerVRMetalHandoffLast = 0x7003,
+    NativePowerVRMetalScanoutType = 0x5343
 };
 
 #if defined(__cplusplus)
@@ -130,11 +168,13 @@ static_assert(sizeof(struct drm_gem_close) == 8, "drm.h gem_close layout");
 static_assert(sizeof(NativePowerVRAbiSubmitReply) == 64, "ABI submit reply layout");
 static_assert(sizeof(NativePowerVRAbiWaitFence) == 16, "ABI wait layout");
 static_assert(sizeof(NativePowerVRAbiParams) == 8, "ABI params layout");
+static_assert(sizeof(NativePowerVRAbiImportHost) == 32, "ABI host import layout");
 #else
 _Static_assert(sizeof(struct drm_pvr_ioctl_submit_jobs_args) == 16, "pvr_drm.h submit_jobs layout");
 _Static_assert(sizeof(struct drm_pvr_job) == 48, "pvr_drm.h job layout");
 _Static_assert(sizeof(struct NativePowerVRAbiSubmitReply) == 64, "ABI submit reply layout");
 _Static_assert(sizeof(struct NativePowerVRAbiWaitFence) == 16, "ABI wait layout");
 _Static_assert(sizeof(struct NativePowerVRAbiParams) == 8, "ABI params layout");
+_Static_assert(sizeof(struct NativePowerVRAbiImportHost) == 32, "ABI host import layout");
 #endif
 #endif

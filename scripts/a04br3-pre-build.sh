@@ -8,6 +8,12 @@
 #     payload step must then take it as an owner bundle: workflow input owner_trust_cache = true (the board allow-list of
 #     [payload] trust_cache_sha256 cannot list a bundle that changes with every build). A04BR3_POWERVR_VULKAN=1 also builds Mesa
 #     (scripts/build-pvr-darwin.py --target ios) and the probe's Vulkan stage.
+#  4. opt-in, A04BR3_POWERVR_METAL=1 (implies the two above): the Metal plugin NativePowerVRMetal.bundle (scripts/build-a04br3-metal-plugin.py:
+#     UniXNU's vendor-neutral NativeMetal plugin with package/powervr/user/NativePowerVRMetalBoard.mm and the Mesa driver), staged with the
+#     probe and trusted by the same owner module. A04BR3_POWERVR_METAL_MODE=selftest (default) runs the bridge self-test in backboardd and
+#     keeps the CPU renderer; =publish makes backboardd composite on the GPU. The kernel needs a04br3-gpu-metal=1 (and sheng-fb-gpu=1 for
+#     the GPU copy into the scanout). The bridge needs the pinned metal2vulkan source and Rust 1.98.0 with the aarch64-apple-ios target;
+#     both are fetched here.
 # Workflow input: pre_build = bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
 #   with the probe: pre_build = A04BR3_POWERVR_PROBE=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh", owner_trust_cache = true
 set -euo pipefail
@@ -29,16 +35,35 @@ python3 "$TREE/drivers/DarwinBoot/Test/packed_ramdisk.py" "$RUNNER_TEMP/owner-da
 # unchanged); NativeMsdc keeps the changed pages in its store window (native-msdc-persist=2).
 python3 "$TREE/scripts/seed-data-grow.py" --gib 4 "$RUNNER_TEMP/data-32.dbr" "$RUNNER_TEMP/data.dbr"
 if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
+  if [ "${A04BR3_POWERVR_METAL:-0}" = 1 ]; then A04BR3_POWERVR_VULKAN=1; fi
   PROBE_VULKAN=()
   if [ "${A04BR3_POWERVR_VULKAN:-0}" = 1 ]; then
     python3 "$DEVICE_DIR/scripts/build-pvr-darwin.py" --target ios
     PROBE_VULKAN=(--vulkan)
   fi
+  METAL_TRUST=()
+  METAL_SEED=()
+  if [ "${A04BR3_POWERVR_METAL:-0}" = 1 ]; then
+    # The pinned translator (UniXNU scripts/data/gpu-metal-vulkan-inputs.json) where build-native-metal-bridge.py reads it.
+    M2V=$TREE/.cache/gpu-reference/metal2vulkan
+    M2V_PIN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["translator"]["commit"])' "$TREE/scripts/data/gpu-metal-vulkan-inputs.json")
+    if [ ! -d "$M2V/.git" ]; then
+      git clone -q --filter=blob:none https://github.com/steelbrain/metal2vulkan "$M2V"
+    fi
+    git -C "$M2V" -c advice.detachedHead=false checkout -q "$M2V_PIN"
+    command -v rustup >/dev/null || { curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none; }
+    export PATH="$HOME/.cargo/bin:$PATH"
+    rustup toolchain install 1.98.0 --profile minimal --target aarch64-apple-ios
+    python3 "$TREE/scripts/build-a04br3-metal-plugin.py" --out "$RUNNER_TEMP/powervr-metal" \
+      --vulkan "$DEVICE_DIR/build/mesa-pvr-ios/src/imagination/vulkan/libvulkan_powervr_mesa.dylib"
+    METAL_TRUST=(--extra-trust "$RUNNER_TEMP/powervr-metal/trust.json")
+    METAL_SEED=(--metal-plugin "$RUNNER_TEMP/powervr-metal" --metal-mode "${A04BR3_POWERVR_METAL_MODE:-selftest}")
+  fi
   # ${a[@]+...}: an empty array under set -u in the bash 3.2 of macOS.
   python3 "$DEVICE_DIR/scripts/build-a04br3-powervr-probe.py" --out "$RUNNER_TEMP/powervr-probe" ${PROBE_VULKAN[@]+"${PROBE_VULKAN[@]}"} \
-    --trust-base "$RUNNER_TEMP/trustcache" --trust-out "$RUNNER_TEMP/trustcache-owner"
+    --trust-base "$RUNNER_TEMP/trustcache" --trust-out "$RUNNER_TEMP/trustcache-owner" ${METAL_TRUST[@]+"${METAL_TRUST[@]}"}
   python3 "$DEVICE_DIR/scripts/a04br3-seed-powervr-probe.py" --tree "$TREE" --probe-dir "$RUNNER_TEMP/powervr-probe" \
-    "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/data-probe.dbr"
+    ${METAL_SEED[@]+"${METAL_SEED[@]}"} "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/data-probe.dbr"
   mv "$RUNNER_TEMP/data-probe.dbr" "$RUNNER_TEMP/data.dbr"
   mv "$RUNNER_TEMP/trustcache-owner" "$RUNNER_TEMP/trustcache"
   echo "PowerVR probe staged; the payload step needs owner_trust_cache = true (--owner-trust-cache)"

@@ -28,6 +28,7 @@ void a04br3_gpu_init(void);
 void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
 int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
+void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
 extern volatile uint32_t native_keyevents_stage;
 extern volatile int native_keyevents_status;
 // KeyStoreProbe.cpp writes its counters into two rows of the boot-progress page (CONFIG_XNU_BOOT_PROGRESS), which this board
@@ -162,5 +163,7 @@ extern "C" int unixnu_board_launch(void *process, uint64_t scratch)
   const int policy = sheng_boot_watchdog_policy(process, scratch);
   // Not fatal: its result is printed and kept in a04br3_powervrprobed_status, never returned (a nonzero result stops the boot).
   a04br3_powervrprobed_spawn(process, scratch);
+  // The PowerVR accelerator for the original Metal discovery, before launchd starts backboardd (its own thread; a04br3-gpu-metal=1).
+  native_powervr_metal_publish();
   return policy;
 }

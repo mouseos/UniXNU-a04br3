@@ -173,6 +173,33 @@ PowerVR driver (`scripts/build-pvr-darwin.py`), clears an image on the GPU and r
   `unixnu build payload --owner-trust-cache OWNER --gpu-addon ADDON` with the kernel argument `sheng-gpu-addon=1`.
 - Host check: `python3 scripts/build-a04br3-powervr-probe.py --check`.
 
+## GPU compositing (PowerVR Metal plugin)
+
+QuartzCore renders through the native Metal frontend of UniXNU on the GE8300: Metal, metal2vulkan, Mesa's PowerVR Vulkan
+driver, the NativePowerVR user client. The plugin is UniXNU's vendor-neutral `drivers/NativeMetal/NativeVulkanMetalPlugin.mm`;
+this repository adds the board hooks, the accelerator and the Mesa and kernel pieces. State: built and compile-checked, not yet run
+on the tablet.
+
+| Piece | Where |
+| --- | --- |
+| Accelerator `AGXAccelerator` (IOAcceleratorES subclass, staged) that the original Metal discovery finds | `package/powervr/NativePowerVRAccelerator.cpp`, built by UniXNU `build-native-adreno-accelerator.py --source ... --into` (board.toml) |
+| Publication (IOGPUFamily load, `MetalPluginName NativePowerVRMetal`, sandbox grant) and its connections: GPU (open type 0x5056), display hand-off (0x4148), UART markers (0x4147xxxx) | `package/powervr/NativePowerVRMetal.cpp`, from `unixnu_board_launch()` |
+| Host page import (`NativePowerVRMethodImportHostMemory`), hand-off forwarding to NativeGOPPresenter | `package/powervr/NativePowerVRGpu.cpp`, `NativePowerVRABI.h` |
+| `VK_EXT_external_memory_host` (IOSurfaces, Metal no-copy buffers, the scanout) | `patches/mesa/pvr-darwin-winsys.patch` |
+| Plugin board hooks: Mesa environment, UART text, hand-off transport | `package/powervr/user/NativePowerVRMetalBoard.mm` |
+| Plugin build, seed staging, trust | `scripts/build-a04br3-metal-plugin.py`, `a04br3-seed-powervr-probe.py --metal-plugin`, `build-a04br3-powervr-probe.py --extra-trust` |
+
+- Build: `pre_build = A04BR3_POWERVR_PROBE=1 A04BR3_POWERVR_METAL=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"` with
+  `owner_trust_cache = true`. `A04BR3_POWERVR_METAL_MODE=selftest` (default) runs the bridge self-test in backboardd and keeps
+  the CPU renderer; `publish` makes backboardd composite on the GPU. The step fetches the pinned metal2vulkan and Rust 1.98.0.
+- Kernel arguments (not in board.toml yet): `a04br3-gpu-metal=1` publishes the accelerator; `sheng-fb-gpu=1` lets the GPU copy
+  the composited frame into the LK frame buffer (NativeLegacyDisplay offers frames to NativeGOPPresenter, which the plugin serves).
+  Optional: `a04br3-gpu-metal-grant=<names>` (default `backboardd`), `a04br3-gpu-metal-opens=<n>` (default 40).
+- UART: `powervr-metal: ...` for the publication and every GPU connection, `powervr-metal[<process>]: <line>` for the plugin's
+  lines: `M s.. c.. r.. i.. q.. k<ok>/<failed> p<ok>/<failed>` (self-test: compute, render, host import, QuartzCore kernels and
+  render pairs), `P<step> e<hex>` and `PF <frames>/<failures> ...` (scanout), `ST..`/`PUB ..` (status every 20 s).
+- Offline pipeline check: `scripts/make-pvr-m2v-profile.py` writes a Khronos profile of the driver for the metal2vulkan command line.
+
 ## Credits
 
 - [UniXNU](https://github.com/UniXNU/UniXNU) and [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng): build

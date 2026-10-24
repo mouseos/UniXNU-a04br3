@@ -161,6 +161,97 @@ index 2c5cf4c..43d27a3 100644
    ],
    link_depends : vulkan_icd_link_depends,
    gnu_symbol_visibility : 'hidden',
+diff --git a/src/imagination/vulkan/pvr_device.c b/src/imagination/vulkan/pvr_device.c
+index 7ba4fb8..654f737 100644
+--- a/src/imagination/vulkan/pvr_device.c
++++ b/src/imagination/vulkan/pvr_device.c
+@@ -191,6 +191,7 @@ VkResult pvr_AllocateMemory(VkDevice _device,
+                             const VkAllocationCallbacks *pAllocator,
+                             VkDeviceMemory *pMem)
+ {
++   const VkImportMemoryHostPointerInfoEXT *host_info = NULL;
+    const VkImportMemoryFdInfoKHR *fd_info = NULL;
+    VK_FROM_HANDLE(pvr_device, device, _device);
+    enum pvr_winsys_bo_type type = PVR_WINSYS_BO_TYPE_GPU;
+@@ -227,6 +228,9 @@ VkResult pvr_AllocateMemory(VkDevice _device,
+       case VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR:
+          fd_info = ext;
+          break;
++      case VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT:
++         host_info = ext;
++         break;
+       case VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO:
+          break;
+       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO:
+@@ -243,7 +247,24 @@ VkResult pvr_AllocateMemory(VkDevice _device,
+       }
+    }
+ 
+-   if (fd_info && fd_info->handleType) {
++   if (host_info && host_info->handleType) {
++      /* VK_EXT_external_memory_host: the pages stay the application's; the BO's host mapping is its pointer. */
++      if (host_info->handleType !=
++             VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT ||
++          !device->ws->ops->buffer_create_from_host_ptr ||
++          !device->ws->features.host_import) {
++         result = vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++         goto err_vk_device_memory_destroy;
++      }
++
++      result = device->ws->ops->buffer_create_from_host_ptr(
++         device->ws,
++         host_info->pHostPointer,
++         pAllocateInfo->allocationSize,
++         &mem->bo);
++      if (result != VK_SUCCESS)
++         goto err_vk_device_memory_destroy;
++   } else if (fd_info && fd_info->handleType) {
+       assert(
+          fd_info->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT ||
+          fd_info->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
+@@ -347,6 +368,27 @@ VkResult pvr_GetMemoryFdKHR(VkDevice _device,
+    return device->ws->ops->buffer_get_fd(mem->bo, pFd);
+ }
+ 
++VkResult pvr_GetMemoryHostPointerPropertiesEXT(
++   VkDevice _device,
++   VkExternalMemoryHandleTypeFlagBits handleType,
++   const void *pHostPointer,
++   VkMemoryHostPointerPropertiesEXT *pMemoryHostPointerProperties)
++{
++   VK_FROM_HANDLE(pvr_device, device, _device);
++
++   if (handleType != VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT ||
++       !device->ws->features.host_import ||
++       ((uintptr_t)pHostPointer & (device->ws->page_size - 1)))
++      return vk_error(device, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++
++   /* The one memory type. The importer keeps its own CPU mapping and cleans and invalidates its caches around GPU use, as the
++    * owner of an IOSurface does (the Turnip Darwin KMD offers its plain type the same way). */
++   pMemoryHostPointerProperties->memoryTypeBits =
++      (1u << device->pdevice->memory.memoryTypeCount) - 1;
++
++   return VK_SUCCESS;
++}
++
+ VkResult
+ pvr_GetMemoryFdPropertiesKHR(VkDevice _device,
+                              VkExternalMemoryHandleTypeFlagBits handleType,
+@@ -1118,7 +1160,13 @@ void pvr_GetImageMemoryRequirements2(VkDevice _device,
+    vk_foreach_struct (sType, ext, pMemoryRequirements->pNext) {
+       switch (sType) {
+       case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: {
+-         bool has_ext_handle_types = image->vk.external_handle_types != 0;
++         /* Host pointer imports carry no per-image metadata, so an image over one may be bound at any offset of a shared
++          * import (as Turnip's turnip-host-import-images.patch of UniXNU). */
++         const VkExternalMemoryHandleTypeFlags host_types =
++            VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT |
++            VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_MAPPED_FOREIGN_MEMORY_BIT_EXT;
++         bool has_ext_handle_types =
++            (image->vk.external_handle_types & ~host_types) != 0;
+          VkMemoryDedicatedRequirements *req =
+             (VkMemoryDedicatedRequirements *)ext;
+ 
 diff --git a/src/imagination/vulkan/pvr_device.h b/src/imagination/vulkan/pvr_device.h
 index 5b9e96d..29bedfa 100644
 --- a/src/imagination/vulkan/pvr_device.h
@@ -175,6 +266,53 @@ index 5b9e96d..29bedfa 100644
  
  #include "vk_device.h"
  #include "vk_device_memory.h"
+diff --git a/src/imagination/vulkan/pvr_formats.c b/src/imagination/vulkan/pvr_formats.c
+index 770e573..f10507e 100644
+--- a/src/imagination/vulkan/pvr_formats.c
++++ b/src/imagination/vulkan/pvr_formats.c
+@@ -872,6 +872,20 @@ VkResult pvr_GetPhysicalDeviceImageFormatProperties2(
+             VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |
+             VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+          break;
++      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT:
++         /* VK_EXT_external_memory_host: a linear image bound into imported host pages (no dedicated allocation). */
++         if (!pdevice->ws->features.host_import ||
++             pImageFormatInfo->tiling != VK_IMAGE_TILING_LINEAR)
++            return vk_error(pdevice, VK_ERROR_FORMAT_NOT_SUPPORTED);
++         if (!external_props)
++            break;
++
++         external_props->externalMemoryProperties.externalMemoryFeatures =
++            VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
++         external_props->externalMemoryProperties.compatibleHandleTypes =
++            VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
++         external_props->externalMemoryProperties.exportFromImportedHandleTypes = 0;
++         break;
+       default:
+          return vk_error(pdevice, VK_ERROR_FORMAT_NOT_SUPPORTED);
+       }
+@@ -936,6 +950,21 @@ void pvr_GetPhysicalDeviceExternalBufferProperties(
+          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+       /* clang-format on */
+       return;
++   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT: {
++      VK_FROM_HANDLE(pvr_physical_device, pdevice, physicalDevice);
++
++      if (!pdevice->ws->features.host_import)
++         break;
++
++      /* VK_EXT_external_memory_host: importable, never exported, no dedicated allocation. */
++      pExternalBufferProperties->externalMemoryProperties =
++         (VkExternalMemoryProperties){
++            .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT,
++            .compatibleHandleTypes =
++               VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
++         };
++      return;
++   }
+    default:
+       break;
+    }
 diff --git a/src/imagination/vulkan/pvr_image.c b/src/imagination/vulkan/pvr_image.c
 index 654ba77..a107581 100644
 --- a/src/imagination/vulkan/pvr_image.c
@@ -329,7 +467,7 @@ index da1f495..4f687ff 100644
                                                VkLayerProperties *pProperties)
  {
 diff --git a/src/imagination/vulkan/pvr_physical_device.c b/src/imagination/vulkan/pvr_physical_device.c
-index ad6625a..0431d99 100644
+index ad6625a..2e79897 100644
 --- a/src/imagination/vulkan/pvr_physical_device.c
 +++ b/src/imagination/vulkan/pvr_physical_device.c
 @@ -12,7 +12,9 @@
@@ -371,7 +509,17 @@ index ad6625a..0431d99 100644
  }
  
  void pvr_physical_device_destroy(struct vk_physical_device *vk_pdevice)
-@@ -135,11 +152,11 @@ static void pvr_physical_device_get_supported_extensions(
+@@ -121,7 +138,8 @@ void pvr_physical_device_free_pipeline_cache(
+ }
+ 
+ static void pvr_physical_device_get_supported_extensions(
+-   struct vk_device_extension_table *extensions, struct pvr_instance* instance)
++   struct vk_device_extension_table *extensions, struct pvr_instance* instance,
++   const struct pvr_winsys *ws)
+ {
+    *extensions = (struct vk_device_extension_table){
+       .KHR_bind_memory2 = true,
+@@ -135,11 +153,11 @@ static void pvr_physical_device_get_supported_extensions(
        .KHR_driver_properties = true,
        .KHR_dynamic_rendering = true,
        .KHR_external_fence = true,
@@ -386,16 +534,19 @@ index ad6625a..0431d99 100644
        .KHR_format_feature_flags2 = true,
        .KHR_get_memory_requirements2 = true,
        .KHR_global_priority = true,
-@@ -202,7 +219,7 @@ static void pvr_physical_device_get_supported_extensions(
+@@ -202,7 +220,10 @@ static void pvr_physical_device_get_supported_extensions(
        .EXT_extended_dynamic_state = true,
        .EXT_extended_dynamic_state2 = true,
        .EXT_extended_dynamic_state3 = true,
 -      .EXT_external_memory_dma_buf = true,
 +      .EXT_external_memory_dma_buf = PVR_WINSYS_HAS_FD,
++      /* The Darwin kernel interface pins the caller's pages as a BO (NativePowerVRMethodImportHostMemory); the Metal
++       * frontend's no-copy buffers and IOSurface textures need it. */
++      .EXT_external_memory_host = ws->features.host_import,
        .EXT_global_priority = true,
        .EXT_global_priority_query = true,
        .EXT_host_query_reset = true,
-@@ -212,9 +229,9 @@ static void pvr_physical_device_get_supported_extensions(
+@@ -212,9 +233,9 @@ static void pvr_physical_device_get_supported_extensions(
        .EXT_index_type_uint8 = true,
        .EXT_inline_uniform_block = true,
        .EXT_line_rasterization = true,
@@ -407,7 +558,16 @@ index ad6625a..0431d99 100644
        .EXT_primitive_topology_list_restart = true,
        .EXT_private_data = true,
        .EXT_provoking_vertex = true,
-@@ -1181,6 +1198,17 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
+@@ -680,6 +701,8 @@ static bool pvr_physical_device_get_properties(
+       .maxStorageBufferRange = 128U * 1024U * 1024U,
+       .maxPushConstantsSize = 128U,
+       .maxMemoryAllocationCount = 4096U,
++      /* VK_EXT_external_memory_host: the kernel pins whole 4 KiB pages. */
++      .minImportedHostPointerAlignment = 4096U,
+       .maxSamplerAllocationCount = 4000U,
+       .bufferImageGranularity = 1U,
+       .sparseAddressSpaceSize = 0U, /* Requires sparseBinding */
+@@ -1181,6 +1204,17 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
     char *render_path;
     VkResult result;
  
@@ -425,7 +585,7 @@ index ad6625a..0431d99 100644
     render_path = vk_strdup(&instance->vk.alloc,
                             drm_render_device->nodes[DRM_NODE_RENDER],
                             VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
-@@ -1217,6 +1245,7 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
+@@ -1217,6 +1251,7 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
        goto err_vk_free_display_path;
     }
     pdevice->render_devid = render_stat.st_rdev;
@@ -433,7 +593,16 @@ index ad6625a..0431d99 100644
  
     result =
        pvr_winsys_create(render_path, display_path, true,
-@@ -1339,10 +1368,12 @@ err_pvr_winsys_destroy:
+@@ -1262,7 +1297,7 @@ VkResult pvr_physical_device_init(struct pvr_physical_device *pdevice,
+       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    pdevice->memory.memoryTypes[0].heapIndex = 0;
+ 
+-   pvr_physical_device_get_supported_extensions(&supported_extensions, instance);
++   pvr_physical_device_get_supported_extensions(&supported_extensions, instance, ws);
+    pvr_physical_device_get_supported_features(&pdevice->dev_info,
+                                               &supported_features);
+    if (!pvr_physical_device_get_properties(pdevice, &supported_properties)) {
+@@ -1339,10 +1374,12 @@ err_pvr_winsys_destroy:
  err_vk_free_display_path:
     vk_free(&instance->vk.alloc, display_path);
  
@@ -557,10 +726,10 @@ index 0000000..dafbb55
 +#endif
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.c b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
 new file mode 100644
-index 0000000..be223e0
+index 0000000..3d26fe5
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
-@@ -0,0 +1,764 @@
+@@ -0,0 +1,798 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: talks to the NativePowerVR IOKit user client (NativePowerVRABI.h,
 + * version 1). Modelled on Turnip's darwin backend (tu_knl_darwin.cc).
@@ -918,6 +1087,40 @@ index 0000000..be223e0
 +          MAP_FAILED) {
 +      return vk_errorf(NULL, VK_ERROR_UNKNOWN, "mmap(reserve) failed (errno %d)", errno);
 +   }
++
++   return VK_SUCCESS;
++}
++
++bool pvr_darwin_has_host_import(int fd)
++{
++   /* A kernel that knows the method refuses a call without its input (kIOReturnBadArgument); an older one does not know it
++    * (kIOReturnUnsupported). Nothing is imported. */
++   return pvr_darwin_call(fd, NativePowerVRMethodImportHostMemory, NULL, 0, NULL, 0) == kIOReturnBadArgument;
++}
++
++VkResult pvr_darwin_import_host(int fd, void *pointer, uint64_t size, uint32_t *const handle_out)
++{
++   struct NativePowerVRAbiImportHost args = {
++      .address = (uint64_t)(uintptr_t)pointer,
++      .size = size,
++   };
++   kern_return_t kr;
++
++   if (!pointer || !size || ((args.address | size) & 4095))
++      return vk_error(NULL, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++
++   kr = pvr_darwin_call(fd, NativePowerVRMethodImportHostMemory, &args, sizeof(args), &args, sizeof(args));
++   if (kr != KERN_SUCCESS || !args.handle) {
++      return vk_errorf(NULL,
++                       kr == kIOReturnNoMemory || kr == kIOReturnNoResources ? VK_ERROR_OUT_OF_HOST_MEMORY
++                                                                             : VK_ERROR_INVALID_EXTERNAL_HANDLE,
++                       "NativePowerVR host import of 0x%llx bytes at %p failed: 0x%x",
++                       (unsigned long long)size,
++                       pointer,
++                       kr);
++   }
++
++   *handle_out = args.handle;
 +
 +   return VK_SUCCESS;
 +}
@@ -1327,10 +1530,10 @@ index 0000000..be223e0
 +}
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.h b/src/imagination/vulkan/winsys/darwin/pvr_darwin.h
 new file mode 100644
-index 0000000..09ea4a6
+index 0000000..fec6ef3
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.h
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,60 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: the requests of winsys/powervr travel to the NativePowerVR IOKit
 + * user client (NativePowerVRABI.h, version 1) instead of the Linux DRM device. Modelled on Turnip's darwin backend
@@ -1364,6 +1567,11 @@ index 0000000..09ea4a6
 +VkResult pvr_darwin_bo_map(int fd, void *addr, uint64_t size, uint64_t token, void **const map_out);
 +VkResult pvr_darwin_bo_unmap(int fd, uint64_t token, void *map, uint64_t size, bool reserve);
 +
++/* VK_EXT_external_memory_host: whether the connection's kernel imports pages of this task (NativePowerVRMethodImportHostMemory),
++ * and the import itself: a BO handle over [pointer, pointer + size), both 4 KiB aligned. */
++bool pvr_darwin_has_host_import(int fd);
++VkResult pvr_darwin_import_host(int fd, void *pointer, uint64_t size, uint32_t *const handle_out);
++
 +void pvr_darwin_init_sync_types(struct pvr_winsys *ws);
 +
 +/* A sync that resolves to the fence of jobs.array[job]. A NULL sync is skipped. */
@@ -1387,7 +1595,7 @@ index 0000000..09ea4a6
 +
 +#endif /* PVR_DARWIN_H */
 diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm.c b/src/imagination/vulkan/winsys/powervr/pvr_drm.c
-index c45a538..42841d1 100644
+index c45a538..8578c90 100644
 --- a/src/imagination/vulkan/winsys/powervr/pvr_drm.c
 +++ b/src/imagination/vulkan/winsys/powervr/pvr_drm.c
 @@ -25,7 +25,11 @@
@@ -1414,12 +1622,21 @@ index c45a538..42841d1 100644
  #include "vk_log.h"
  
  static void pvr_drm_finish_heaps(struct pvr_drm_winsys *const drm_ws)
-@@ -703,9 +711,13 @@ VkResult pvr_drm_winsys_create(const int render_fd,
+@@ -395,6 +403,7 @@ static const struct pvr_winsys_ops drm_winsys_ops = {
+    .get_heaps_info = pvr_drm_winsys_get_heaps_info,
+    .buffer_create = pvr_drm_winsys_buffer_create,
+    .buffer_create_from_fd = pvr_drm_winsys_buffer_create_from_fd,
++   .buffer_create_from_host_ptr = pvr_drm_winsys_buffer_create_from_host_ptr,
+    .buffer_destroy = pvr_drm_winsys_buffer_destroy,
+    .buffer_get_fd = pvr_drm_winsys_buffer_get_fd,
+    .buffer_map = pvr_drm_winsys_buffer_map,
+@@ -703,9 +712,14 @@ VkResult pvr_drm_winsys_create(const int render_fd,
     os_get_page_size(&drm_ws->base.page_size);
     drm_ws->base.log2_page_size = util_logbase2(drm_ws->base.page_size);
  
 +#ifdef PVR_WINSYS_DARWIN
 +   pvr_darwin_init_sync_types(&drm_ws->base);
++   drm_ws->base.features.host_import = pvr_darwin_has_host_import(render_fd);
 +#else
     drm_ws->base.syncobj_type = vk_drm_syncobj_get_type(render_fd);
     drm_ws->base.sync_types[0] = &drm_ws->base.syncobj_type;
@@ -1429,7 +1646,7 @@ index c45a538..42841d1 100644
     err = u_rwlock_init(&drm_ws->dmabuf_bo_lock);
     if (err) {
 diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c
-index 15d4299..ccd6e0f 100644
+index 15d4299..9d05f7d 100644
 --- a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c
 +++ b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c
 @@ -30,13 +30,20 @@
@@ -1490,7 +1707,51 @@ index 15d4299..ccd6e0f 100644
  }
  
  void pvr_drm_winsys_buffer_destroy(struct pvr_winsys_bo *bo)
-@@ -285,6 +301,9 @@ void pvr_drm_winsys_buffer_destroy(struct pvr_winsys_bo *bo)
+@@ -282,9 +298,53 @@ void pvr_drm_winsys_buffer_destroy(struct pvr_winsys_bo *bo)
+    pvr_drm_buffer_release(drm_bo);
+ }
+ 
++/* VK_EXT_external_memory_host on Darwin: the kernel pins the caller's pages as a BO (NativePowerVRMethodImportHostMemory),
++ * which is mapped into the GPU like any other; it has no mapping of its own, so a host map hands back the caller's pointer. */
++VkResult pvr_drm_winsys_buffer_create_from_host_ptr(struct pvr_winsys *ws,
++                                                   void *pointer,
++                                                   uint64_t size,
++                                                   struct pvr_winsys_bo **const bo_out)
++{
++#ifdef PVR_WINSYS_DARWIN
++   struct pvr_drm_winsys *drm_ws = to_pvr_drm_winsys(ws);
++   struct pvr_drm_winsys_bo *drm_bo;
++   uint32_t handle = 0;
++   VkResult result;
++
++   if (!ws->features.host_import || !pointer || !size ||
++       (((uintptr_t)pointer | size) & (ws->page_size - 1)))
++      return vk_error(NULL, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++
++   result = pvr_darwin_import_host(ws->render_fd, pointer, size, &handle);
++   if (result != VK_SUCCESS)
++      return result;
++
++   drm_bo = pvr_drm_winsys_lookup_bo(drm_ws, handle);
++   assert(drm_bo && drm_bo->handle == 0);
++
++   drm_bo->base.size = size;
++   drm_bo->base.ws = ws;
++   drm_bo->base.is_imported = true;
++   drm_bo->handle = handle;
++   drm_bo->flags = 0;
++   drm_bo->host_ptr = pointer;
++
++   p_atomic_set(&drm_bo->ref_count, 1);
++
++   *bo_out = &drm_bo->base;
++
++   return VK_SUCCESS;
++#else
++   return vk_error(NULL, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++#endif
++}
++
  VkResult pvr_drm_winsys_buffer_get_fd(struct pvr_winsys_bo *bo,
                                        int *const fd_out)
  {
@@ -1500,7 +1761,7 @@ index 15d4299..ccd6e0f 100644
     struct pvr_drm_winsys_bo *drm_bo = to_pvr_drm_winsys_bo(bo);
     struct pvr_drm_winsys *drm_ws = to_pvr_drm_winsys(bo->ws);
     int ret;
-@@ -297,6 +316,7 @@ VkResult pvr_drm_winsys_buffer_get_fd(struct pvr_winsys_bo *bo,
+@@ -297,6 +357,7 @@ VkResult pvr_drm_winsys_buffer_get_fd(struct pvr_winsys_bo *bo,
        return vk_error(NULL, VK_ERROR_OUT_OF_HOST_MEMORY);
  
     return VK_SUCCESS;
@@ -1508,7 +1769,22 @@ index 15d4299..ccd6e0f 100644
  }
  
  VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr)
-@@ -313,6 +333,9 @@ VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr)
+@@ -309,10 +370,24 @@ VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr)
+ 
+    assert(!bo->map);
+ 
++#ifdef PVR_WINSYS_DARWIN
++   if (drm_bo->host_ptr) {
++      /* The owner's own mapping; a placed map of imported pages is not offered. */
++      if (addr)
++         return vk_error(NULL, VK_ERROR_MEMORY_MAP_FAILED);
++      pvr_drm_buffer_acquire(drm_bo);
++      bo->map = drm_bo->host_ptr;
++      return VK_SUCCESS;
++   }
++#endif
++
+    result = pvr_drm_get_bo_mmap_offset(drm_ws, drm_bo->handle, &offset);
     if (result != VK_SUCCESS)
        goto err_out;
  
@@ -1518,7 +1794,7 @@ index 15d4299..ccd6e0f 100644
     result = pvr_mmap(addr,
                       bo->size,
                       PROT_READ | PROT_WRITE,
-@@ -320,6 +343,7 @@ VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr)
+@@ -320,6 +395,7 @@ VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr)
                       drm_ws->base.render_fd,
                       offset,
                       &map);
@@ -1526,12 +1802,15 @@ index 15d4299..ccd6e0f 100644
     if (result != VK_SUCCESS)
        goto err_out;
  
-@@ -341,7 +365,21 @@ VkResult pvr_drm_winsys_buffer_unmap(struct pvr_winsys_bo *bo, bool reserve)
+@@ -341,7 +417,24 @@ VkResult pvr_drm_winsys_buffer_unmap(struct pvr_winsys_bo *bo, bool reserve)
  
     assert(bo->map);
  
 +#ifdef PVR_WINSYS_DARWIN
-+   {
++   if (drm_bo->host_ptr) {
++      /* The owner's mapping stays; nothing was mapped for it. */
++      result = VK_SUCCESS;
++   } else {
 +      struct pvr_drm_winsys *drm_ws = to_pvr_drm_winsys(bo->ws);
 +      uint64_t offset = 0;
 +
@@ -1548,6 +1827,32 @@ index 15d4299..ccd6e0f 100644
  
     VG(VALGRIND_FREELIKE_BLOCK(bo->map, 0));
  
+diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.h b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.h
+index b7879b1..c7649fd 100644
+--- a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.h
++++ b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.h
+@@ -42,6 +42,10 @@ struct pvr_drm_winsys_bo {
+ 
+    uint32_t handle;
+    uint64_t flags;
++#ifdef PVR_WINSYS_DARWIN
++   /* A host import (VK_EXT_external_memory_host): the owner's pages, which are also the BO's only CPU mapping. */
++   void *host_ptr;
++#endif
+ };
+ 
+ struct pvr_drm_winsys_vma {
+@@ -69,6 +73,10 @@ VkResult pvr_drm_winsys_buffer_get_fd(struct pvr_winsys_bo *bo,
+ 
+ VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr);
+ VkResult pvr_drm_winsys_buffer_unmap(struct pvr_winsys_bo *bo, bool reserve);
++VkResult pvr_drm_winsys_buffer_create_from_host_ptr(struct pvr_winsys *ws,
++                                                   void *pointer,
++                                                   uint64_t size,
++                                                   struct pvr_winsys_bo **const bo_out);
+ 
+ VkResult pvr_drm_heap_alloc_carveout(struct pvr_winsys_heap *const heap,
+                                      const pvr_dev_addr_t carveout_dev_addr,
 diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c
 index b25c66f..c9e099e 100644
 --- a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c
@@ -1903,6 +2208,31 @@ index 64c5c76..5179f05 100644
     return result;
  }
 +#endif /* PVR_WINSYS_DARWIN */
+diff --git a/src/imagination/vulkan/winsys/pvr_winsys.h b/src/imagination/vulkan/winsys/pvr_winsys.h
+index 90b2292..caf42d5 100644
+--- a/src/imagination/vulkan/winsys/pvr_winsys.h
++++ b/src/imagination/vulkan/winsys/pvr_winsys.h
+@@ -372,6 +372,11 @@ struct pvr_winsys_ops {
+    VkResult (*buffer_create_from_fd)(struct pvr_winsys *ws,
+                                      int fd,
+                                      struct pvr_winsys_bo **const bo_out);
++   /* Optional (features.host_import): a BO over the caller's own pages; its CPU mapping is the caller's pointer. */
++   VkResult (*buffer_create_from_host_ptr)(struct pvr_winsys *ws,
++                                           void *pointer,
++                                           uint64_t size,
++                                           struct pvr_winsys_bo **const bo_out);
+    void (*buffer_destroy)(struct pvr_winsys_bo *bo);
+ 
+    VkResult (*buffer_get_fd)(struct pvr_winsys_bo *bo, int *const fd_out);
+@@ -468,6 +473,8 @@ struct pvr_winsys {
+ 
+    struct {
+       bool supports_threaded_submit : 1;
++      /* VK_EXT_external_memory_host: buffer_create_from_host_ptr works. */
++      bool host_import : 1;
+    } features;
+ 
+    const struct pvr_winsys_ops *ops;
 diff --git a/src/imagination/vulkan/winsys/pvr_winsys_helper.c b/src/imagination/vulkan/winsys/pvr_winsys_helper.c
 index 5dcd402..2e0a21a 100644
 --- a/src/imagination/vulkan/winsys/pvr_winsys_helper.c

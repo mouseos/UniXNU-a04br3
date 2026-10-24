@@ -311,6 +311,9 @@ def main():
     parser.add_argument('--board', type=Path, help='board.toml with [payload] trust_cache_sha256 (default: ROOT/board.toml)')
     parser.add_argument('--addon', type=Path, help='write a GPU addon (make-gpu-addon.py format) here')
     parser.add_argument('--addon-launchd-job', action='store_true', help='put the launchd job plist into the addon too')
+    parser.add_argument('--extra-trust', type=Path, action='append', default=[], metavar='TRUST_JSON',
+                        help='also trust the CDHashes of another owner build (its trust.json, every "*cdhash" value), for example '
+                             'build-a04br3-metal-plugin.py --out DIR/trust.json; one owner module carries them all')
     args = parser.parse_args()
     powervr = powervr_dir()
     if args.check:
@@ -321,6 +324,11 @@ def main():
     if sys.platform != 'darwin':
         sys.exit('The build needs macOS with Xcode (xcrun, codesign); --check runs anywhere')
     out, cdhashes = build(args, powervr)
+    for extra in args.extra_trust:
+        values = json.loads(extra.read_text())
+        cdhashes += [v for k, v in sorted(values.items()) if k.endswith('cdhash') and isinstance(v, str)]
+    # The Metal plugin carries the same signed Mesa library as the probe (same bytes and identifier): one entry.
+    cdhashes = sorted(set(cdhashes))
     if args.trust_out:
         write_trust(args, cdhashes)
     if args.addon:
