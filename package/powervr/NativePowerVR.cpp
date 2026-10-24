@@ -729,10 +729,10 @@ extern "C" struct native_powervr_vm *native_powervr_vm_create(void)
   fmc->pc_dev_paddr = pvr_mmu_get_root_table_dma_addr(vm->mmu);
   fmc->page_cat_base_reg_set = ROGUE_FW_BIF_INVALID_PCSET;
   clean(fmc, sizeof(*fmc));
-  // Bring-up experiment for HWBRN65273 (vendor DDK hwdefs/km/cores/rgxcore_km_22.40.54.30.h; the DDK reserves the heaps
-  // "MMU INIA/INIB BRN65273" at 0xF800000000 and 0xF900000000, rgxheapconfig.h). The first Vulkan TQ job of Mesa faulted
-  // with the fixed address 0xF800000000 on hardware. One zeroed page at the base of each, shared by every VM context, shows
-  // whether the core only needs the address to translate (fault gone) or reads data there (fault moves or the job hangs).
+  // HWBRN65273 (vendor DDK hwdefs/km/cores/rgxcore_km_22.40.54.30.h and _22.67.54.30.h; Linux and Mesa do not list it): the
+  // DDK reserves the heaps "MMU INIA/INIB BRN65273" at 0xF800000000 and 0xF900000000 (rgxheapconfig.h). Without a mapping
+  // there, the first Mesa TQ job (3D data master) faulted at exactly 0xF800000000 on hardware; with one zeroed 4 KiB page
+  // at each base, shared by every VM context, the same clear and copy run and read back correctly.
   static native_powervr_sg briPage;
   if (!briPage.phys) {
     IOBufferMemoryDescriptor *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryPhysicallyContiguous),
