@@ -231,7 +231,7 @@ index 654ba77..a107581 100644
     pvr_image_init_memlayout(image);
     pvr_image_init_physical_extent(image, pCreateInfo, pbe_stride_align);
 diff --git a/src/imagination/vulkan/pvr_instance.c b/src/imagination/vulkan/pvr_instance.c
-index da1f495..f1a6711 100644
+index da1f495..4f687ff 100644
 --- a/src/imagination/vulkan/pvr_instance.c
 +++ b/src/imagination/vulkan/pvr_instance.c
 @@ -13,8 +13,10 @@
@@ -245,7 +245,15 @@ index da1f495..f1a6711 100644
  
  #include "vk_alloc.h"
  #include "vk_log.h"
-@@ -65,6 +67,37 @@ static const struct vk_instance_extension_table pvr_instance_extensions = {
+@@ -22,6 +24,7 @@
+ #include "wsi_common.h"
+ 
+ #include "util/build_id.h"
++#include "util/detect_os.h"
+ #include "util/os_misc.h"
+ #include "pvr_drirc.h"
+ 
+@@ -65,6 +68,37 @@ static const struct vk_instance_extension_table pvr_instance_extensions = {
     .EXT_swapchain_colorspace = PVR_USE_WSI_PLATFORM,
  };
  
@@ -283,7 +291,7 @@ index da1f495..f1a6711 100644
  static VkResult pvr_get_drm_devices(void *const obj,
                                      drmDevicePtr *const devices,
                                      const int max_devices,
-@@ -297,6 +330,7 @@ out_free_drm_device_ptrs:
+@@ -297,6 +331,7 @@ out_free_drm_device_ptrs:
  out:
     return result;
  }
@@ -291,7 +299,18 @@ index da1f495..f1a6711 100644
  
  static bool
  pvr_get_driver_build_sha(struct pvr_instance *instance)
-@@ -460,6 +494,17 @@ vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName)
+@@ -311,7 +346,9 @@ pvr_get_driver_build_sha(struct pvr_instance *instance)
+    }
+ 
+    build_id_len = build_id_length(note);
+-   if (build_id_len < BUILD_ID_EXPECTED_HASH_LENGTH) {
++   /* Mach-O identifies a build with its 16-byte LC_UUID (util/build_id.c); ELF uses SHA-1. As UniXNU
++    * ir3-darwin-build-id.patch does for ir3. */
++   if (build_id_len < (DETECT_OS_APPLE ? 16 : BUILD_ID_EXPECTED_HASH_LENGTH)) {
+       mesa_loge("Build-id too short. It needs to be a SHA.");
+       return false;
+    }
+@@ -460,6 +497,17 @@ vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName)
     return pvr_GetInstanceProcAddr(instance, pName);
  }
  
