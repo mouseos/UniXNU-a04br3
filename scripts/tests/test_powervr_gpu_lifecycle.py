@@ -88,7 +88,7 @@ void cacheOp(uintptr_t p){assert(preemptDisabled&&p>=0x10100000);++cacheOps;}
 struct Queue {bool reached=false;};
 struct Context {int faulty=0;};
 struct Job {native_powervr_host_sync *hosts=nullptr;bool hosts_completed=false,failed=false;uint64_t fence=1;
- Queue *queue=nullptr;uint32_t seqno=1;Context *ctx=nullptr;};
+ Queue *queue=nullptr;uint32_t seqno=1;Context *ctx=nullptr;uint32_t type=0,id=1;};
 struct list_head {std::vector<Job *> items;};
 struct native_powervr_jobs_file {uint64_t nextFence=2;list_head jobs;bool failed=false;};
 #define list_for_each_entry(j,h,m) for(auto *cursor:(h)->items) if((j=cursor))
@@ -101,6 +101,10 @@ void IOSleep(int){++ticks;}
 int atomic_read(int *p){return *p;}
 bool queueReached(Queue *q,uint32_t){return q->reached;}
 bool wasFailed(native_powervr_jobs_file *f,uint64_t){return f->failed;}
+constexpr uint32_t DRM_PVR_JOB_TYPE_FRAGMENT=1;
+unsigned renderDumps=0;
+void native_powervr_log(const char *,...){}
+void native_powervr_dump_render_regs(){++renderDumps;}
 ''' + function(JOBS, 'void complete_job_hosts(') + function(JOBS, 'extern "C" int native_powervr_fence_wait(') + r'''
 int main(){
  IOLock lock;native_powervr_sg spans[]={{gPhysBase,65*4096},{0xbe9c0000,4096}};
@@ -111,14 +115,14 @@ int main(){
  vm.count=0;native_powervr_bo_put(&host); // handles/mappings go away; the job still pins the import
  assert(host.refs==1&&native_powervr_hosts_sync(held)==0);
  assert(cacheOps==65*4096/64&&batches==3&&!preemptDisabled); // scanout is never passed to phystokv
- Queue q;Context ctx;Job job;job.hosts=held;job.queue=&q;job.ctx=&ctx;
+ Queue q;Context ctx;Job job;job.hosts=held;job.queue=&q;job.ctx=&ctx;job.type=DRM_PVR_JOB_TYPE_FRAGMENT;
  native_powervr_jobs_file file;file.jobs.items.push_back(&job);
  auto before=cacheOps;
  assert(native_powervr_fence_wait(&file,1,0)==-ETIMEDOUT&&cacheOps==before&&!job.hosts_completed);
  q.reached=true;
  assert(native_powervr_fence_wait(&file,1,0)==0&&job.hosts_completed&&cacheOps==before+65*4096/64);
  assert(native_powervr_fence_wait(&file,1,0)==0&&cacheOps==before+65*4096/64);
- complete_job_hosts(&job);assert(cacheOps==before+65*4096/64); // worker and waiter cannot sync twice
+ complete_job_hosts(&job);assert(cacheOps==before+65*4096/64&&renderDumps==1); // worker and waiter cannot sync twice
  native_powervr_hosts_put(held);assert(host.refs==0&&plain.refs==1);
  host.refs=1;vm.count=3;
  for(int n=1;n<=2;n++){allocations=0;failAllocation=n;held=nullptr;

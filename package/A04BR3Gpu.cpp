@@ -17,6 +17,7 @@ extern "C" {
 void a04br3_gpu_init(void);
 void native_powervr_boot(void);   // package/powervr/NativePowerVR.cpp (a04br3-gpu=2)
 volatile uint64_t a04br3_gpu_bvnc;
+volatile uint32_t a04br3_gpu_core_hz = 26000000;
 volatile int a04br3_gpu_power_error = -1;
 }
 
@@ -123,6 +124,33 @@ void clockDiagnosticSnapshot(volatile uint8_t *top)
     IOLog("a04br3 gpu clock diagnostic: VCORE %04x raw %04x\n", addresses[i], unsigned(value));
   }
 }
+unsigned selectClockParent(uint32_t *hz)
+{
+  unsigned requested = 0;
+  if (!PE_parse_boot_argn("a04br3-gpu-clock", &requested, sizeof(requested)) || requested == 0) return 4;
+  if (requested != 380) { IOLog("a04br3 gpu clock: unsupported request %u; retaining 26 MHz\n", requested); return 4; }
+  auto *pll = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10018000, 0x1000));
+  auto *pwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1000f000, 0x1000));
+  if (!pll || !pwrap || !(clockDiagnosticRead(pwrap, 0x98) & 1) || !(clockDiagnosticRead(pwrap, 0x9c) & 1)) {
+    IOLog("a04br3 gpu clock: PLL/VCORE state unavailable; retaining 26 MHz\n"); return 4;
+  }
+  const uint32_t con0 = clockDiagnosticRead(pll, 0x160), con1 = clockDiagnosticRead(pll, 0x164), power = clockDiagnosticRead(pll, 0x170);
+  uint16_t rail[4] = {};
+  const unsigned addresses[] = {0x030a, 0x030e, 0x0312, 0x0314};
+  for (unsigned i = 0; i < 4; i++) {
+    if (const char *error = clockDiagnosticPmicRead(pwrap, addresses[i], &rail[i])) {
+      IOLog("a04br3 gpu clock: VCORE unknown (%s); retaining 26 MHz\n", error); return 4;
+    }
+  }
+  const uint32_t selected = a04_rgx_mmpll_hz(con0, con1, power, rail[0], rail[1], rail[2], rail[3]);
+  if (!selected || con0 != clockDiagnosticRead(pll, 0x160) || con1 != clockDiagnosticRead(pll, 0x164) || power != clockDiagnosticRead(pll, 0x170)) {
+    IOLog("a04br3 gpu clock: inactive, unstable or unsupported PLL/VCORE state; retaining 26 MHz\n"); return 4;
+  }
+  *hz = selected;
+  IOLog("a04br3 gpu clock: selecting existing MMPLL %u Hz, VCORE selector %02x status %04x; no PLL/voltage writes\n",
+        selected, unsigned(((rail[0] & 2) ? rail[3] : rail[2]) & 0x7f), unsigned(rail[1]));
+  return 7;
+}
 }  // namespace
 
 void a04br3_gpu_init(void)
@@ -138,8 +166,18 @@ void a04br3_gpu_init(void)
   const a04_rgx_io io = {nullptr, bankRead, bankWrite, waitUs};
   IOLog("a04br3 gpu: MFG status 0x%x/0x%x, powering the Rogue domains\n", bankRead(nullptr, A04_RGX_SPM, 0x60c),
         bankRead(nullptr, A04_RGX_SPM, 0x610));
-  a04br3_gpu_power_error = a04_rgx_power_on(&io);
+  uint32_t coreHz = 26000000;
+  const unsigned parent = selectClockParent(&coreHz);
+  a04br3_gpu_power_error = parent == 4 ? a04_rgx_power_on(&io) : a04_rgx_power_on_parent(&io, parent);
   if (a04br3_gpu_power_error) { IOLog("a04br3 gpu: power stage %d failed; core not accessed\n", a04br3_gpu_power_error); return; }
+  const unsigned actualParent = (bankRead(nullptr, A04_RGX_TOP, 0x000) >> 8) & 7;
+  const unsigned actualInput = (bankRead(nullptr, A04_RGX_TOP, 0x004) >> 8) & 63;
+  if (actualParent != parent || actualInput != 8) {
+    IOLog("a04br3 gpu clock: mux readback mismatch parent %u/%u input %u; firmware not started\n", actualParent, parent, actualInput);
+    return;
+  }
+  a04br3_gpu_core_hz = coreHz;
+  IOLog("a04br3 gpu clock: active parent %u core %u Hz\n", actualParent, coreHz);
   volatile uint8_t *core = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x13000000, 0x10000));
   if (!core) { IOLog("a04br3 gpu: core mapping failed\n"); return; }
   const uint32_t lo = *reinterpret_cast<volatile uint32_t *>(core + 0x20), hi = *reinterpret_cast<volatile uint32_t *>(core + 0x24);

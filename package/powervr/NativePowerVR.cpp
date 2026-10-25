@@ -51,6 +51,7 @@ extern "C" {
 extern const uint8_t native_powervr_fw[];
 extern const uint32_t native_powervr_fw_size;
 extern volatile uint64_t a04br3_gpu_bvnc;
+extern volatile uint32_t a04br3_gpu_core_hz;
 void native_powervr_boot(void);
 volatile int native_powervr_stage;
 }
@@ -74,7 +75,7 @@ constexpr uint32_t kReserved = SZ_1M;              // ROGUE_FW_HEAP_MIPS_RESERVE
 // RGXSendCommandRaw(): RGXFWIF_DM_GP | RGX_CR_MTS_SCHEDULE_TASK_COUNTED). Linux's pvr_ccb.c writes the uncounted form for
 // its newer META/RISC-V firmware; with this MIPS firmware the uncounted kick left the DM 4 work of a KICK unscheduled.
 constexpr uint32_t kKccbKick = (PVR_FWIF_DM_GP & ~ROGUE_CR_MTS_SCHEDULE_DM_CLRMSK) | ROGUE_CR_MTS_SCHEDULE_TASK_COUNTED;
-constexpr uint32_t kCoreClockHz = 26000000;        // package/A04BR3Gpu.cpp leaves the core on the 26 MHz crystal
+static uint32_t coreClockHz() { return a04br3_gpu_core_hz; } // selected before FW boot; default 26 MHz
 
 volatile uint8_t *gRegs;
 IOBufferMemoryDescriptor *gHeapMem;
@@ -316,7 +317,7 @@ bool boot(void)
   for (uint32_t i = 0; i < SZ_4K / 4; i++) static_cast<uint32_t *>(fault.cpu())[i] = 0xdeadbee0;   // fw_fault_page_init
   static_cast<rogue_fwif_gpu_util_fwcb *>(gpuUtil.cpu())->last_word = PVR_FWIF_GPU_UTIL_STATE_IDLE;
   auto *rt = static_cast<rogue_fwif_runtime_cfg *>(runtimeCfg.cpu());
-  rt->core_clock_speed = kCoreClockHz; rt->active_pm_latency_ms = 0; rt->active_pm_latency_persistant = true;
+  rt->core_clock_speed = coreClockHz(); rt->active_pm_latency_ms = 0; rt->active_pm_latency_persistant = true;
   rt->default_dusts_num_init = 1;   // num_clusters
   rt->wdg_period_us = 0;
   auto *tc = static_cast<rogue_fwif_tracebuf *>(traceCtl.cpu());
@@ -351,7 +352,7 @@ bool boot(void)
   sys->counter_dump_ctl.buffer_fw_addr = 0; sys->counter_dump_ctl.size_in_dwords = 0;
   sys->align_checks = 0; sys->filter_flags = 0; sys->hw_perf_filter = 0;
   sys->firmware_perf = FW_PERF_CONF_NONE;
-  sys->initial_core_clock_speed = kCoreClockHz;
+  sys->initial_core_clock_speed = coreClockHz();
   sys->active_pm_latency_ms = 0;
   sys->gpio_validation_mode = ROGUE_FWIF_GPIO_VAL_OFF;
   sys->firmware_started = false;
