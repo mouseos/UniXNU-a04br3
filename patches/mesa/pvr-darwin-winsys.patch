@@ -190,6 +190,76 @@ index a029859..78690b7 100644
        ppp_state->depthbias_scissor_indices.scissor_index =
           util_dynarray_num_elements(&cmd_buffer->scissor_array,
                                      struct pvr_scissor_words);
+diff --git a/src/imagination/vulkan/pvr_arch_framebuffer.c b/src/imagination/vulkan/pvr_arch_framebuffer.c
+index e0bc337..bd612b4 100644
+--- a/src/imagination/vulkan/pvr_arch_framebuffer.c
++++ b/src/imagination/vulkan/pvr_arch_framebuffer.c
+@@ -11,6 +11,11 @@
+  */
+ 
+ #include "pvr_framebuffer.h"
++#ifdef PVR_WINSYS_DARWIN
++#include <stdlib.h>
++#include <string.h>
++#include "winsys/darwin/pvr_darwin.h"
++#endif
+ 
+ #include "vk_util.h"
+ 
+@@ -37,6 +42,25 @@ VkResult PVR_PER_ARCH(ppp_state_create)(struct pvr_device *device,
+       pvr_get_slc_cache_line_size(&device->pdevice->dev_info);
+    uint32_t ppp_state[3];
+    VkResult result;
++   uint32_t terminate_x_unit = ROGUE_TA_STATE_TERMINATE0_CLIP_RIGHT_BLOCK_SIZE_IN_PIXELS;
++   uint32_t terminate_y_unit = ROGUE_TA_STATE_TERMINATE0_CLIP_BOTTOM_BLOCK_SIZE_IN_PIXELS;
++#ifdef PVR_WINSYS_DARWIN
++   const struct pvr_device_info *dev_info = &device->pdevice->dev_info;
++   const char *tile_units = getenv("PVR_DARWIN_TERMINATE_TILE_UNITS");
++   /* MT8167's vendor GLES uses the AddRT tile maxima directly for termination:
++    * RGXGetScreenXYMaxFromRenderTarget -> (xmax << 18) | ymax, with ceil(/16)-1.
++    * The generic XML's fixed 32-pixel unit clips this core to half each axis.
++    * Keep the comparison opt-in until the device's full-image test passes.
++    */
++   if (dev_info->ident.b == 22 && dev_info->ident.v == 40 &&
++       dev_info->ident.n == 54 && dev_info->ident.c == 30 &&
++       PVR_HAS_FEATURE(dev_info, tile_size_16x16) &&
++       PVR_GET_FEATURE_VALUE(dev_info, simple_parameter_format_version, 0) == 1 &&
++       tile_units && strcmp(tile_units, "1") == 0) {
++      terminate_x_unit = 16;
++      terminate_y_unit = 16;
++   }
++#endif
+ 
+    pvr_csb_pack (&ppp_state[0], TA_STATE_HEADER, header) {
+       header.pres_terminate = true;
+@@ -46,12 +70,12 @@ VkResult PVR_PER_ARCH(ppp_state_create)(struct pvr_device *device,
+       term0.clip_right =
+          DIV_ROUND_UP(
+             width,
+-            ROGUE_TA_STATE_TERMINATE0_CLIP_RIGHT_BLOCK_SIZE_IN_PIXELS) -
++            terminate_x_unit) -
+          1;
+       term0.clip_bottom =
+          DIV_ROUND_UP(
+             height,
+-            ROGUE_TA_STATE_TERMINATE0_CLIP_BOTTOM_BLOCK_SIZE_IN_PIXELS) -
++            terminate_y_unit) -
+          1;
+    }
+ 
+@@ -60,6 +84,12 @@ VkResult PVR_PER_ARCH(ppp_state_create)(struct pvr_device *device,
+       term1.clip_left = 0;
+    }
+ 
++#ifdef PVR_WINSYS_DARWIN
++   pvr_darwin_debug("terminate %ux%u unit %u/%u words %08x/%08x/%08x",
++                    width, height, terminate_x_unit, terminate_y_unit,
++                    ppp_state[0], ppp_state[1], ppp_state[2]);
++#endif
++
+    result = pvr_gpu_upload(device,
+                            device->heaps.general_heap,
+                            ppp_state,
 diff --git a/src/imagination/vulkan/pvr_arch_job_common.c b/src/imagination/vulkan/pvr_arch_job_common.c
 index f420deb..c650d83 100644
 --- a/src/imagination/vulkan/pvr_arch_job_common.c

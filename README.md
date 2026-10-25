@@ -191,9 +191,11 @@ PowerVR driver (`scripts/build-pvr-darwin.py`), clears an image on the GPU and r
 The Vulkan stage first checks a fresh linear render-pass clear without a draw, then a linear triangle with CPU direct
 readback, then separately fenced transfer clear and copy, and finally the required optimal-image triangle/readback.
 Supported direct-render tests must pass their complete pixel checks; unsupported linear attachments are explicitly skipped.
-The owner probe enables `PVR_DARWIN_VENDOR_ISP_OVERLAP=1` for a diagnostic comparison with the MT8167 vendor driver's
-ISP_CTL bit 19 policy (REA `libsrv_um.so` `FUN_0012877c`). The Mesa change is compiled only for the Darwin winsys,
-defaults off in applications, and matches only BVNC 22.40.54.30. This comparison is not a verified rendering fix.
+Two default-off Darwin diagnostic switches match only BVNC 22.40.54.30:
+`PVR_DARWIN_VENDOR_ISP_OVERLAP=1` compares the vendor ISP_CTL bit 19 policy (REA `libsrv_um.so` `FUN_0012877c`);
+`PVR_DARWIN_TERMINATE_TILE_UNITS=1` compares 16-pixel terminal PPP clipping for the tile16 / SIPF-v1 device.
+The owner probe enables only the terminal-clip comparison and explicitly clears the overlap switch so their effects
+are isolated. Normal applications retain the default path. Neither switch is a verified rendering fix yet.
 
 ## GPU compositing (PowerVR Metal plugin)
 
