@@ -419,6 +419,28 @@ __attribute__((noreturn,noinline)) void native_legacy_backend_guard(unsigned slo
 }
 // a04br3: the state of this probe on UART, printed by the board's process-list thread (package/A04BR3Board.cpp).
 extern "C" void a04br3_display_report_set(void (*report)(void));
+static uint64_t a04br3CopyUs(uint64_t ticks,uint32_t frequency)
+{
+    if(!frequency)return 0;
+    // Split before scaling: the cumulative tick count can overflow ticks * 1000000.
+    return ticks/frequency*1000000+(ticks%frequency)*1000000/frequency;
+}
+static void a04br3CopyReport(uint32_t frequency)
+{
+    // Best-effort cumulative samples: the display keeps running during this heartbeat.
+    // These counters cover pixel stores and their barrier, not mapping or producer rendering.
+    const uint64_t count=native_legacy_copy_n;
+    const uint64_t average=count?native_legacy_copy_sum/count:0;
+    const uint64_t averageBytes=count?native_legacy_copy_bytes_sum/count:0;
+    const uint64_t avgUs=a04br3CopyUs(average,frequency);
+    const uint64_t lastUs=a04br3CopyUs(count?native_legacy_copy_last:0,frequency);
+    const uint64_t maxUs=a04br3CopyUs(count?native_legacy_copy_max:0,frequency);
+    IOLog("a04br3 copy: n=%llu ms(avg/last/max)=%llu.%03llu/%llu.%03llu/%llu.%03llu bytes(avg/last)=%llu/%llu\n",
+          (unsigned long long)count,(unsigned long long)(avgUs/1000),(unsigned long long)(avgUs%1000),
+          (unsigned long long)(lastUs/1000),(unsigned long long)(lastUs%1000),
+          (unsigned long long)(maxUs/1000),(unsigned long long)(maxUs%1000),
+          (unsigned long long)averageBytes,(unsigned long long)(count?native_legacy_copy_bytes_last:0));
+}
 static void a04br3DisplayReport(void)
 {
     IOLog("a04br3 display: stage %u meta %d start %u gop %llx+%llx %ux%u reg %u surface %d pm %d client pid %d calls %u "
@@ -432,6 +454,8 @@ static void a04br3DisplayReport(void)
     static char text[400];
     native_legacy_prepare_report(text, sizeof(text));
     IOLog("a04br3 display: %s\n", text);
+    uint64_t frequency;__asm__ volatile("mrs %0, cntfrq_el0":"=r"(frequency));
+    a04br3CopyReport((uint32_t)frequency);
 }
 
 void native_legacy_display_probe(void);

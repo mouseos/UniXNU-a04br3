@@ -2,7 +2,9 @@
 
 UniXNU device support for the Benesse TAB-A04-BR3 (a04br3), a tablet with the MediaTek MT8167 SoC
 (four Cortex-A35 cores, GIC-400, 2 GiB DRAM, eMMC). Work in progress: board file, kernel configuration,
-Apple device tree generator and GPT layout. No hardware run with UniXNU is documented yet.
+Apple device tree generator and GPT layout. The hardware reaches the iPadOS home screen with four CPUs,
+eMMC DMA and the CPU framebuffer renderer. PowerVR Vulkan transfer/readback works; Metal UI acceleration
+and interactive performance remain under development.
 
 | Repository | Contents |
 | --- | --- |

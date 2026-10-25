@@ -80,6 +80,13 @@ struct native_powervr_bo_mapping {
 int native_powervr_vm_find_bo(struct native_powervr_vm_context *vm_ctx, uint64_t device_addr,
                               struct native_powervr_bo_mapping *out);
 
+/* Retained snapshot of all host imports in a VM. Sync before kicking GPU work and once after actual GPU completion,
+ * before publishing fence success. A timeout is not quiescence: keep the snapshot until the GPU really retires. */
+struct native_powervr_host_sync;
+int native_powervr_vm_hosts_snapshot(struct native_powervr_vm_context *vm, struct native_powervr_host_sync **out);
+int native_powervr_hosts_sync(struct native_powervr_host_sync *hosts);
+void native_powervr_hosts_put(struct native_powervr_host_sync *hosts);
+
 /* ---- Provided by the job layer ---- */
 
 /* Per-connection job state (the job part of struct pvr_file): the fence numbering. Created when a connection opens,

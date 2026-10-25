@@ -46,6 +46,7 @@
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <kern/cpu_data.h>
 #include <string.h>
 #include <sys/errno.h>
 #include "compat/native_powervr_linux_compat.h"
@@ -81,6 +82,8 @@
 
 extern "C" {
 void flush_dcache(vm_offset_t addr, unsigned count, int phys);
+vm_offset_t phystokv(uint64_t pa);
+extern uint64_t gPhysBase, gPhysSize;
 // The firmware image (scripts/build-a04br3-board.py) and the core's CORE_ID register (A04BR3Gpu.cpp).
 extern const uint8_t native_powervr_fw[];
 extern const uint32_t native_powervr_fw_size;
@@ -90,6 +93,10 @@ int native_powervr_publish(void);
 // build-a04br3-legacy-display.py). Weak: a kernel linked with the first-pass display stub has neither.
 IOReturn native_gop_handoff_call(uint32_t op, task_t task, const void *in, size_t inSize, void *out, size_t outSize) __attribute__((weak));
 IOMemoryDescriptor *native_gop_handoff_memory(void) __attribute__((weak));
+IOReturn native_gop_handoff_acquire(IOService *owner) __attribute__((weak));
+void native_gop_handoff_close(IOService *owner) __attribute__((weak));
+IOReturn native_gop_handoff_call_owned(IOService *owner, uint32_t op, task_t task, const void *in, size_t inSize,
+                                      void *out, size_t outSize) __attribute__((weak));
 }
 
 #ifndef ENOENT
@@ -534,7 +541,7 @@ struct native_powervr_bo {
   // A host import (NativePowerVRMethodImportHostMemory): the caller's own pages, pinned (prepare()) until the BO goes. Such a BO
   // has no md, no kernel view (cpu is null, so the job layer refuses it as a firmware object) and no user view.
   IOMemoryDescriptor *host;
-  bool hostPrepared, readOnly;
+  bool hostPrepared;
 };
 
 namespace {
@@ -606,8 +613,8 @@ IOMemoryDescriptor *hostRange(task_t task, uint64_t address, uint64_t size, IODi
   IOMemoryDescriptor *range = IOMemoryDescriptor::withAddressRange(address, size, options | kIOMemoryPersistent, task);
   return range ? range : IOMemoryDescriptor::withAddressRange(address, size, options, task);
 }
-// A BO over [address, address + size) of task, pinned. No cache maintenance: the owner cleans and invalidates its own mapping
-// around GPU use (the Metal frontend's surface flush), as with NativeAdreno's imports.
+// A BO over [address, address + size) of task, pinned for writing. Read-only imports are refused: the current GPU mapping
+// path has no per-BO write protection. Jobs snapshot these BOs and maintain their caches before submission and completion.
 int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, native_powervr_bo **out)
 {
   auto *bo = static_cast<native_powervr_bo *>(kzallocBytes(sizeof(native_powervr_bo)));
@@ -618,15 +625,6 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
   bo->host = hostRange(task, address, size, kIODirectionInOut);
   if (!bo->host) { boDestroy(bo); return -ENOMEM; }
   IOReturn status = bo->host->prepare();
-  if (status == KERN_PROTECTION_FAILURE) {
-    // Read-only memory of the owner (a mapped file, constant data): pinned for reading. Metal's no-copy buffers over such memory
-    // are only read by shaders; this MMU has no read-only mapping, so the GPU must not be told to write it (reported to the caller).
-    bo->host->release();
-    bo->host = hostRange(task, address, size, kIODirectionOut);
-    if (!bo->host) { boDestroy(bo); return -ENOMEM; }
-    status = bo->host->prepare();
-    bo->readOnly = status == kIOReturnSuccess;
-  }
   if (status != kIOReturnSuccess) { boDestroy(bo); return -EFAULT; }
   bo->hostPrepared = true;
   if (bo->host->getLength() != size) { boDestroy(bo); return -EINVAL; }
@@ -814,6 +812,80 @@ extern "C" int native_powervr_vm_find_bo(struct native_powervr_vm_context *vm_ct
   IOLockUnlock(vm_ctx->lock);
   return found ? 0 : -ENOENT;
 }
+
+// A job holds the exact imported pages it may access even if handles/mappings subsequently go away. The command streams do
+// not enumerate shader resources, so conservatively cover every host BO mapped in the job's VM (including buffer aliases).
+struct native_powervr_host_sync {
+  native_powervr_bo **bos;
+  uint32_t count, capacity;
+};
+extern "C" void native_powervr_hosts_put(struct native_powervr_host_sync *hosts)
+{
+  if (!hosts) return;
+  for (uint32_t i = 0; i < hosts->count; i++) native_powervr_bo_put(hosts->bos[i]);
+  kfreeBytes(hosts->bos, sizeof(*hosts->bos) * hosts->capacity);
+  kfreeBytes(hosts, sizeof(*hosts));
+}
+extern "C" int native_powervr_vm_hosts_snapshot(struct native_powervr_vm_context *vm, struct native_powervr_host_sync **out)
+{
+  *out = nullptr;
+  IOLockLock(vm->lock);
+  uint32_t capacity = 0;
+  for (uint32_t i = 0; i < vm->count; i++) if (vm->maps[i].bo->host) capacity++;
+  if (!capacity) { IOLockUnlock(vm->lock); return 0; }
+  auto *hosts = static_cast<native_powervr_host_sync *>(kzallocBytes(sizeof(native_powervr_host_sync)));
+  if (hosts) {
+    hosts->capacity = capacity;
+    hosts->bos = static_cast<native_powervr_bo **>(kzallocBytes(sizeof(*hosts->bos) * capacity));
+  }
+  if (!hosts || !hosts->bos) {
+    IOLockUnlock(vm->lock);
+    native_powervr_hosts_put(hosts);
+    return -ENOMEM;
+  }
+  for (uint32_t i = 0; i < vm->count; i++) {
+    native_powervr_bo *bo = vm->maps[i].bo;
+    if (!bo->host) continue;
+    uint32_t n = 0;
+    while (n < hosts->count && hosts->bos[n] != bo) n++;
+    if (n == hosts->count) hosts->bos[hosts->count++] = native_powervr_bo_get(bo);
+  }
+  IOLockUnlock(vm->lock);
+  *out = hosts;
+  return 0;
+}
+extern "C" int native_powervr_hosts_sync(struct native_powervr_host_sync *hosts)
+{
+  if (!hosts) return 0;
+  // NativeAdrenoMaintainPhysicalPages: explicit PoC operations, bypassing XNU's Apple coherent-I/O no-op. Keep preemption
+  // disabled for at most 64 pages. Imported pages can contain the owner's unrelated dirty lines, so clean AND invalidate.
+  for (uint32_t b = 0; b < hosts->count; b++) {
+    const native_powervr_bo *bo = hosts->bos[b];
+    for (uint32_t s = 0; s < bo->nents; s++) {
+      const native_powervr_sg &span = bo->sg[s];
+      for (uint64_t offset = 0; offset < span.size;) {
+        disable_preemption();
+        uint64_t ctr;
+        __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+        const size_t line = size_t(4) << ((ctr >> 16) & 15);
+        if (line > kDevicePageSize) { enable_preemption(); return -ENOTTY; }
+        __asm__ volatile("dsb sy" ::: "memory");
+        for (unsigned run = 0; run < 64 && offset < span.size; run++, offset += kDevicePageSize) {
+          const uint64_t page = span.phys + offset;
+          // The firmware scanout is outside the DRAM physmap and mapped uncached. Never call phystokv on device memory.
+          if (page < gPhysBase || page - gPhysBase >= gPhysSize) continue;
+          const vm_offset_t alias = phystokv(page);
+          if (!alias) { __asm__ volatile("dsb sy" ::: "memory"); enable_preemption(); return -ENOTTY; }
+          for (uintptr_t p = alias; p < alias + kDevicePageSize; p += line)
+            __asm__ volatile("dc civac, %0" :: "r"(p) : "memory");
+        }
+        __asm__ volatile("dsb sy" ::: "memory");
+        enable_preemption();
+      }
+    }
+  }
+  return 0;
+}
 extern "C" const struct pvr_device_features *native_powervr_device_features(void) { return gDevLoaded ? &gDev.features : nullptr; }
 extern "C" const struct pvr_device_quirks *native_powervr_device_quirks(void) { return gDevLoaded ? &gDev.quirks : nullptr; }
 extern "C" const struct pvr_device_enhancements *native_powervr_device_enhancements(void) { return gDevLoaded ? &gDev.enhancements : nullptr; }
@@ -853,6 +925,7 @@ public:
   using IOUserClient::clientMemoryForType;
   bool open(bool handoffOnly);
   IOReturn clientClose() APPLE_KEXT_OVERRIDE;
+  void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
   void free() APPLE_KEXT_OVERRIDE;
   IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
   IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
@@ -879,7 +952,9 @@ bool NativePowerVRUserClient::open(bool handoffOnly)
   lock_ = IOLockAlloc();
   if (!lock_) return false;
   handoffOnly_ = handoffOnly;
-  if (handoffOnly) return true;
+  if (handoffOnly)
+    return native_gop_handoff_acquire && native_gop_handoff_close && native_gop_handoff_call_owned &&
+           native_gop_handoff_acquire(this) == kIOReturnSuccess;
   if (native_powervr_jobs_file_create) {
     jobs_ = native_powervr_jobs_file_create();
     if (!jobs_) return false;
@@ -958,12 +1033,21 @@ IOReturn NativePowerVRUserClient::clientClose()
     closing_ = true;
     IOLockUnlock(lock_);
   }
+  if (handoffOnly_ && native_gop_handoff_close) native_gop_handoff_close(this);
   terminate();
   return kIOReturnSuccess;
 }
 
+void NativePowerVRUserClient::stop(IOService *provider)
+{
+  if (lock_) { IOLockLock(lock_); closing_ = true; IOLockUnlock(lock_); }
+  if (handoffOnly_ && native_gop_handoff_close) native_gop_handoff_close(this);
+  IOUserClient::stop(provider);
+}
+
 void NativePowerVRUserClient::free()
 {
+  if (handoffOnly_ && native_gop_handoff_close) native_gop_handoff_close(this);
   if (lock_) {
     teardown();
     IOLockFree(lock_);
@@ -1036,12 +1120,12 @@ IOReturn NativePowerVRUserClient::externalMethod(uint32_t selector, IOExternalMe
 IOReturn NativePowerVRUserClient::handoff(uint32_t method, const void *input, uint32_t inputSize, void *output, uint32_t outputSize)
 {
   if (method < NativePowerVRMetalHandoffBase || method > NativePowerVRMetalHandoffLast) return kIOReturnUnsupported;
-  if (!native_gop_handoff_call) return kIOReturnNotReady;   // no display hand-off linked
+  if (!native_gop_handoff_call_owned) return kIOReturnNotReady;
   IOLockLock(lock_);
   const bool closing = closing_;
   IOLockUnlock(lock_);
   if (closing) return kIOReturnNotReady;
-  return native_gop_handoff_call(method - NativePowerVRMetalHandoffBase, current_task(), input, inputSize, output, outputSize);
+  return native_gop_handoff_call_owned(this, method - NativePowerVRMetalHandoffBase, current_task(), input, inputSize, output, outputSize);
 }
 
 IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32_t inputSize, void *output, uint32_t outputSize)
@@ -1298,7 +1382,7 @@ int NativePowerVRUserClient::importHost(NativePowerVRAbiImportHost *args)
   err = handleInsert(bos_, bo, &handle);
   if (err) { native_powervr_bo_put(bo); return err; }
   args->handle = handle;
-  args->read_only = bo->readOnly ? 1 : 0;
+  args->read_only = 0;   // read-only backing is rejected by boImportHost()
   return 0;
 }
 

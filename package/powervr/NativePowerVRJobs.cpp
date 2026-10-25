@@ -227,6 +227,8 @@ struct Job {
   Job *paired;           // paired_job, during the submission only
   uint64_t kicked;
   bool failed, timed_out;
+  native_powervr_host_sync *hosts;
+  bool hosts_completed;   // protected by gJobs.lock; success cannot precede the post-GPU cache maintenance
 };
 
 struct UfoList {
@@ -1028,6 +1030,7 @@ u32 job_cmds_size(const Job *job, u32 ufo_wait_count)
 // pvr_job_release(); called without gJobs.lock (dropping the last context reference destroys the queues).
 void pvr_job_release(Job *job)
 {
+  native_powervr_hosts_put(job->hosts);
   if (job->id) native_powervr_xa_erase(&gJobs.dev.job_ids, job->id);
   pvr_hwrt_data_put(job->hwrt);
   pvr_context_put(job->ctx);
@@ -1088,6 +1091,8 @@ int create_job(native_powervr_jobs_file *file, const native_powervr_job_submit *
       goto err_put_job;
     }
   }
+  err = native_powervr_vm_hosts_snapshot(nativeVm(job->ctx->vm_ctx), &job->hosts);
+  if (err) goto err_put_job;
   *out = job;
   return 0;
 
@@ -1259,6 +1264,15 @@ bool wasFailed(const native_powervr_jobs_file *f, uint64_t fence)
   return false;
 }
 
+// Both the completion worker and WaitFence can observe a retired UFO. Cache maintenance must happen exactly once,
+// while the job is still discoverable under gJobs.lock, before either path exposes success or releases imported pages.
+void complete_job_hosts(Job *job)
+{
+  if (job->hosts_completed) return;
+  if (native_powervr_hosts_sync(job->hosts)) job->failed = true;
+  job->hosts_completed = true;
+}
+
 // Reset notifications (gJobs.lock held): the named job fails and its context becomes faulty when the context is
 // guilty of the reset.
 void applyResets(const ResetNote *notes, uint32_t count)
@@ -1298,6 +1312,7 @@ void completionThread(void *, wait_result_t)
     Job *j, *n;
     list_for_each_entry_safe(j, n, &gJobs.jobs, dev_link) {
       if (queueReached(j->queue, j->seqno)) {
+        complete_job_hosts(j);
         list_del(&j->dev_link);
         if (j->file) {
           list_del(&j->file_link);
@@ -1591,6 +1606,7 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     IOLockLock(gJobs.lock);
   }
   if (!err && !reserveTracks(count)) err = -ENOMEM;
+  for (uint32_t i = 0; i < count && !err; i++) err = native_powervr_hosts_sync(js[i]->hosts);
   if (err) {
     IOLockUnlock(gJobs.lock);
     for (uint32_t i = 0; i < count; i++) pvr_job_release(js[i]);
@@ -1645,7 +1661,10 @@ extern "C" int native_powervr_fence_wait(struct native_powervr_jobs_file *file, 
       }
       if (!found) status = wasFailed(file, fence) ? -EIO : 0;
       else if (found->failed || atomic_read(&found->ctx->faulty)) status = -EIO;
-      else if (queueReached(found->queue, found->seqno)) status = 0;
+      else if (queueReached(found->queue, found->seqno)) {
+        complete_job_hosts(found);
+        status = found->failed ? -EIO : 0;
+      }
     }
     IOLockUnlock(gJobs.lock);
     if (status != 1) return status;

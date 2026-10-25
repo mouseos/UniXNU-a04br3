@@ -106,17 +106,18 @@ struct NativePowerVRAbiParams {
 
 /* ImportHostMemory. address and size are 4 KiB aligned and nonzero; the range belongs to the calling task (an IOSurface's
  * pages, a Metal no-copy buffer, a mapping of the scanout). The kernel pins it (IOMemoryDescriptor::withAddressRange() and
- * prepare(), read-only when the owner's range cannot be pinned for writing) and returns a BO handle that VmMap, VmUnmap and
- * GemClose take like any other; the pages stay pinned until the handle and every GPU mapping of it are gone. The BO has no
- * CPU mapping of its own (GetBoMmapOffset refuses it): the owner keeps using its own mapping, and cleans and invalidates its
- * CPU caches around GPU use, as the owner of an IOSurface does. flags: only DRM_PVR_BO_BYPASS_DEVICE_CACHE is accepted. Every
+ * prepare() for writing; read-only backing is refused) and returns a BO handle that VmMap, VmUnmap and GemClose take like any
+ * other; the pages stay pinned until the handle, every GPU mapping and every submitted job using the import are gone.
+ * The BO has no CPU mapping of its own: the owner keeps using its own mapping. The kernel cleans and invalidates imported
+ * pages before job submission and after actual GPU completion, before fence success. CPU/GPU access must still be ordered
+ * by the caller. flags: only DRM_PVR_BO_BYPASS_DEVICE_CACHE is accepted. Every
  * physical page must lie below 4 GiB (the GPU's 32-bit bus); otherwise kIOReturnUnsupported. */
 struct NativePowerVRAbiImportHost {
     uint64_t address;
     uint64_t size;
     uint64_t flags;
     uint32_t handle;                             /* out */
-    uint32_t read_only;                          /* out: 1 when the pages were pinned for reading only */
+    uint32_t read_only;                          /* reserved out: always 0; read-only backing is refused */
 };
 
 /* Sandboxed callers reach the driver through one external-method selector admitted by their sandbox profile, as with

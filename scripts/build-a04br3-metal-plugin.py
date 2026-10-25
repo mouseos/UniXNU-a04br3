@@ -48,7 +48,8 @@ def main():
     board = powervr_dir() / 'user/NativePowerVRMetalBoard.mm'
     command = ['python3', str(builder), '--name', NAME, '--principal-class', PRINCIPAL, '--vulkan-driver', str(library),
                '--driver-name', LIB_NAME, '--driver-identifier', LIB_IDENTIFIER, '--identifier', 'org.unixnu.a04br3.' + NAME,
-               '--board-source', str(board), '--out', str(args.out.resolve())]
+               '--board-source', str(board), '--out', str(args.out.resolve()), '--portable-sha2']
+    # MT8167's optional SHA2 instruction support is not assumed from Apple's target triple.
     if args.skip_bridge:
         command.append('--skip-bridge')
     subprocess.run(command, check=True)
