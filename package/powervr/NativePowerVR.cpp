@@ -95,6 +95,8 @@ uint32_t gKccbExpected;  // osdata->kccb_cmds_executed once every queued command
 IOLock *gLock;           // the heap bump allocator and the KCCB
 pvr_device gPvr;         // what pvr_mmu.c reads of struct pvr_device
 pvr_fw_object *gMmuSync; // fw_dev.mem.mmucache_sync_obj
+bool gMmuAckEnabled;     // cached before the firmware thread starts; diagnostic only
+uint32_t gMmuAckLast;    // nonzero token sequence, protected by gLock
 uint32_t gFwMemCtx;      // FW address of the VM context's rogue_fwif_fwmemcontext
 pvr_mmu_context *gMmuCtx;
 rogue_fwif_tracebuf *gTc;     // trace control, thread 0 buffer and the FW state objects for the dumps after boot
@@ -553,6 +555,8 @@ void native_powervr_boot(void)
   unsigned mode = 0;
   if (!PE_parse_boot_argn("a04br3-gpu", &mode, sizeof(mode)) || mode < 2) return;
   packetDiagnosticInit();
+  unsigned mmuAck = 0;
+  gMmuAckEnabled = PE_parse_boot_argn("a04br3-mmu-ack", &mmuAck, sizeof(mmuAck)) && mmuAck == 1;
   if (!a04br3_gpu_bvnc || a04br3_gpu_bvnc == ~0ULL) { IOLog("powervr: no core identified; firmware not booted\n"); return; }
   // Its own thread: the boot waits up to 10 s for the firmware and must not hold up unixnu_board_init().
   thread_t thread = nullptr;
@@ -653,6 +657,31 @@ extern "C" int native_powervr_fw_alloc(uint32_t size, uint32_t align, struct nat
 extern "C" void native_powervr_clean(const void *p, size_t n) { __asm__ volatile("dsb sy" ::: "memory"); clean(p, n); }
 extern "C" void native_powervr_invalidate(const void *p, size_t n) { clean(p, n); __asm__ volatile("dsb sy" ::: "memory"); }
 
+// Pure policy helpers: stamp a local copy only, and bound outstanding tokens well
+// below the signed-difference half range. The FW alone updates the sync word.
+static int mmuAckStamp(bool enabled, struct rogue_fwif_kccb_cmd *local,
+                       uint32_t syncAddr, uint32_t observed, uint32_t pendingLimit,
+                       uint32_t *last, uint32_t *token)
+{
+  *token = 0;
+  if (!enabled || local->cmd_type != ROGUE_FWIF_KCCB_CMD_MMUCACHE) return 0;
+  if (!syncAddr || local->cmd_data.mmu_cache_data.mmu_cache_sync_fw_addr != syncAddr) return -EINVAL;
+  uint32_t next = *last + 1;
+  if (!next) next = 1;
+  const uint32_t pending = next - observed;
+  if (!pendingLimit || pending >= 0x80000000U || pending > pendingLimit) return -EBUSY;
+  local->cmd_data.mmu_cache_data.mmu_cache_sync_update_value = next;
+  *last = *token = next;
+  return 0;
+}
+static bool mmuAckComplete(uint32_t executed, uint32_t target,
+                          uint32_t observed, uint32_t token)
+{
+  // Zero is reserved: it must not look newer than UINT32_MAX at wrap.
+  return int32_t(executed - target) >= 0 &&
+         (!token || (observed != 0 && int32_t(observed - token) >= 0));
+}
+
 // pvr_kccb_send_cmd() and pvr_kccb_wait_for_completion() in one step: the command in the next slot, its return slot
 // cleared, the write offset advanced, the GP data master kicked through the MTS, then the wait. Completion is
 // osdata->kccb_cmds_executed advancing past its value before the kick (the bring-up showed the firmware does not write
@@ -660,16 +689,28 @@ extern "C" void native_powervr_invalidate(const void *p, size_t n) { clean(p, n)
 extern "C" int native_powervr_kccb_submit(const struct rogue_fwif_kccb_cmd *cmd, uint32_t timeout_ms)
 {
   if (!gFwStarted || !gKctl) return -ENODEV;
+  if (!cmd) return -EINVAL;
+  struct rogue_fwif_kccb_cmd local = *cmd;
+  const bool ack = gMmuAckEnabled && local.cmd_type == ROGUE_FWIF_KCCB_CMD_MMUCACHE;
+  uint32_t token = 0;
   IOLockLock(gLock);
   clean(gKctl, sizeof(*gKctl));
   const uint32_t slot = gKctl->write_offset, next = (slot + 1) & gKctl->wrap_mask;
   if (next == READ_ONCE_A04(gKctl->read_offset)) { IOLockUnlock(gLock); return -EBUSY; }
+  if (ack) {
+    if (!gMmuSync || !gMmuSync->o.cpu) { IOLockUnlock(gLock); return -ENODEV; }
+    clean(gMmuSync->o.cpu, sizeof(uint32_t));
+    const uint32_t observed = *static_cast<volatile uint32_t *>(gMmuSync->o.cpu);
+    const int stamp = mmuAckStamp(true, &local, gMmuSync->o.fw_addr, observed,
+                                 gKctl->wrap_mask, &gMmuAckLast, &token);
+    if (stamp) { IOLockUnlock(gLock); return stamp; }
+  }
   clean(gOsdata, sizeof(*gOsdata));
   // The target counts every command queued so far, so one that timed out and runs late is not taken for this one.
   const uint32_t executed = READ_ONCE_A04(gOsdata->kccb_cmds_executed);
   if (int32_t(gKccbExpected - executed) < 0 || !gKccbExpected) gKccbExpected = executed;
   const uint32_t target = ++gKccbExpected;
-  gKccb[slot] = *cmd;
+  gKccb[slot] = local;
   clean(&gKccb[slot], sizeof(gKccb[slot]));
   __asm__ volatile("dsb sy" ::: "memory");
   gKctl->write_offset = next;
@@ -681,7 +722,12 @@ extern "C" int native_powervr_kccb_submit(const struct rogue_fwif_kccb_cmd *cmd,
   int err = -ETIMEDOUT;
   for (uint32_t ms = 0; ms <= timeout_ms; ms++) {
     clean(gOsdata, sizeof(*gOsdata));
-    if (int32_t(READ_ONCE_A04(gOsdata->kccb_cmds_executed) - target) >= 0) { err = 0; break; }
+    uint32_t observed = 0;
+    if (token) {
+      clean(gMmuSync->o.cpu, sizeof(uint32_t));
+      observed = *static_cast<volatile uint32_t *>(gMmuSync->o.cpu);
+    }
+    if (mmuAckComplete(READ_ONCE_A04(gOsdata->kccb_cmds_executed), target, observed, token)) { err = 0; break; }
     IOSleep(1);
   }
   clean(gKctl, sizeof(*gKctl));
