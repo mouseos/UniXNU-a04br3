@@ -1731,10 +1731,10 @@ index 0000000..dafbb55
 +#endif
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.c b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
 new file mode 100644
-index 0000000..7fe52e7
+index 0000000..32176f8
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
-@@ -0,0 +1,912 @@
+@@ -0,0 +1,915 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: talks to the NativePowerVR IOKit user client (NativePowerVRABI.h,
 + * version 1). Modelled on Turnip's darwin backend (tu_knl_darwin.cc).
@@ -2128,7 +2128,10 @@ index 0000000..7fe52e7
 +                             mach_task_self(),
 +                             &address,
 +                             &mapped,
-+                             kIOMapAnywhere);
++                             /* XNU's default-cache descriptor fallback records the
++                              * unshifted cache enum in low map flags (observed 0x5,
++                              * WB PTE). Request the ABI's WC mode explicitly. */
++                             kIOMapAnywhere | kIOMapWriteCombineCache);
 +   if (kr != KERN_SUCCESS) {
 +      return vk_errorf(NULL,
 +                       VK_ERROR_MEMORY_MAP_FAILED,
