@@ -202,6 +202,19 @@ The terminal clip matches the vendor GLES path and has passed full-image clear, 
 triangle readback on the device (130 steps, zero failures). Other devices keep the default path. GPU-composited UI and
 performance still need separate validation; the overlap comparison has not been exercised on hardware.
 
+## Optional existing GPU clock source
+
+The default GPU clock remains the 26 MHz crystal. The boot argument `a04br3-gpu-clock=380` opts into the existing
+MMPLL parent (TOP MFG selector 7). It does not program a PLL or PMIC voltage. Before switching, the board checks the
+MMPLL enable/power state, reads its PCW/postdivider twice, and reads the shared MT6392 VCORE enable/status and active
+selector through PWRAP. Missing, unstable or unsupported states retain the crystal. A successful mux readback is required
+before starting the firmware; both firmware clock fields receive the calculated frequency.
+
+The stock state observed on this board is MMPLL CON0 `0x11`, CON1 `0x020e9d8a`, PWR `5`, and VCORE selector `0x4e`
+(configured 1.1875 V). The Linux MT8167 PLL formula yields 380,000,062 Hz. This is a configured clock/rail state,
+not a measurement of analog voltage or performance. `a04br3-gpu-clock-diagnostic=1` logs the startup raw values.
+The opt-in path is under hardware validation. No change is made for other boards or normal boot arguments.
+
 ## GPU compositing (PowerVR Metal plugin)
 
 QuartzCore renders through the native Metal frontend of UniXNU on the GE8300: Metal, metal2vulkan, Mesa's PowerVR Vulkan
