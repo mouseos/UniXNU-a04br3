@@ -1549,6 +1549,19 @@ int NativePowerVRUserClient::destroyFreeList(const drm_pvr_ioctl_destroy_free_li
 // pvr_ioctl_create_hwrt_dataset() -> pvr_hwrt_dataset_create(); hwrt_init_kernel_structure() looks the free lists up.
 int NativePowerVRUserClient::createHwrtDataset(drm_pvr_ioctl_create_hwrt_dataset_args *args)
 {
+  static uint32_t diagnosticRequests;
+  const uint32_t request = __atomic_fetch_add(&diagnosticRequests, 1, __ATOMIC_RELAXED);
+  if (request < 8) {
+    IOLog("powervr: HWRT request %u: %ux%u samples %u layers %u region_header_size %u "
+          "region_addr %llx/%llx tpc_addr %llx tpc_size %u tpc_stride %u vheap_addr %llx rtc_addr %llx\n",
+          request + 1, args->width, args->height, args->samples, args->layers, args->region_header_size,
+          static_cast<unsigned long long>(args->rt_data_args[0].region_header_dev_addr),
+          static_cast<unsigned long long>(args->rt_data_args[1].region_header_dev_addr),
+          static_cast<unsigned long long>(args->geom_data_args.tpc_dev_addr),
+          args->geom_data_args.tpc_size, args->geom_data_args.tpc_stride,
+          static_cast<unsigned long long>(args->geom_data_args.vheap_table_dev_addr),
+          static_cast<unsigned long long>(args->geom_data_args.rtc_dev_addr));
+  }
   if (!jobs_ || !native_powervr_hwrt_dataset_create || !native_powervr_hwrt_dataset_put) return -ENOTTY;
   native_powervr_free_list *free_lists[ARRAY_SIZE(args->free_list_handles)];
   static_assert(ARRAY_SIZE(args->free_list_handles) == 2, "free_list_handles");

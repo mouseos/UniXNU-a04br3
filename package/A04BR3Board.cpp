@@ -31,6 +31,12 @@ int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
 void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
 extern volatile uint32_t native_keyevents_stage;
 extern volatile int native_keyevents_status;
+// Existing kern_exec.c addon installer and union-mount diagnostics.
+extern volatile int native_gpu_addon_files, native_gpu_addon_written, native_gpu_addon_same;
+extern volatile int native_gpu_addon_failed, native_gpu_addon_error;
+extern volatile int native_gpu_addon_stage, native_gpu_addon_status;
+extern volatile int native_gpu_addon2_stage, native_gpu_addon2_status;
+extern volatile int native_gpu_addon3_stage, native_gpu_addon3_status;
 // KeyStoreProbe.cpp writes its counters into two rows of the boot-progress page (CONFIG_XNU_BOOT_PROGRESS), which this board
 // does not link: the rows go to this zero-initialised storage instead. Weak, so a real page linked later takes precedence.
 __attribute__((weak)) char boot_progress_ext[8][48];
@@ -170,6 +176,11 @@ extern "C" void unixnu_board_init(void)
 extern "C" int unixnu_board_launch(void *process, uint64_t scratch)
 {
   const int policy = sheng_boot_watchdog_policy(process, scratch);
+  IOLog("a04br3: GPU addon before probe: files %d written %d same %d failed %d error %d; "
+        "mount extensions stage %d status %d, daemons stage %d status %d, wallpaper stage %d status %d\n",
+        native_gpu_addon_files, native_gpu_addon_written, native_gpu_addon_same,
+        native_gpu_addon_failed, native_gpu_addon_error, native_gpu_addon_stage, native_gpu_addon_status,
+        native_gpu_addon2_stage, native_gpu_addon2_status, native_gpu_addon3_stage, native_gpu_addon3_status);
   // Not fatal: its result is printed and kept in a04br3_powervrprobed_status, never returned (a nonzero result stops the boot).
   a04br3_powervrprobed_spawn(process, scratch);
   // The PowerVR accelerator for the original Metal discovery, before launchd starts backboardd (its own thread; a04br3-gpu-metal=1).

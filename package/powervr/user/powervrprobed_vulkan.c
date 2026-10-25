@@ -31,7 +31,7 @@ enum { kWidth = 64, kHeight = 64 };
 static const uint8_t kClear[4] = {0x11, 0x5a, 0xa5, 0xee};
 
 #define VK_FUNCTIONS(X)                                                                                                       \
-  X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties)                                       \
+  X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceProperties2)    \
   X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties) \
   X(vkCreateDevice) X(vkGetDeviceProcAddr)
 #define VK_DEVICE_FUNCTIONS(X)                                                                                                \
@@ -260,7 +260,7 @@ int probe_vulkan(const char *library)
   PFN_vkCreateInstance createInstance = (PFN_vkCreateInstance)gipa(NULL, "vkCreateInstance");
   if (!vkCheck("vkCreateInstance lookup", createInstance != NULL, NULL)) return -1;
   const VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO, .pApplicationName = "powervrprobed",
-                                 .apiVersion = VK_API_VERSION_1_0};
+                                 .apiVersion = VK_API_VERSION_1_2}; // Core driver-properties query below; pinned Mesa supports 1.2.
   const VkInstanceCreateInfo instanceInfo = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, .pApplicationInfo = &app};
   VkInstance instance = VK_NULL_HANDLE;
   if (!vkStep("vkCreateInstance", createInstance(&instanceInfo, NULL, &instance), NULL)) return -1;
@@ -287,6 +287,15 @@ int probe_vulkan(const char *library)
   probe_line("vk device: %s, api %u.%u.%u, driver 0x%x, vendor 0x%x device 0x%x", properties.deviceName,
              VK_API_VERSION_MAJOR(properties.apiVersion), VK_API_VERSION_MINOR(properties.apiVersion),
              VK_API_VERSION_PATCH(properties.apiVersion), properties.driverVersion, properties.vendorID, properties.deviceID);
+  VkPhysicalDeviceDriverProperties driverProperties = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+  VkPhysicalDeviceProperties2 properties2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+                                             .pNext = &driverProperties};
+  p_vkGetPhysicalDeviceProperties2(physical, &properties2);
+  probe_line("vk driver: id %u name '%.*s' conformance %u.%u.%u.%u",
+             (unsigned)driverProperties.driverID, (int)sizeof(driverProperties.driverName), driverProperties.driverName,
+             (unsigned)driverProperties.conformanceVersion.major, (unsigned)driverProperties.conformanceVersion.minor,
+             (unsigned)driverProperties.conformanceVersion.subminor, (unsigned)driverProperties.conformanceVersion.patch);
+  probe_line("vk driverInfo: '%.*s'", (int)sizeof(driverProperties.driverInfo), driverProperties.driverInfo);
 
   VkQueueFamilyProperties families[8];
   uint32_t familyCount = 8, family = UINT32_MAX;
