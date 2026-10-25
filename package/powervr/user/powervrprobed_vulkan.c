@@ -34,6 +34,7 @@ static const uint8_t kClear[4] = {0x11, 0x5a, 0xa5, 0xee};
 #define VK_FUNCTIONS(X)                                                                                                       \
   X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceProperties2)    \
   X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties) \
+  X(vkEnumerateDeviceExtensionProperties) X(vkGetPhysicalDeviceExternalBufferProperties)                              \
   X(vkCreateDevice) X(vkGetDeviceProcAddr)
 #define VK_DEVICE_FUNCTIONS(X)                                                                                                \
   X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements)                  \
@@ -402,6 +403,196 @@ cleanup:
   return ok;
 }
 
+// Capability discovery does not add PASS steps to the existing probe. A missing
+// optional extension is a SKIP; a failed enumeration remains a real failure.
+static int hostImportSupported(VkPhysicalDevice physical)
+{
+  uint32_t count = 0;
+  VkResult vr = p_vkEnumerateDeviceExtensionProperties(physical, NULL, &count, NULL);
+  if (vr != VK_SUCCESS) { vkStep("host-import enumerate extensions count", vr, NULL); return -1; }
+  if (!count) return 0;
+  if (count > 1024) { vkCheck("host-import extension count bound", 0, NULL); return -1; }
+  VkExtensionProperties *extensions = calloc(count, sizeof(*extensions));
+  if (!extensions) { vkCheck("host-import extension list allocation", 0, NULL); return -1; }
+  vr = p_vkEnumerateDeviceExtensionProperties(physical, NULL, &count, extensions);
+  int supported = 0;
+  if (vr != VK_SUCCESS) { vkStep("host-import enumerate extensions", vr, NULL); supported = -1; }
+  else for (uint32_t i = 0; i < count; i++)
+    if (!strcmp(extensions[i].extensionName, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME)) supported = 1;
+  free(extensions);
+  return supported;
+}
+
+// Ordinary CPU allocation only: no GOP/device pointer. Import the complete
+// buffer memory requirement (including any driver's guard), not just 16 KiB.
+// This cannot establish whether an exact-size scanout allocation is importable.
+static int hostImportProbe(VkPhysicalDevice physical, VkDevice device, VkQueue queue, uint32_t family,
+                           const VkPhysicalDeviceMemoryProperties *memory, VkDeviceSize minAlignment)
+{
+  const VkDeviceSize bytes = (VkDeviceSize)kWidth * kHeight * 4;
+  VkBuffer buffer = VK_NULL_HANDLE;
+  VkImage image = VK_NULL_HANDLE;
+  VkDeviceMemory imported = VK_NULL_HANDLE, imageMemory = VK_NULL_HANDLE;
+  VkCommandPool pool = VK_NULL_HANDLE;
+  VkFence fence = VK_NULL_HANDLE;
+  void *pointer = NULL, *mapped = NULL;
+  int ok = 0;
+  char detail[256];
+  probe_line("vk host-import begin: HOST_ALLOCATION, ordinary aligned CPU allocation; original tests completed");
+#define HOST_STEP(name, expression) do { \
+  if (!vkStep("host-import " name, (expression), NULL)) goto cleanup; \
+} while (0)
+  PFN_vkGetMemoryHostPointerPropertiesEXT getHostProperties =
+      (PFN_vkGetMemoryHostPointerPropertiesEXT)p_vkGetDeviceProcAddr(device, "vkGetMemoryHostPointerPropertiesEXT");
+  if (!vkCheck("host-import function", getHostProperties != NULL, NULL)) goto cleanup;
+  const VkPhysicalDeviceExternalBufferInfo externalInfo = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
+  VkExternalBufferProperties external = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
+  p_vkGetPhysicalDeviceExternalBufferProperties(physical, &externalInfo, &external);
+  const VkExternalMemoryProperties *externalMemory = &external.externalMemoryProperties;
+  if (!vkCheck("host-import buffer importable",
+               (externalMemory->externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) &&
+               (externalMemory->compatibleHandleTypes & VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT) &&
+               !(externalMemory->externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT), NULL)) goto cleanup;
+  const VkExternalMemoryBufferCreateInfo externalBuffer = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
+  const VkBufferCreateInfo bufferInfo = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &externalBuffer,
+      .size = bytes, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+  HOST_STEP("vkCreateBuffer", p_vkCreateBuffer(device, &bufferInfo, NULL, &buffer));
+  VkMemoryRequirements need;
+  p_vkGetBufferMemoryRequirements(device, buffer, &need);
+  probe_line("vk host-import buffer: requested %llu need.size %llu alignment %llu memoryTypeBits %08x minImportedHostPointerAlignment %llu",
+             (unsigned long long)bytes, (unsigned long long)need.size, (unsigned long long)need.alignment,
+             need.memoryTypeBits, (unsigned long long)minAlignment);
+  VkDeviceSize alignment = minAlignment;
+  if (alignment < need.alignment) alignment = need.alignment;
+  if (alignment < sizeof(void *)) alignment = sizeof(void *);
+  if (!vkCheck("host-import allocation bounds", minAlignment && !(minAlignment & (minAlignment - 1)) &&
+               need.alignment && !(need.alignment & (need.alignment - 1)) && need.size >= bytes &&
+               alignment <= SIZE_MAX && need.size <= SIZE_MAX - (alignment - 1), NULL)) goto cleanup;
+  const VkDeviceSize allocationSize = (need.size + alignment - 1) & ~(alignment - 1);
+  if (!vkCheck("host-import bounded allocation", allocationSize <= 64u * 1024u * 1024u, NULL)) goto cleanup;
+  const int allocationError = posix_memalign(&pointer, (size_t)alignment, (size_t)allocationSize);
+  if (!vkCheck("host-import posix_memalign", allocationError == 0, NULL)) goto cleanup;
+  probe_line("vk host-import backing: requested %llu required %llu imported %llu alignment %llu; full requirement backed, not an exact-request-size import",
+             (unsigned long long)bytes, (unsigned long long)need.size, (unsigned long long)allocationSize,
+             (unsigned long long)alignment);
+  VkMemoryHostPointerPropertiesEXT host = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+  HOST_STEP("vkGetMemoryHostPointerPropertiesEXT", getHostProperties(device,
+      VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, pointer, &host));
+  const uint32_t compatibleBits = host.memoryTypeBits & need.memoryTypeBits;
+  uint32_t type = memoryType(memory, compatibleBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  const int coherent = type != UINT32_MAX;
+  if (!coherent) type = memoryType(memory, compatibleBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+  snprintf(detail, sizeof detail, "host bits %08x buffer bits %08x intersection %08x type %u coherent %d",
+           host.memoryTypeBits, need.memoryTypeBits, compatibleBits, type, coherent);
+  if (!vkCheck("host-import memory type intersection", type != UINT32_MAX, detail)) goto cleanup;
+  // Host pointer imports must not chain a dedicated buffer/image allocation
+  // (VUID-VkMemoryAllocateInfo-pNext-02806).
+  const VkImportMemoryHostPointerInfoEXT importInfo = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
+      .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+      .pHostPointer = pointer};
+  const VkMemoryAllocateInfo allocate = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &importInfo,
+      .allocationSize = allocationSize, .memoryTypeIndex = type};
+  HOST_STEP("vkAllocateMemory import", p_vkAllocateMemory(device, &allocate, NULL, &imported));
+  HOST_STEP("vkBindBufferMemory", p_vkBindBufferMemory(device, buffer, imported, 0));
+  HOST_STEP("vkMapMemory", p_vkMapMemory(device, imported, 0, VK_WHOLE_SIZE, 0, &mapped));
+  // vkMapMemory may return an alias of pointer. Flush/invalidate the complete
+  // mapped allocation at offset zero, satisfying nonCoherentAtomSize rules.
+  memset(mapped, 0xcd, (size_t)allocationSize);
+  const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+      .memory = imported, .offset = 0, .size = VK_WHOLE_SIZE};
+  HOST_STEP("vkFlushMappedMemoryRanges", p_vkFlushMappedMemoryRanges(device, 1, &whole));
+
+  const VkImageCreateInfo imageInfo = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
+      .format = VK_FORMAT_R8G8B8A8_UNORM, .extent = {kWidth, kHeight, 1}, .mipLevels = 1, .arrayLayers = 1,
+      .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+      .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+  HOST_STEP("vkCreateImage", p_vkCreateImage(device, &imageInfo, NULL, &image));
+  VkMemoryRequirements imageNeed;
+  p_vkGetImageMemoryRequirements(device, image, &imageNeed);
+  uint32_t imageType = memoryType(memory, imageNeed.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  if (imageType == UINT32_MAX) imageType = memoryType(memory, imageNeed.memoryTypeBits, 0);
+  if (!vkCheck("host-import image memory type", imageType != UINT32_MAX, NULL)) goto cleanup;
+  const VkMemoryAllocateInfo imageAllocate = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = imageNeed.size, .memoryTypeIndex = imageType};
+  HOST_STEP("vkAllocateMemory image", p_vkAllocateMemory(device, &imageAllocate, NULL, &imageMemory));
+  HOST_STEP("vkBindImageMemory", p_vkBindImageMemory(device, image, imageMemory, 0));
+  const VkCommandPoolCreateInfo poolInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .queueFamilyIndex = family};
+  HOST_STEP("vkCreateCommandPool", p_vkCreateCommandPool(device, &poolInfo, NULL, &pool));
+  VkCommandBuffer cmd = VK_NULL_HANDLE;
+  const VkCommandBufferAllocateInfo cmdInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
+  HOST_STEP("vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdInfo, &cmd));
+  const VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+  HOST_STEP("vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin));
+  const VkBufferMemoryBarrier fromHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE};
+  p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &fromHost, 0, NULL);
+  imageBarrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+               0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+  const uint8_t expected[4] = {0x39, 0x72, 0xb4, 0xe1};
+  const VkClearColorValue color = {.float32 = {expected[0] / 255.0f, expected[1] / 255.0f,
+                                             expected[2] / 255.0f, expected[3] / 255.0f}};
+  const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  p_vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+  imageBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+  const VkBufferImageCopy region = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+      .imageExtent = {kWidth, kHeight, 1}};   // tightly packed, offset zero: exactly 16384 bytes
+  p_vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+  const VkBufferMemoryBarrier toHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE};
+  p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &toHost, 0, NULL);
+  HOST_STEP("vkEndCommandBuffer", p_vkEndCommandBuffer(cmd));
+  const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  HOST_STEP("vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence));
+  const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
+  HOST_STEP("vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
+  HOST_STEP("vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  HOST_STEP("vkInvalidateMappedMemoryRanges", p_vkInvalidateMappedMemoryRanges(device, 1, &whole));
+  // Flush/invalidate apply to vkMapMemory's pointer, not an arbitrary alias.
+  // Darwin returns the original pointer; an arbitrary alias would require
+  // platform-specific cache synchronization outside Vulkan's scope.
+  const int checkOriginal = pointer == mapped;
+  const volatile uint8_t *pixels = pointer, *mappedPixels = mapped;
+  uint32_t matched = 0, mappedMatched = 0, first = UINT32_MAX;
+  for (uint32_t i = 0; i < kWidth * kHeight; i++) {
+    int same = 1, mappedSame = 1;
+    for (uint32_t c = 0; c < 4; c++) {
+      if (checkOriginal) same &= pixels[4 * i + c] == expected[c];
+      mappedSame &= mappedPixels[4 * i + c] == expected[c];
+    }
+    if (checkOriginal) matched += same;
+    mappedMatched += mappedSame;
+    if (checkOriginal && !same && first == UINT32_MAX) first = i;
+  }
+  if (!checkOriginal) probe_line("vk host-import original alias not read: cache synchronization covers the vkMapMemory mapping only");
+  snprintf(detail, sizeof detail, "mapped %u/4096 pixels = 3972b4e1; original alias %s matched %u/4096 first mismatch %u",
+           mappedMatched, checkOriginal ? "checked" : "not checked", matched, first);
+  ok = vkCheck("host-import full CPU readback", (!checkOriginal || matched == kWidth * kHeight) && mappedMatched == kWidth * kHeight, detail);
+cleanup:
+  if (pool) p_vkDeviceWaitIdle(device);   // retire submissions before releasing imported pages, including on errors
+  if (fence) p_vkDestroyFence(device, fence, NULL);
+  if (pool) p_vkDestroyCommandPool(device, pool, NULL);
+  if (mapped) p_vkUnmapMemory(device, imported);
+  if (buffer) p_vkDestroyBuffer(device, buffer, NULL);
+  if (imported) p_vkFreeMemory(device, imported, NULL);
+  free(pointer);   // host allocation outlives the imported VkDeviceMemory
+  if (image) p_vkDestroyImage(device, image, NULL);
+  if (imageMemory) p_vkFreeMemory(device, imageMemory, NULL);
+  probe_line("vk host-import end %s", ok ? "PASS" : "FAIL");
+#undef HOST_STEP
+  return ok;
+}
+
 int probe_vulkan(const char *library)
 {
   // Owner probe only: the Darwin winsys bounds its opt-in geometry trace to 32 lines.
@@ -457,6 +648,14 @@ int probe_vulkan(const char *library)
              (unsigned)driverProperties.conformanceVersion.major, (unsigned)driverProperties.conformanceVersion.minor,
              (unsigned)driverProperties.conformanceVersion.subminor, (unsigned)driverProperties.conformanceVersion.patch);
   probe_line("vk driverInfo: '%.*s'", (int)sizeof(driverProperties.driverInfo), driverProperties.driverInfo);
+  const int hostImport = hostImportSupported(physical);
+  VkPhysicalDeviceExternalMemoryHostPropertiesEXT hostProperties = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
+  if (hostImport == 1) {
+    VkPhysicalDeviceProperties2 hostProperties2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+        .pNext = &hostProperties};
+    p_vkGetPhysicalDeviceProperties2(physical, &hostProperties2);
+  }
 
   VkQueueFamilyProperties families[8];
   uint32_t familyCount = 8, family = UINT32_MAX;
@@ -480,7 +679,8 @@ int probe_vulkan(const char *library)
   const VkDeviceQueueCreateInfo queueInfo = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = family,
                                              .queueCount = 1, .pQueuePriorities = &priority};
   const VkDeviceCreateInfo deviceInfo = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = 1,
-                                         .pQueueCreateInfos = &queueInfo};
+      .pQueueCreateInfos = &queueInfo, .enabledExtensionCount = hostImport == 1 ? 1u : 0u,
+      .ppEnabledExtensionNames = (const char *const[]){VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME}};
   if (!vkStep("vkCreateDevice", p_vkCreateDevice(physical, &deviceInfo, NULL, &device), NULL)) goto out_instance;
 #define LOAD(name) p_##name = (PFN_##name)p_vkGetDeviceProcAddr(device, #name);
   VK_DEVICE_FUNCTIONS(LOAD)
@@ -620,7 +820,20 @@ int probe_vulkan(const char *library)
              kClear[0], kClear[1], kClear[2], kClear[3]);
   const int clearOK = vkCheck("clear readback", match == kWidth * kHeight, detail);
   const int triangleOK = triangleProbe(device, queue, pool, image, buffer, bufferMemory, mapped, coherent);
-  if (clearOK && triangleOK && linearOK != 0 && linearClearOK != 0) result = 0;
+  if (clearOK && triangleOK && linearOK != 0 && linearClearOK != 0) {
+    result = 0;
+    // Last: a host-import failure must not prevent any original render/TQ test.
+    if (hostImport == 1) {
+      if (!hostImportProbe(physical, device, queue, family, &memory, hostProperties.minImportedHostPointerAlignment)) result = -1;
+    } else if (hostImport == 0) {
+      probe_line("vk host-import SKIP: VK_EXT_external_memory_host absent (not a PASS)");
+    } else {
+      probe_line("vk host-import not run: extension discovery failed");
+      result = -1;
+    }
+  } else {
+    probe_line("vk host-import SKIP: original render/TQ checks failed (not a PASS)");
+  }
 
 out_objects:
   if (transferStage) probe_line("vk initial transfer %s end FAIL", transferStage);
