@@ -6,14 +6,14 @@ from unittest.mock import patch
 R=Path(__file__).resolve().parents[2]
 module=runpy.run_path(str(R/'scripts/build-a04br3-metal-plugin.py'))
 main=module['main'];real_run=subprocess.run
-flags=('--sipf1-dump','--submit-barrier','--serial-transfer','--tq-clip','--pipeline-failure-diag','--require-fetch-for-apple3')
-variables=('PVR_DARWIN_SIPF1_DUMP','PVR_DARWIN_SUBMIT_BARRIER','PVR_DARWIN_SERIAL_TRANSFER','PVR_DARWIN_TQ_CLIP','PVR_METAL_PIPELINE_DIAG','PVR_METAL_REQUIRE_FETCH_FOR_APPLE3')
+flags=('--sipf1-dump','--submit-barrier','--serial-transfer','--tq-clip','--pipeline-failure-diag','--require-fetch-for-apple3','--roa-color')
+variables=('PVR_DARWIN_SIPF1_DUMP','PVR_DARWIN_SUBMIT_BARRIER','PVR_DARWIN_SERIAL_TRANSFER','PVR_DARWIN_TQ_CLIP','PVR_METAL_PIPELINE_DIAG','PVR_METAL_REQUIRE_FETCH_FOR_APPLE3','PVR_DARWIN_ROA_COLOR')
 with tempfile.TemporaryDirectory(prefix='pvr-metal-flags-') as t:
  root=Path(t);(root/'scripts').mkdir();builder=root/'scripts/build-vulkan-metal-plugin.py';builder.write_text('# fixture generic builder\n')
  board=root/'package/powervr/user/NativePowerVRMetalBoard.mm';board.parent.mkdir(parents=True);board.write_text('// board unchanged\n')
  library=root/'driver.dylib';library.write_bytes(b'fixture')
  out=root/'out'/'plugin';main.__globals__['ROOT']=root
- for bits in itertools.product((False,True),repeat=6):
+ for bits in itertools.product((False,True),repeat=7):
   skip=bool(sum(bits)%2);seen=[]
   argv=['metal','--vulkan',str(library),'--out',str(out),*[f for f,b in zip(flags,bits) if b],*(['--skip-bridge'] if skip else [])]
   def generic(command,check):
@@ -39,4 +39,4 @@ with tempfile.TemporaryDirectory(prefix='pvr-metal-flags-') as t:
   with patch.object(sys,'argv',argv),patch('subprocess.run',side_effect=generic):main()
   assert len(seen)==1
  assert board.read_text()=='// board unchanged\n'
-print('PASS actual Metal command preparation: 64 independent flag combinations, exact constructors/env=1 only when selected, OUT cleanup survival, stale siblings unused, skip-bridge preserved; no GPU/build execution')
+print('PASS actual Metal command preparation: 128 independent flag combinations, exact constructors/env=1 only when selected, OUT cleanup survival, stale siblings unused, skip-bridge preserved; no GPU/build execution')
