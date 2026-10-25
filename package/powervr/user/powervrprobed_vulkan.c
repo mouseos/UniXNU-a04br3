@@ -533,7 +533,7 @@ static int hostImportProbe(VkPhysicalDevice physical, VkDevice device, VkQueue q
       .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE};
-  p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &fromHost, 0, NULL);
+  probe_line("vk hostclear begin");
   imageBarrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
   const uint8_t expected[4] = {0x39, 0x72, 0xb4, 0xe1};
@@ -543,6 +543,22 @@ static int hostImportProbe(VkPhysicalDevice physical, VkDevice device, VkQueue q
   p_vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
   imageBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+  HOST_STEP("hostclear vkEndCommandBuffer", p_vkEndCommandBuffer(cmd));
+  const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  HOST_STEP("hostclear vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence));
+  const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
+  HOST_STEP("hostclear vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
+  HOST_STEP("hostclear vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  probe_line("vk hostclear end PASS");
+  p_vkDestroyFence(device, fence, NULL);
+  fence = VK_NULL_HANDLE;
+
+  // Keep the completed clear command buffer owned by the pool; copy gets a
+  // fresh buffer and fence, so a clear failure cannot submit any copy work.
+  probe_line("vk hostcopy begin");
+  HOST_STEP("hostcopy vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdInfo, &cmd));
+  HOST_STEP("hostcopy vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin));
+  p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 1, &fromHost, 0, NULL);
   const VkBufferImageCopy region = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
       .imageExtent = {kWidth, kHeight, 1}};   // tightly packed, offset zero: exactly 16384 bytes
   p_vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
@@ -551,12 +567,11 @@ static int hostImportProbe(VkPhysicalDevice physical, VkDevice device, VkQueue q
       .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE};
   p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &toHost, 0, NULL);
-  HOST_STEP("vkEndCommandBuffer", p_vkEndCommandBuffer(cmd));
-  const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  HOST_STEP("vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence));
-  const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
-  HOST_STEP("vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
-  HOST_STEP("vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  HOST_STEP("hostcopy vkEndCommandBuffer", p_vkEndCommandBuffer(cmd));
+  HOST_STEP("hostcopy vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence));
+  HOST_STEP("hostcopy vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
+  HOST_STEP("hostcopy vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  probe_line("vk hostcopy end PASS");
   HOST_STEP("vkInvalidateMappedMemoryRanges", p_vkInvalidateMappedMemoryRanges(device, 1, &whole));
   // Flush/invalidate apply to vkMapMemory's pointer, not an arbitrary alias.
   // Darwin returns the original pointer; an arbitrary alias would require
