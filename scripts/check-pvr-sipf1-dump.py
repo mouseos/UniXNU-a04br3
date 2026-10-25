@@ -34,7 +34,7 @@ const char *bad[]={"0","2","01","true",""};for(unsigned i=0;i<5;i++){assert(!set
 assert(!setenv("PVR_DARWIN_SIPF1_DUMP","1",1));assert(!pvr_darwin_sipf1_dump_begin(false));
 pthread_t t[16];for(unsigned i=0;i<16;i++)assert(!pthread_create(&t[i],NULL,worker,NULL));for(unsigned i=0;i<16;i++)assert(!pthread_join(t[i],NULL));
 #ifdef PVR_WINSYS_DARWIN
-assert(accepted==4);
+assert(accepted==8);
 #else
 assert(!accepted);
 #endif
@@ -58,7 +58,7 @@ pvr_darwin_sipf1_dump_primitive(true,guard,84,UINT64_MAX,84);
 void *two=mmap(NULL,page*2,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);assert(two!=MAP_FAILED);assert(!mprotect((char*)two+page,page,PROT_NONE));
 unsigned char *prim=(unsigned char*)two+page-84;for(unsigned i=0;i<84;i++)prim[i]=(unsigned char)i;
 pvr_darwin_sipf1_dump_primitive(true,prim,84,0,84);assert(!munmap(two,page*2));
-assert(!munmap(guard,page));puts("PASS actual dump helpers: exact gate, concurrent four-stream cap, guarded bounds and initialized byte output");}
+assert(!munmap(guard,page));puts("PASS actual dump helpers: exact gate, concurrent eight-stream cap, guarded bounds and initialized byte output");}
 '''
 with tempfile.TemporaryDirectory(prefix='sipf1-dump-') as t:
  d=Path(t);(d/'t.c').write_text(h)
