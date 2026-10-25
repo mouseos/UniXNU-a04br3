@@ -119,6 +119,19 @@ instead of waiting for the timer.
 sends the frame buffer as CRC-checked, run-length coded rows on UART0 and the script writes a PNG, asking again for rows a
 kernel log line broke.
 
+### Home and input diagnostics
+
+With the same UART service enabled, `scripts/a04br3-home.sh` sends `A04BR3!HOME` to the
+NativeHidInput Home mailbox. It wakes or leaves an app through a normal key press/release;
+it does not reset the tablet. The collector keeps running. Older kernels without this
+command require the physical Home mapping.
+
+`a04br3-proclog=60` gives a compact process/display heartbeat. Add `a04br3-stacklog=1`
+only when full UI thread stacks are needed; they are disabled during ordinary use.
+`a04br3-input-selftest=<seconds>` enables one synthetic swipe for unattended input
+tests. It is disabled in the board defaults so it does not interfere with real fingers.
+The first 32 contacts log their HID report count and return code as well as coordinates.
+
 ### Fast rebuilds over SSH
 
 A full Actions build takes about 25 minutes. The base workflow `.github/workflows/a04br3-ssh.yml` of UniXNU builds once,

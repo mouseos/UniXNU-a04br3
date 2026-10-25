@@ -25,6 +25,8 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" {
 // package/TouchState.cpp
 extern volatile uint32_t native_touch_seq, native_touch_count;
+extern volatile uint32_t native_touch_hid_reports;
+extern volatile int native_hid_input_results[8];
 extern volatile int native_touch_xs[12], native_touch_ys[12], native_touch_ids[12];
 void native_touch_published(void);
 // package/HidInputProbe.cpp: 1 asks NativeHidInput for one Home press and release.
@@ -38,6 +40,7 @@ volatile int a04br3_touch_error = -1;
 namespace {
 
 volatile uint8_t *gI2c, *gGpio, *gTop, *gInfra, *gPwrap, *gKeypad;
+IOLock *gPublishLock;
 void (*volatile gButtonSink)(void *, uint32_t);
 void *volatile gButtonContext;
 
@@ -118,6 +121,10 @@ int point(unsigned x, unsigned y, unsigned z, unsigned *px, unsigned *py)
 
 void publish(bool down, unsigned px, unsigned py)
 {
+  // Both the panel and the optional self-test publish here. A sequence lock
+  // protects readers only: writers must exclude one another or their increments
+  // can be lost, leaving an odd sequence that touchSend rejects indefinitely.
+  IOLockLock(gPublishLock);
   native_touch_seq = native_touch_seq + 1;   // odd: writing
   __asm__ volatile("dmb ish" ::: "memory");
   native_touch_count = down ? 1 : 0;
@@ -126,6 +133,9 @@ void publish(bool down, unsigned px, unsigned py)
   native_touch_ys[0] = int((py * 20319U) / 1279U);
   __asm__ volatile("dmb ish" ::: "memory");
   native_touch_seq = native_touch_seq + 1;   // even: published
+  IOLockUnlock(gPublishLock);
+  // The sink enters NativeHidInput's work loop. Never hold the writer lock
+  // across this synchronous callback.
   native_touch_published();
 }
 
@@ -169,7 +179,9 @@ void touchThread(void *, wait_result_t)
     if (active || down) publish(active != 0, lastx, lasty);
     if ((active != 0) != down) {
       if (active) a04br3_touch_contacts = a04br3_touch_contacts + 1;
-      if (a04br3_touch_contacts <= 32) IOLog("a04br3 input: touch %s %u,%u\n", active ? "down" : "up", lastx, lasty);
+      if (a04br3_touch_contacts <= 32) IOLog("a04br3 input: touch %s %u,%u seq %u reports %u result 0x%x\n",
+          active ? "down" : "up", lastx, lasty, native_touch_seq, native_touch_hid_reports,
+          unsigned(native_hid_input_results[6]));
     }
     down = active != 0;
     (void)command(0);
@@ -205,8 +217,6 @@ void keyThread(void *, wait_result_t)
 // (a page with no previous page would not change on a leftward swipe). NativeHidInput's touch report count and the result of
 // its last report go to UART before and after. The panel's own readings are not involved.
 extern "C" {
-extern volatile uint32_t native_touch_hid_reports;
-extern volatile int native_hid_input_results[8];
 extern volatile uint32_t native_hid_input_events[8];
 extern volatile uint32_t native_touch_edge_stats[4];
 extern char native_hid_input_props[1024];
@@ -263,6 +273,8 @@ void a04br3_input_start(void)
   gPwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1000F000, 0x1000));
   gKeypad = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10002000, 0x1000));
   if (!gI2c || !gGpio || !gTop || !gInfra || !gPwrap || !gKeypad) { IOLog("a04br3 input: register mapping failed\n"); return; }
+  gPublishLock = IOLockAlloc();
+  if (!gPublishLock) { IOLog("a04br3 input: publisher lock allocation failed\n"); return; }
   start(touchThread);
   start(keyThread);
   if (PE_parse_boot_argn("a04br3-input-selftest", &gSelftestSeconds, sizeof(gSelftestSeconds)) && gSelftestSeconds) start(selftestThread);

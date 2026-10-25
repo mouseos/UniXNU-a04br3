@@ -33,6 +33,8 @@ extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), vo
 extern "C" void thread_deallocate(thread_t);
 // Not exported to the IOKit compile context (as in BootReset.c of UniXNU-sheng, which declares ml_io_map_unmappable).
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+// The first bootstrap kernel links a display stub without NativeHidInput.
+extern "C" volatile uint32_t native_hid_input_command __attribute__((weak));
 
 namespace {
 
@@ -40,6 +42,7 @@ constexpr uint64_t kPwrap = 0x1000F000, kToprgu = 0x10007000, kUart0 = 0x1100500
 constexpr unsigned kUartRbr = 0x00, kUartLsr = 0x14;   // 32-bit register spacing
 constexpr char kResetRequest[] = "A04BR3!RST";
 constexpr char kShotRequest[] = "A04BR3!SHOT";
+constexpr char kHomeRequest[] = "A04BR3!HOME";
 // The LK frame buffer that NativeLegacyDisplay presents into (the GOP base the UART report of LegacyDisplayProbe.cpp prints,
 // "gop be9c0000+3e8000 800x1280"); mapped as device memory like the presenter's own mapping: 800x1280, 32 bpp, stride 3200.
 constexpr uint64_t kFrameBuffer = 0xBE9C0000;
@@ -52,7 +55,7 @@ constexpr unsigned kWatchdogSeconds = 31;   // TOPRGU LENGTH holds at most 31 s 
 
 uint32_t rd(volatile uint8_t *base, unsigned offset);
 volatile uint8_t *gPwrap, *gToprgu, *gUart;
-unsigned gRequestMatched, gShotMatched;
+unsigned gRequestMatched, gShotMatched, gHomeMatched;
 volatile uint8_t *gFb;
 bool gShotWanted;
 
@@ -62,6 +65,17 @@ bool resetRequested(void)
   if (gUart == nullptr) { return false; }
   for (unsigned n = 0; n < 64 && (rd(gUart, kUartLsr) & 1U); n++) {
     const char c = static_cast<char>(rd(gUart, kUartRbr) & 0xff);
+    // Use the same mailbox as the physical Home key. NativeHidInput emits the
+    // complete press/release pair; this can wake iPadOS without resetting it.
+    if (c == kHomeRequest[gHomeMatched]) {
+      if (++gHomeMatched == sizeof(kHomeRequest) - 1) {
+        if (&native_hid_input_command) native_hid_input_command = 1;
+        gHomeMatched = 0;
+        IOLog("a04br3 input: UART Home %s\n", &native_hid_input_command ? "requested" : "unavailable in bootstrap kernel");
+      }
+    } else {
+      gHomeMatched = (c == kHomeRequest[0]) ? 1 : 0;
+    }
     if (c == kShotRequest[gShotMatched]) {
       if (++gShotMatched == sizeof(kShotRequest) - 1) { gShotWanted = true; gShotMatched = 0; }
     } else {

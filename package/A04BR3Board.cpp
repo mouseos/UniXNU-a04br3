@@ -79,6 +79,15 @@ static void a04br3_thread_report(void)
   IOLog("a04br3 smp: requested %u running %u steps %u/%u/%u/%u psci %d/%d/%d/%d\n", armcpu_smp_requested, armcpu_smp_running,
         armcpu_smp_step[0], armcpu_smp_step[1], armcpu_smp_step[2], armcpu_smp_step[3], armcpu_smp_psci_rc[0],
         armcpu_smp_psci_rc[1], armcpu_smp_psci_rc[2], armcpu_smp_psci_rc[3]);
+  // Full thread/stack walks are opt-in: the process heartbeat must not turn every
+  // normal frame-rate observation into a synchronous dump of all UI threads.
+  static int stacks = -1;
+  if (stacks < 0) {
+    unsigned enabled = 0;
+    PE_parse_boot_argn("a04br3-stacklog", &enabled, sizeof(enabled));
+    stacks = enabled != 0;
+  }
+  if (!stacks) return;
   boot_process_capture();
   boot_process_snapshot();
   for (unsigned i = 0; i < 10; ++i)
