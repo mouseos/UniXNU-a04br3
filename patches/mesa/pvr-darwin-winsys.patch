@@ -362,7 +362,7 @@ index f1cc515..bb5ab41 100644
        /* For integer depth formats we'll convert the specified floating point
         * depth bias values and specify them as integers. In this mode a depth
 diff --git a/src/imagination/vulkan/pvr_arch_job_transfer.c b/src/imagination/vulkan/pvr_arch_job_transfer.c
-index df05efe..ed709ac 100644
+index df05efe..3f6b6b2 100644
 --- a/src/imagination/vulkan/pvr_arch_job_transfer.c
 +++ b/src/imagination/vulkan/pvr_arch_job_transfer.c
 @@ -26,6 +26,11 @@
@@ -777,7 +777,35 @@ index df05efe..ed709ac 100644
  static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
                                   struct pvr_transfer_cmd *transfer_cmd,
                                   struct pvr_transfer_prep_data *prep_data,
-@@ -5736,6 +5967,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
+@@ -5677,6 +5908,27 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
+          state->custom_mapping.texel_extend_dst = 1U;
+    }
+ 
++#ifdef PVR_WINSYS_DARWIN
++   {
++      static unsigned routes;
++      const char *flag = getenv("PVR_DARWIN_SIPF1_DUMP");
++      if (flag && strcmp(flag, "1") == 0 &&
++          __atomic_fetch_add(&routes, 1, __ATOMIC_RELAXED) < 4) {
++         char text[240];
++         snprintf(text, sizeof(text), "pvr SIPF1 route src=%u flags=%x dst=%u layout=%u %ux%u stride=%u pass=%u/%u double=%u ext=%u/%u clip=%u",
++                  active_cmd->source_count, active_cmd->flags,
++                  active_cmd->dst.vk_format, active_cmd->dst.mem_layout,
++                  active_cmd->dst.width, active_cmd->dst.height, active_cmd->dst.stride,
++                  pass_idx, state->custom_mapping.pass_count,
++                  state->custom_mapping.double_stride,
++                  state->custom_mapping.texel_extend_src, state->custom_mapping.texel_extend_dst,
++                  pvr_darwin_tq_clip_enabled(dev_info, active_cmd->source_count));
++         fprintf(stderr, "%s\n", text);
++         pvr_darwin_sipf1_log(text);
++      }
++   }
++#endif
++
+    if (state->custom_mapping.pass_count > 0U) {
+       struct pvr_transfer_pass *pass = &state->custom_mapping.passes[pass_idx];
+ 
+@@ -5736,6 +5988,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
        }
     }
  
