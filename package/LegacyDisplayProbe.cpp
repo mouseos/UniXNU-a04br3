@@ -419,6 +419,9 @@ __attribute__((noreturn,noinline)) void native_legacy_backend_guard(unsigned slo
 }
 // a04br3: the state of this probe on UART, printed by the board's process-list thread (package/A04BR3Board.cpp).
 extern "C" void a04br3_display_report_set(void (*report)(void));
+// Counters exported by the pinned NativeGOPPresenter; read-only best-effort cumulative samples.
+extern "C" volatile uint64_t native_gop_gpu_offers, native_gop_gpu_completions, native_gop_gpu_failures, native_gop_gpu_abandoned;
+extern "C" volatile uint64_t native_gop_wait_stats[7];
 static uint64_t a04br3CopyUs(uint64_t ticks,uint32_t frequency)
 {
     if(!frequency)return 0;
@@ -456,6 +459,11 @@ static void a04br3DisplayReport(void)
     IOLog("a04br3 display: %s\n", text);
     uint64_t frequency;__asm__ volatile("mrs %0, cntfrq_el0":"=r"(frequency));
     a04br3CopyReport((uint32_t)frequency);
+    IOLog("a04br3 gpu scanout: offers=%llu completed=%llu failed=%llu abandoned=%llu waits=%llu timeouts=%llu last_timeout_ns=%llu\n",
+          (unsigned long long)native_gop_gpu_offers, (unsigned long long)native_gop_gpu_completions,
+          (unsigned long long)native_gop_gpu_failures, (unsigned long long)native_gop_gpu_abandoned,
+          (unsigned long long)native_gop_wait_stats[0], (unsigned long long)native_gop_wait_stats[1],
+          (unsigned long long)native_gop_wait_stats[3]);
 }
 
 void native_legacy_display_probe(void);

@@ -34,6 +34,95 @@ void bankWrite(void *, unsigned bank, unsigned offset, uint32_t value)
   __asm__ volatile("dsb oshst" ::: "memory");
 }
 void waitUs(void *, unsigned us) { IODelay(us); }
+
+// Startup-only clock/rail snapshot. Board.cpp calls GPU init after autoreset's
+// startup WACS transactions and before Input starts its touch power sequence.
+// This relies on no host reset request during startup; it is not a shared WACS
+// lock and must never be used as a runtime API or after the input thread starts.
+// Register sources: board Linux clk-mt8167.c, mt8167.dtsi, mtk-pmic-wrap.c
+// (mt8167_regs/pwrap_read), and mt6392-regulator.c plus mt6392/registers.h.
+uint32_t clockDiagnosticRead(volatile uint8_t *base, unsigned offset)
+{
+  const uint32_t value = *reinterpret_cast<volatile uint32_t *>(base + offset);
+  __asm__ volatile("dmb oshld" ::: "memory");
+  return value;
+}
+void clockDiagnosticWrite(volatile uint8_t *base, unsigned offset, uint32_t value)
+{
+  *reinterpret_cast<volatile uint32_t *>(base + offset) = value;
+  __asm__ volatile("dsb oshst" ::: "memory");
+}
+bool clockDiagnosticWait(volatile uint8_t *pwrap, unsigned fsm)
+{
+  // Like Input's pwWait: at most 1000 polls / 10 ms per FSM phase.
+  for (unsigned n = 0; n < 1000; n++) {
+    const uint32_t status = clockDiagnosticRead(pwrap, 0xa4);
+    if (!(status & (1U << 21))) return false;   // WACS2 INIT_DONE
+    if (((status >> 16) & 7) == fsm) return true;
+    IODelay(10);
+  }
+  return false;
+}
+const char *clockDiagnosticPmicRead(volatile uint8_t *pwrap, unsigned address, uint16_t *value)
+{
+  if ((address & 1) || address > 0xfffe) return "invalid PMIC address";
+  if (!clockDiagnosticWait(pwrap, 0)) return "idle timeout or INIT_DONE lost";
+  // Only a read command: bit 31 is always zero. No PMIC register writes,
+  // wrapper initialization, or changes to clock/power/voltage configuration.
+  clockDiagnosticWrite(pwrap, 0xa0, (address >> 1) << 16);
+  if (!clockDiagnosticWait(pwrap, 6)) return "response timeout or INIT_DONE lost";
+  const uint16_t data = uint16_t(clockDiagnosticRead(pwrap, 0xa4));
+  clockDiagnosticWrite(pwrap, 0xa8, 1);   // acknowledge this read's valid data
+  if (!clockDiagnosticWait(pwrap, 0)) return "completion timeout or INIT_DONE lost";
+  *value = data;
+  return nullptr;
+}
+void clockDiagnosticSnapshot(volatile uint8_t *top)
+{
+  unsigned enabled = 0;
+  if (!PE_parse_boot_argn("a04br3-gpu-clock-diagnostic", &enabled, sizeof(enabled)) || enabled != 1) return;
+
+  const uint32_t sel0 = clockDiagnosticRead(top, 0x000), sel1 = clockDiagnosticRead(top, 0x004);
+  IOLog("a04br3 gpu clock diagnostic: startup TOP SEL0 %08x SEL1 %08x (before power/FW)\n", sel0, sel1);
+  volatile uint8_t *apmixed = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10018000, 0x1000));
+  if (apmixed) {
+    const unsigned offsets[] = {0x120, 0x140, 0x160};
+    const char *const names[] = {"MAINPLL", "UNIVPLL", "MMPLL"};
+    for (unsigned i = 0; i < 3; i++) {
+      const uint32_t con0 = clockDiagnosticRead(apmixed, offsets[i]);
+      const uint32_t con1 = clockDiagnosticRead(apmixed, offsets[i] + 4);
+      const uint32_t power = clockDiagnosticRead(apmixed, offsets[i] + 0x10);
+      IOLog("a04br3 gpu clock diagnostic: %s CON0 %08x CON1 %08x PWR %08x\n", names[i], con0, con1, power);
+    }
+  } else {
+    IOLog("a04br3 gpu clock diagnostic: MAINPLL/UNIVPLL/MMPLL unknown (mapping failed)\n");
+  }
+
+  volatile uint8_t *pwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1000f000, 0x1000));
+  if (!pwrap) {
+    IOLog("a04br3 gpu clock diagnostic: PWRAP/VCORE unknown (mapping failed)\n");
+    return;
+  }
+  const uint32_t wacs_enable = clockDiagnosticRead(pwrap, 0x98);
+  const uint32_t init = clockDiagnosticRead(pwrap, 0x9c);
+  const uint32_t status = clockDiagnosticRead(pwrap, 0xa4);
+  IOLog("a04br3 gpu clock diagnostic: WACS2 EN %08x INIT %08x RDATA %08x\n", wacs_enable, init, status);
+  if (!(wacs_enable & 1) || !(init & 1) || !(status & (1U << 21))) {
+    IOLog("a04br3 gpu clock diagnostic: VCORE unknown (WACS2 not initialized/enabled)\n");
+    return;
+  }
+  const unsigned addresses[] = {0x030a, 0x030e, 0x0312, 0x0314};
+  for (unsigned i = 0; i < 4; i++) {
+    uint16_t value = 0;
+    const char *error = clockDiagnosticPmicRead(pwrap, addresses[i], &value);
+    if (error) {
+      IOLog("a04br3 gpu clock diagnostic: VCORE %04x and remaining registers unknown (%s; RDATA %08x); continuing boot\n",
+            addresses[i], error, clockDiagnosticRead(pwrap, 0xa4));
+      return;
+    }
+    IOLog("a04br3 gpu clock diagnostic: VCORE %04x raw %04x\n", addresses[i], unsigned(value));
+  }
+}
 }  // namespace
 
 void a04br3_gpu_init(void)
@@ -45,6 +134,7 @@ void a04br3_gpu_init(void)
   gBank[A04_RGX_TOP] = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10000000, 0x1000));
   gBank[A04_RGX_MFG] = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x13FFE000, 0x1000));
   if (!gBank[0] || !gBank[1] || !gBank[2] || !gBank[3]) { IOLog("a04br3 gpu: register mapping failed\n"); return; }
+  clockDiagnosticSnapshot(gBank[A04_RGX_TOP]);
   const a04_rgx_io io = {nullptr, bankRead, bankWrite, waitUs};
   IOLog("a04br3 gpu: MFG status 0x%x/0x%x, powering the Rogue domains\n", bankRead(nullptr, A04_RGX_SPM, 0x60c),
         bankRead(nullptr, A04_RGX_SPM, 0x610));
