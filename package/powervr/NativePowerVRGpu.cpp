@@ -47,6 +47,7 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <kern/cpu_data.h>
+#include <pexpert/pexpert.h>
 #include <string.h>
 #include <sys/errno.h>
 #include "compat/native_powervr_linux_compat.h"
@@ -278,15 +279,42 @@ const drm_pvr_heap kHeaps[DRM_PVR_HEAP_COUNT] = {
 static_assert(DRM_PVR_HEAP_GENERAL == 0 && DRM_PVR_HEAP_PDS_CODE_DATA == 1 && DRM_PVR_HEAP_USC_CODE == 2 && DRM_PVR_HEAP_RGNHDR == 3 &&
               DRM_PVR_HEAP_VIS_TEST == 4 && DRM_PVR_HEAP_TRANSFER_FRAG == 5 && DRM_PVR_HEAP_COUNT == 6, "kHeaps order");
 static_assert(SZ_4K == 1u << 12, "page_size_log2");
+// Experimental IPF 34-bit window comparison; selected before publishing clients.
+bool gTqLowEnabled;
+bool gTqLowInitialized;
+drm_pvr_heap effective_heap(uint32_t id)
+{
+  drm_pvr_heap heap = kHeaps[id];
+  if (gTqLowEnabled && id == DRM_PVR_HEAP_TRANSFER_FRAG) {
+    heap.base = 0x10000ULL;
+    heap.size = ROGUE_TRANSFER_FRAG_HEAP_SIZE - 0x10000ULL;
+  }
+  return heap;
+}
+void initTqLowPolicy()
+{
+  if (gTqLowInitialized) return;
+  gTqLowInitialized = true;
+  uint32_t requested = 0;
+  const bool supplied = PE_parse_boot_argn("a04br3-gpu-tq-low", &requested, sizeof(requested));
+  const uint64_t target = (22ULL << 48) | (40ULL << 32) | (54ULL << 16) | 30ULL;
+  gTqLowEnabled = supplied && requested == 1 && gGpuId == target && gDeviceAddrBits >= 34;
+  const drm_pvr_heap heap = effective_heap(DRM_PVR_HEAP_TRANSFER_FRAG);
+  IOLog("powervr: experimental TQ low policy enabled %u supplied %u request %u gpu %llx VA bits %llu base %llx size %llx end %llx\n",
+        unsigned(gTqLowEnabled), unsigned(supplied), requested, (unsigned long long)gGpuId,
+        (unsigned long long)gDeviceAddrBits, (unsigned long long)heap.base,
+        (unsigned long long)heap.size, (unsigned long long)(heap.base + heap.size));
+}
 // pvr_find_heap_containing()
 bool find_heap_containing(uint64_t start, uint64_t size)
 {
   uint64_t end;
-  if (__builtin_add_overflow(start, size - 1, &end)) return false;
+  if (!size || __builtin_add_overflow(start, size - 1, &end)) return false;
   for (uint32_t heap_id = 0; heap_id < DRM_PVR_HEAP_COUNT; heap_id++) {
     // Filter heaps that present only with an associated quirk.
     if (heap_id == DRM_PVR_HEAP_RGNHDR && !PVR_HAS_QUIRK(&gDev, 63142)) continue;
-    if (kHeaps[heap_id].base <= start && end < kHeaps[heap_id].base + kHeaps[heap_id].size) return true;
+    const drm_pvr_heap heap = effective_heap(heap_id);
+    if (heap.base <= start && end < heap.base + heap.size) return true;
   }
   return false;
 }
@@ -1410,7 +1438,7 @@ int NativePowerVRUserClient::devQuery(drm_pvr_ioctl_dev_query_args *args)
       // Region header heap is only present if BRN63142 is present.
       uint64_t dest = query.heaps.array;
       for (uint32_t i = 0; i < query.heaps.count; i++) {
-        drm_pvr_heap heap = kHeaps[i];
+        drm_pvr_heap heap = effective_heap(i);
         if (i == DRM_PVR_HEAP_RGNHDR && !PVR_HAS_QUIRK(pvr_dev, 63142)) heap.size = 0;
         err = PVR_UOBJ_SET(dest, query.heaps.stride, heap);
         if (err < 0) return err;
@@ -1738,6 +1766,7 @@ extern "C" int native_powervr_publish(void)
     IOLog("powervr: device information of the firmware image unusable (%d); service not published\n", err);
     return err;
   }
+  initTqLowPolicy();
   IOLog("powervr: device info: gpu_id %llx, phantoms %u, quirks 47217:%d 48545:%d 49927:%d 51764:%d 62269:%d 63142:%d, "
         "enhancements 35421:%d 42064:%d, VA bits %llu, free list min pages %u, max coeffs %u, CDM local mem %u%s\n",
         static_cast<unsigned long long>(gGpuId), rogue_get_num_phantoms(&gDev), gDev.quirks.has_brn47217, gDev.quirks.has_brn48545,
