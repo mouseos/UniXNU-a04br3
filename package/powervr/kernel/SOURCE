@@ -1,4 +1,6 @@
-Unchanged sources from Linux drivers/gpu/drm/imagination at torvalds/linux 734bef548a96e8774d6eef5dfa2026c6edc4e80b (SPDX: GPL-2.0-only OR MIT; used under the MIT terms). Copyright Imagination Technologies Ltd.
+Sources from Linux drivers/gpu/drm/imagination at torvalds/linux 734bef548a96e8774d6eef5dfa2026c6edc4e80b (SPDX: GPL-2.0-only OR MIT; used under the MIT terms). Copyright Imagination Technologies Ltd.
 pvr_mmu.c, pvr_mmu.h: compiled as C by scripts/build-a04br3-board.py through ../compat (Linux API shim) and ../stub (pvr_device stand-in); the API is implemented on IOKit in ../NativePowerVR.cpp.
 pvr_device_info.c: compiled as C by scripts/build-a04br3-board.py through ../stub/devinfo (the pvr_device of the device information, ahead of ../stub) for ../NativePowerVRGpu.cpp, which loads the firmware image's device information with it.
 pvr_context.c, pvr_cccb.c, pvr_free_list.c, pvr_hwrt.c, pvr_stream.c, pvr_stream_defs.c, pvr_dump.c and their headers: the job layer, compiled as C by scripts/build-a04br3-board.py through ../compat (Linux API shim, native_powervr_linux_jobs.h) and ../stub; what they call (FW objects, GEM, VM, KCCB/FWCCB, pvr_queue without drm_sched) is implemented in ../NativePowerVRJobs.cpp, which replaces pvr_queue.c and pvr_job.c.
+
+Local modification: pvr_hwrt.c supports the GE8300 simple parameter format v1 single-macrotile layout; the other listed kernel sources remain unchanged.

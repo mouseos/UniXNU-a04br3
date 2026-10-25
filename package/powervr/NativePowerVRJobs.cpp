@@ -1271,6 +1271,14 @@ void complete_job_hosts(Job *job)
   if (job->hosts_completed) return;
   if (native_powervr_hosts_sync(job->hosts)) job->failed = true;
   job->hosts_completed = true;
+  // gJobs.lock serializes worker/WaitFence; one snapshot per job, first four successful fragments globally.
+  // Completion is observed before these reads, but later queued work can already have overwritten the live registers.
+  static unsigned renderSnapshots;
+  if (!job->failed && !atomic_read(&job->ctx->faulty) && job->type == DRM_PVR_JOB_TYPE_FRAGMENT && renderSnapshots < 4) {
+    native_powervr_log("powervr: render snapshot %u after Fragment job %u fence %llu (live, later work may be active)\n",
+                       ++renderSnapshots, job->id, static_cast<unsigned long long>(job->fence));
+    native_powervr_dump_render_regs();
+  }
 }
 
 // Reset notifications (gJobs.lock held): the named job fails and its context becomes faulty when the context is

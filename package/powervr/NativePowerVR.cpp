@@ -370,7 +370,21 @@ bool boot(void)
   wr64(ROGUE_CR_SOFT_RESET, softResetMask); (void)rd64(ROGUE_CR_SOFT_RESET);
   wr64(ROGUE_CR_SOFT_RESET, softResetMask ^ ROGUE_CR_SOFT_RESET_RASCALDUSTS_EN); (void)rd64(ROGUE_CR_SOFT_RESET);
   wr64(ROGUE_CR_SOFT_RESET, ROGUE_CR_SOFT_RESET_GARTEN_EN); (void)rd64(ROGUE_CR_SOFT_RESET);
-  // rogue_slc_init(): SLC line 512 bits < 1024, so bypass the burst combiner; quirk 71242 is not set for 22.x.
+  // The real 22.40 core needs the vendor DDK SLC bypass policy, not just the
+  // 22.67 firmware's feature list. rgxstartstop.c RGXInitSLC(): BRN61450 bypasses
+  // IPF_OBJ/IPF_CPF. rgxconfig_km_22.V.54.30.h gives 64 KiB SLC, below the
+  // 128 KiB TPU caching threshold in tpu_cacheability_km.h, so bypass TPU too.
+  // Preserve unrelated bypass bits, as the vendor read/modify/write does.
+  if (a04br3_gpu_bvnc == 0x001600280036001eULL) {
+    const uint64_t bypass = rd64(ROGUE_CR_SLC_CTRL_BYPASS) |
+                            ROGUE_CR_SLC_CTRL_BYPASS_REQ_IPF_OBJ_EN |
+                            ROGUE_CR_SLC_CTRL_BYPASS_REQ_IPF_CPF_EN |
+                            ROGUE_CR_SLC_CTRL_BYPASS_REQ_TPU_EN;
+    wr64(ROGUE_CR_SLC_CTRL_BYPASS, bypass);
+    IOLog("powervr: MT8167 SLC bypass BRN61450 and 64-KiB TPU policy: %llx\n",
+          rd64(ROGUE_CR_SLC_CTRL_BYPASS));
+  }
+  // SLC line 512 bits < 1024: bypass the burst combiner; quirk 71242 is not set for 22.x.
   wr32(ROGUE_CR_SLC_CTRL_MISC, (rd32(ROGUE_CR_SLC_CTRL_MISC) & ROGUE_CR_SLC_CTRL_MISC_ENABLE_PSG_HAZARD_CHECK_EN) |
                                ROGUE_CR_SLC_CTRL_MISC_ADDR_DECODE_MODE_PVR_HASH1 | ROGUE_CR_SLC_CTRL_MISC_BYPASS_BURST_COMBINER_EN);
   // pvr_mips_wrapper_init()
@@ -841,6 +855,19 @@ void dumpFirmware(const char *when, uint32_t from)
 }
 
 }  // namespace
+extern "C" void native_powervr_dump_render_regs(void)
+{
+  if (!gRegs || !gFwStarted || !gPvr.fw_dev.initialised) return;
+  // linux/pvr_rogue_cr_defs_client.h: ROGUE_CR_TE_MTILE1/2, TE_SCREEN, ISP_MTILE_SIZE.
+  // linux/pvr_rogue_cr_defs.h: ROGUE_CR_ISP_CTL, ISP_RENDER. Explicit offsets avoid client/master macro collisions.
+  const uint32_t teMtile1 = rd32(0x0C08), teMtile2 = rd32(0x0C10), teScreen = rd32(0x0C18);
+  const uint32_t ispMtileSize = rd32(0x0F18), ispCtl = rd32(0x0F38), ispRender = rd32(0x0F08);
+  // These are sequential live reads, not an atomic capture or a retained state of the completed job.
+  IOLog("powervr: render regs live: TE_MTILE1 %08x TE_MTILE2 %08x TE_SCREEN %08x "
+        "ISP_MTILE_SIZE %08x ISP_CTL %08x ISP_RENDER %08x\n",
+        teMtile1, teMtile2, teScreen, ispMtileSize, ispCtl, ispRender);
+}
+
 extern "C" void native_powervr_dump_firmware(const char *when, uint32_t last_words)
 {
   if (!gTc) return;
