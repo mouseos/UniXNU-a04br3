@@ -1725,10 +1725,10 @@ index 0000000..dafbb55
 +#endif
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.c b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
 new file mode 100644
-index 0000000..2f269e6
+index 0000000..7fe52e7
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
-@@ -0,0 +1,910 @@
+@@ -0,0 +1,912 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: talks to the NativePowerVR IOKit user client (NativePowerVRABI.h,
 + * version 1). Modelled on Turnip's darwin backend (tu_knl_darwin.cc).
@@ -1771,6 +1771,8 @@ index 0000000..2f269e6
 +   static unsigned sequence;
 +   const char *flag = getenv("PVR_DARWIN_SIPF1_DUMP");
 +   if (!text || !flag || strcmp(flag, "1")) return;
++   const char *stderr_only = getenv("PVR_DARWIN_SIPF1_STDERR_ONLY");
++   if (stderr_only && strcmp(stderr_only, "1") == 0) return;
 +   const size_t length = strnlen(text, 255);
 +   if (!length) return;
 +   pthread_mutex_lock(&lock);

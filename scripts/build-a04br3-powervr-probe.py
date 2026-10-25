@@ -117,6 +117,12 @@ def ui_batch_probe_source():
         'PVR_PROBE_TQ_FIRST', 'PVR_PROBE_UI_BATCH').replace('TQ-first comparison', 'UI-batch comparison')
 
 
+def sipf1_stderr_only_probe_source():
+    """Keep snapshot stderr output while skipping the optional IOKit marker route."""
+    return tq_first_probe_source().replace('enable_tq_first_comparison', 'enable_sipf1_stderr_only_comparison').replace(
+        'PVR_PROBE_TQ_FIRST', 'PVR_DARWIN_SIPF1_STDERR_ONLY').replace('TQ-first comparison', 'SIPF1 stderr-only comparison')
+
+
 def sipf1_touch_probe_source():
     """Enable bounded CPU reads without snapshot formatting or logging."""
     return tq_first_probe_source().replace('enable_tq_first_comparison', 'enable_sipf1_touch_comparison').replace(
@@ -307,6 +313,10 @@ def build(args, powervr):
         comparison = out / 'powervrprobed-ui-batch.c'
         comparison.write_text(ui_batch_probe_source())
         sources.append(str(comparison))
+    if args.sipf1_stderr_only:
+        comparison = out / 'powervrprobed-sipf1-stderr-only.c'
+        comparison.write_text(sipf1_stderr_only_probe_source())
+        sources.append(str(comparison))
     if args.sipf1_touch:
         comparison = out / 'powervrprobed-sipf1-touch.c'
         comparison.write_text(sipf1_touch_probe_source())
@@ -439,6 +449,7 @@ def main():
     parser.add_argument('--extra-trust', type=Path, action='append', default=[], metavar='TRUST_JSON',
                         help='also trust the CDHashes of another owner build (its trust.json, every "*cdhash" value), for example '
                              'build-a04br3-metal-plugin.py --out DIR/trust.json; one owner module carries them all')
+    parser.add_argument('--sipf1-stderr-only', action='store_true', help='with --sipf1-dump: skip IOKit marker routing, retain stderr snapshots')
     parser.add_argument('--sipf1-touch', action='store_true', help='read bounded SIPF1 CPU bytes without dump logging')
     parser.add_argument('--submit-barrier', action='store_true', help='enable diagnostic ARM64 store barrier immediately before job submission')
     parser.add_argument('--serial-transfer', action='store_true', help='wait transfer fences synchronously for overlap comparison')
@@ -449,6 +460,10 @@ def main():
     args = parser.parse_args()
     if args.ui_batch and args.vulkan is None:
         parser.error('--ui-batch requires --vulkan')
+    if args.sipf1_stderr_only and args.vulkan is None:
+        parser.error('--sipf1-stderr-only requires --vulkan')
+    if args.sipf1_stderr_only and not args.sipf1_dump:
+        parser.error('--sipf1-stderr-only requires --sipf1-dump')
     if args.sipf1_touch and args.vulkan is None:
         parser.error('--sipf1-touch requires --vulkan')
     if args.submit_barrier and args.vulkan is None:
