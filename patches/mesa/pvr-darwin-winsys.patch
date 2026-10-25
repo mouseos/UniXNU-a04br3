@@ -362,21 +362,22 @@ index f1cc515..bb5ab41 100644
        /* For integer depth formats we'll convert the specified floating point
         * depth bias values and specify them as integers. In this mode a depth
 diff --git a/src/imagination/vulkan/pvr_arch_job_transfer.c b/src/imagination/vulkan/pvr_arch_job_transfer.c
-index df05efe..9a64656 100644
+index df05efe..4b4d0e0 100644
 --- a/src/imagination/vulkan/pvr_arch_job_transfer.c
 +++ b/src/imagination/vulkan/pvr_arch_job_transfer.c
-@@ -26,6 +26,10 @@
+@@ -26,6 +26,11 @@
  #include <stddef.h>
  #include <stdint.h>
  #include <string.h>
 +#ifdef PVR_WINSYS_DARWIN
 +#include <stdlib.h>
 +#include <stdio.h>
++#include "winsys/darwin/pvr_darwin.h"
 +#endif
  #include <vulkan/vulkan.h>
  
  #include "pvr_cmd_buffer.h"
-@@ -52,6 +56,72 @@
+@@ -52,6 +57,75 @@
  #include "vk_format.h"
  #include "vk_log.h"
  #include "vk_sync.h"
@@ -411,8 +412,11 @@ index df05efe..9a64656 100644
 +      hex[2 * i + 1] = digits[bytes[i] & 15];
 +   }
 +   hex[2 * length] = '\0';
-+   fprintf(stderr, "pvr SIPF1 %s offset=%llx bytes=%s\n", label,
-+           (unsigned long long)offset, hex);
++   char text[256];
++   snprintf(text, sizeof(text), "pvr SIPF1 %s offset=%llx bytes=%s", label,
++            (unsigned long long)offset, hex);
++   fprintf(stderr, "%s\n", text);
++   pvr_darwin_sipf1_log(text);
 +#endif
 +}
 +
@@ -449,7 +453,7 @@ index df05efe..9a64656 100644
  
  #define PVR_TRANSFER_MAX_PASSES 10U
  #define PVR_TRANSFER_MAX_CLIP_RECTS 4U
-@@ -3432,6 +3502,17 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
+@@ -3432,6 +3506,17 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
     const bool has_simple_internal_parameter_format_v2 =
        PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format_v2);
     uint32_t *cs_ptr = *cs_ptr_out;
@@ -467,7 +471,7 @@ index df05efe..9a64656 100644
  
     if (has_simple_internal_parameter_format_v2) {
        const uint32_t tsp_data_per_vrx_in_bytes =
-@@ -3469,6 +3550,14 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
+@@ -3469,6 +3554,14 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
     }
     cs_ptr += pvr_cmd_length(TA_STATE_ISPA);
  
@@ -482,7 +486,7 @@ index df05efe..9a64656 100644
     if (has_simple_internal_parameter_format_v2) {
        *cs_ptr_out = cs_ptr;
        return;
-@@ -4002,6 +4091,12 @@ pvr_transfer_prim_blocks_per_alloc(const struct pvr_device_info *dev_info)
+@@ -4002,6 +4095,12 @@ pvr_transfer_prim_blocks_per_alloc(const struct pvr_device_info *dev_info)
  {
     uint32_t ret = PVR_DW_TO_BYTES(ROGUE_IPF_CONTROL_STREAM_SIZE_DWORDS);
  
@@ -495,7 +499,7 @@ index df05efe..9a64656 100644
     if (PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format))
        return ret / sizeof(uint64_t) / 2U;
  
-@@ -4047,8 +4142,13 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4047,8 +4146,13 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
                                      struct pvr_transfer_cmd *transfer_cmd,
                                      struct pvr_transfer_prep_data *prep_data)
  {
@@ -510,7 +514,7 @@ index df05efe..9a64656 100644
     uint32_t free_ctrl_stream_words = ROGUE_IPF_CONTROL_STREAM_SIZE_DWORDS;
     struct pvr_transfer_3d_state *const state = &prep_data->state;
     struct pvr_winsys_transfer_regs *const regs = &state->regs;
-@@ -4124,6 +4224,9 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4124,6 +4228,9 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
        }
     }
  
@@ -520,7 +524,7 @@ index df05efe..9a64656 100644
     num_region_arrays =
        (num_prim_blks + (pvr_transfer_prim_blocks_per_alloc(dev_info) - 1U)) /
        pvr_transfer_prim_blocks_per_alloc(dev_info);
-@@ -4142,9 +4245,23 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4142,9 +4249,28 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
     stream_base_vaddr =
        PVR_DEV_ADDR(pvr_cs_bo->dev_addr.addr -
                     ctx->device->heaps.transfer_frag_heap->base_addr.addr);
@@ -535,16 +539,21 @@ index df05efe..9a64656 100644
     cs_ptr = pvr_bo_suballoc_get_map_addr(pvr_cs_bo);
     blk_cs_ptr = cs_ptr + region_arrays_size / sizeof(uint32_t);
 +#ifdef PVR_WINSYS_DARWIN
-+   if (dump) fprintf(stderr, "pvr SIPF1 stream bo=%llx heap=%llx window_offset=%llx total=%u regions=%u blocks=%u\n",
++   if (dump) {
++      char text[256];
++      snprintf(text, sizeof(text), "pvr SIPF1 stream bo=%llx heap=%llx window_offset=%llx total=%u regions=%u blocks=%u",
 +                     (unsigned long long)pvr_cs_bo->dev_addr.addr,
 +                     (unsigned long long)ctx->device->heaps.transfer_frag_heap->base_addr.addr,
 +                     (unsigned long long)stream_base_vaddr.addr, total_stream_size,
 +                     region_arrays_size, num_prim_blks);
++      fprintf(stderr, "%s\n", text);
++      pvr_darwin_sipf1_log(text);
++   }
 +#endif
  
     source = 0;
     while (source < num_sources) {
-@@ -4358,8 +4475,8 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4358,8 +4484,8 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
  
           while (rem_mappings > 0U) {
              const uint32_t min_free_ctrl_stream_words =
@@ -555,7 +564,7 @@ index df05efe..9a64656 100644
              const uint32_t num_mappings =
                 MIN2(max_mappings_per_pb, rem_mappings);
              struct pvr_rect_mapping *mappings = NULL;
-@@ -4369,10 +4486,20 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4369,10 +4495,20 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
              if (free_ctrl_stream_words < min_free_ctrl_stream_words) {
                 pvr_dev_addr_t next_region_array_vaddr = stream_base_vaddr;
  
@@ -580,7 +589,7 @@ index df05efe..9a64656 100644
  
                 if (PVR_HAS_FEATURE(dev_info,
                                     simple_internal_parameter_format_v2)) {
-@@ -4391,6 +4518,14 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4391,6 +4527,14 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
                       link_addr,
                       PVR_DW_TO_BYTES(
                          pvr_cmd_length(IPF_CONTROL_STREAM_LINK_SIPF2)));
@@ -595,7 +604,7 @@ index df05efe..9a64656 100644
                 } else {
                    pvr_csb_pack (cs_ptr, IPF_CONTROL_STREAM, control_stream) {
                       control_stream.cs_type = ROGUE_IPF_CS_TYPE_LINK;
-@@ -4400,7 +4535,8 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4400,7 +4544,8 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
  
                 cs_ptr =
                    (uint32_t *)pvr_bo_suballoc_get_map_addr(pvr_cs_bo) +
@@ -605,7 +614,7 @@ index df05efe..9a64656 100644
                 free_ctrl_stream_words = ROGUE_IPF_CONTROL_STREAM_SIZE_DWORDS;
  
                 was_linked = PVR_HAS_FEATURE(dev_info, ipf_creq_pf);
-@@ -4416,6 +4552,7 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4416,6 +4561,7 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
                 (uintptr_t)blk_cs_ptr -
                 (uintptr_t)pvr_bo_suballoc_get_map_addr(pvr_cs_bo);
  
@@ -613,7 +622,7 @@ index df05efe..9a64656 100644
              result = pvr_isp_primitive_block(dev_info,
                                               ctx,
                                               transfer_cmd,
-@@ -4432,6 +4569,19 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4432,6 +4578,19 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
                 return result;
  
              prim_blk_addr.addr += stream_start_offset;
@@ -633,7 +642,7 @@ index df05efe..9a64656 100644
  
              if (PVR_HAS_FEATURE(dev_info,
                                  simple_internal_parameter_format_v2)) {
-@@ -4494,6 +4644,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4494,6 +4653,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
  
                 cs_ptr = (uint32_t *)cs_byte_ptr;
  
@@ -650,7 +659,7 @@ index df05efe..9a64656 100644
                 free_ctrl_stream_words -= 2;
              } else {
                 pvr_csb_pack (cs_ptr, IPF_PRIMITIVE_FORMAT, word) {
-@@ -4534,9 +4694,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4534,9 +4703,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
     }
  
     if (PVR_HAS_FEATURE(dev_info, ipf_creq_pf))
@@ -670,7 +679,7 @@ index df05efe..9a64656 100644
        uint8_t *cs_byte_ptr = (uint8_t *)cs_ptr;
        uint32_t tmp;
  
-@@ -4555,7 +4722,12 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4555,7 +4731,12 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
     }
  
     pvr_csb_pack (&regs->isp_mtile_base, CR_ISP_MTILE_BASE, reg) {
@@ -684,7 +693,7 @@ index df05efe..9a64656 100644
           PVR_DEV_ADDR(pvr_cs_bo->dev_addr.addr -
                        ctx->device->heaps.transfer_frag_heap->base_addr.addr);
     }
-@@ -4564,8 +4736,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4564,8 +4745,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
        reg.mode_type = ROGUE_CR_ISP_RENDER_MODE_TYPE_FAST_2D;
     }
  
@@ -703,7 +712,7 @@ index df05efe..9a64656 100644
        pvr_csb_pack (&regs->isp_rgn, CR_ISP_RGN_SIPF, isp_rgn) {
           /* Bit 0 in CR_ISP_RGN.cs_size_ipf_creq_pf is used to indicate the
            * presence of a link.
-@@ -5596,6 +5776,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
+@@ -5596,6 +5785,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
     return vk_error(ctx->device, VK_ERROR_FORMAT_NOT_SUPPORTED);
  }
  
@@ -728,7 +737,7 @@ index df05efe..9a64656 100644
  static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
                                   struct pvr_transfer_cmd *transfer_cmd,
                                   struct pvr_transfer_prep_data *prep_data,
-@@ -5736,6 +5934,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
+@@ -5736,6 +5943,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
        }
     }
  
@@ -1515,10 +1524,10 @@ index 0000000..dafbb55
 +#endif
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.c b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
 new file mode 100644
-index 0000000..a15fa9b
+index 0000000..7e04972
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
-@@ -0,0 +1,834 @@
+@@ -0,0 +1,877 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: talks to the NativePowerVR IOKit user client (NativePowerVRABI.h,
 + * version 1). Modelled on Turnip's darwin backend (tu_knl_darwin.cc).
@@ -1551,6 +1560,49 @@ index 0000000..a15fa9b
 +#include "vk_log.h"
 +#include "vk_sync.h"
 +#include "vk_sync_timeline.h"
++
++/* Existing Metal marker ABI: Unsupported is expected after kernel delivery.
++ * No /dev/console open, GPU memory access, or new kernel interface.
++ */
++void pvr_darwin_sipf1_log(const char *text)
++{
++   static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
++   static unsigned sequence;
++   const char *flag = getenv("PVR_DARWIN_SIPF1_DUMP");
++   if (!text || !flag || strcmp(flag, "1")) return;
++   const size_t length = strnlen(text, 255);
++   if (!length) return;
++   pthread_mutex_lock(&lock);
++   const char *name = getenv("PVR_DARWIN_SERVICE");
++   if (!name || !*name) name = NativePowerVRServiceName;
++   CFMutableDictionaryRef matching = IOServiceMatching(name);
++   io_service_t service = matching ? IOServiceGetMatchingService(kIOMainPortDefault, matching) : 0;
++   if (service) {
++      const unsigned id = sequence++;
++      const unsigned parts = (length + 39) / 40;
++      for (unsigned part = 0; part < parts; ++part) {
++         char chunk[64];
++         const unsigned at = part * 40;
++         const unsigned count = length - at < 40 ? length - at : 40;
++         int prefix = snprintf(chunk, sizeof(chunk), "S1 %08x.%u/%u ", id, part + 1, parts);
++         if (prefix < 0 || (size_t)prefix + count >= sizeof(chunk)) break;
++         for (unsigned i = 0; i < count; ++i) {
++            unsigned char c = text[at + i];
++            chunk[prefix + i] = c >= 0x20 && c < 0x7f ? c : '?';
++         }
++         const unsigned size = prefix + count;
++         chunk[size] = 0;
++         for (unsigned i = 0; i < size + 2; ++i) {
++            const uint32_t value = !i ? 0x7fff : i == size + 1 ? 0x7ffd : 0x7000 | (unsigned char)chunk[i - 1];
++            io_connect_t conn = 0;
++            kern_return_t kr = IOServiceOpen(service, mach_task_self(), NativePowerVRMetalMarkBase | value, &conn);
++            if (kr == KERN_SUCCESS && conn) IOServiceClose(conn);
++         }
++      }
++      IOObjectRelease(service);
++   }
++   pthread_mutex_unlock(&lock);
++}
 +
 +/* Deliberately off unless the owner probe requests it; at most 32 short lines. */
 +void pvr_darwin_debug(const char *format, ...)
@@ -2355,10 +2407,10 @@ index 0000000..a15fa9b
 +}
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.h b/src/imagination/vulkan/winsys/darwin/pvr_darwin.h
 new file mode 100644
-index 0000000..ee24eb1
+index 0000000..4fa067e
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.h
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,70 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: the requests of winsys/powervr travel to the NativePowerVR IOKit
 + * user client (NativePowerVRABI.h, version 1) instead of the Linux DRM device. Modelled on Turnip's darwin backend
@@ -2384,6 +2436,13 @@ index 0000000..ee24eb1
 +/* The connection is the winsys's render_fd (the io_connect_t, a Mach port name). */
 +VkResult pvr_darwin_open(int *const fd_out);
 +void pvr_darwin_close(int fd);
++
++/* Already formatted, bounded SIPF1 snapshot line; callers cap stream count. */
++#ifdef PVR_WINSYS_DARWIN
++void pvr_darwin_sipf1_log(const char *text);
++#else
++static inline void pvr_darwin_sipf1_log(const char *text) { (void)text; }
++#endif
 +
 +/* Opt-in, bounded console trace for owner probe geometry diagnostics. */
 +void pvr_darwin_debug(const char *format, ...) __attribute__((format(printf, 1, 2)));

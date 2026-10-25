@@ -68,6 +68,7 @@ with tempfile.TemporaryDirectory(prefix='pvr-sipf1-') as tmp:
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+static inline void pvr_darwin_sipf1_log(const char *text) {(void)text;}
 #include <stdlib.h>
 #include <string.h>
 #define STATIC_ASSERT(x) _Static_assert(x,#x)

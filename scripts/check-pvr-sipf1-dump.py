@@ -18,6 +18,7 @@ h=r'''
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+static inline void pvr_darwin_sipf1_log(const char *text) {(void)text;}
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
