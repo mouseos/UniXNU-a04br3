@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // powervrprobed, the Mesa stage (built with POWERVRPROBED_VULKAN=1 by scripts/build-a04br3-powervr-probe.py --vulkan):
 // the PowerVR Vulkan driver of scripts/build-pvr-darwin.py (libvulkan_powervr_mesa.dylib with the darwin winsys of
-// patches/mesa/pvr-darwin-winsys.patch) clears an image on the GPU and the probe reads it back.
+// patches/mesa/pvr-darwin-winsys.patch) clears an image, then draws a triangle and reads both back.
 //
 //   dlopen(library) -> vkGetInstanceProcAddr (the darwin patch exports it, pvr_instance.c; there is no Khronos loader)
 //   vkCreateInstance -> vkEnumeratePhysicalDevices (the darwin winsys opens NativePowerVRGpu) -> vkCreateDevice (one queue)
@@ -24,6 +24,7 @@
 #include <vulkan/vulkan.h>
 
 #include "powervrprobed.h"
+#include "powervrprobed_triangle_spv.h"
 
 enum { kWidth = 64, kHeight = 64 };
 // Exactly representable in UNORM8: k / 255 converts back to k.
@@ -39,7 +40,11 @@ static const uint8_t kClear[4] = {0x11, 0x5a, 0xa5, 0xee};
   X(vkBindImageMemory) X(vkBindBufferMemory) X(vkMapMemory) X(vkUnmapMemory) X(vkInvalidateMappedMemoryRanges)                \
   X(vkCreateCommandPool) X(vkDestroyCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer)   \
   X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCmdCopyImageToBuffer) X(vkCreateFence) X(vkDestroyFence)              \
-  X(vkQueueSubmit) X(vkWaitForFences) X(vkDeviceWaitIdle)
+  X(vkQueueSubmit) X(vkWaitForFences) X(vkDeviceWaitIdle)                                                            \
+  X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateRenderPass) X(vkDestroyRenderPass)                                   \
+  X(vkCreateFramebuffer) X(vkDestroyFramebuffer) X(vkCreateShaderModule) X(vkDestroyShaderModule)                           \
+  X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkDestroyPipeline)                    \
+  X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdDraw)
 
 #define DECLARE(name) static PFN_##name p_##name;
 VK_FUNCTIONS(DECLARE)
@@ -77,6 +82,169 @@ static void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from,
       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .image = image,
       .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
   p_vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, NULL, 0, NULL, 1, &barrier);
+}
+
+// Vertex + fragment execution, separate from transfer-only clear/copy. Call only after
+// the first submission has completed. Geometry has no vertex buffers or descriptors.
+static int triangleProbe(VkDevice device, VkQueue queue, VkCommandPool pool, VkImage image, VkBuffer buffer,
+                         VkDeviceMemory bufferMemory, void *mapped, int coherent)
+{
+  VkImageView view = VK_NULL_HANDLE;
+  VkRenderPass renderPass = VK_NULL_HANDLE;
+  VkFramebuffer framebuffer = VK_NULL_HANDLE;
+  VkShaderModule vertex = VK_NULL_HANDLE, fragment = VK_NULL_HANDLE;
+  VkPipelineLayout layout = VK_NULL_HANDLE;
+  VkPipeline pipeline = VK_NULL_HANDLE;
+  VkFence fence = VK_NULL_HANDLE;
+  int ok = 0;
+  char detail[256];
+  const uint8_t backgroundColor[4] = {0x22, 0x44, 0x66, 0xff};
+#define TRI_STEP(name, expression) do { if (!vkStep("triangle " name, (expression), NULL)) goto cleanup; } while (0)
+  const VkImageViewCreateInfo viewInfo = {
+      .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = image, .viewType = VK_IMAGE_VIEW_TYPE_2D,
+      .format = VK_FORMAT_R8G8B8A8_UNORM, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+  TRI_STEP("vkCreateImageView", p_vkCreateImageView(device, &viewInfo, NULL, &view));
+  const VkAttachmentDescription attachment = {
+      .format = VK_FORMAT_R8G8B8A8_UNORM, .samples = VK_SAMPLE_COUNT_1_BIT,
+      .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+      .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE, .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+  const VkAttachmentReference colorRef = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+  const VkSubpassDescription subpass = {.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        .colorAttachmentCount = 1, .pColorAttachments = &colorRef};
+  const VkRenderPassCreateInfo passInfo = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+      .attachmentCount = 1, .pAttachments = &attachment, .subpassCount = 1, .pSubpasses = &subpass};
+  TRI_STEP("vkCreateRenderPass", p_vkCreateRenderPass(device, &passInfo, NULL, &renderPass));
+  const VkFramebufferCreateInfo framebufferInfo = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+      .renderPass = renderPass, .attachmentCount = 1, .pAttachments = &view, .width = kWidth, .height = kHeight, .layers = 1};
+  TRI_STEP("vkCreateFramebuffer", p_vkCreateFramebuffer(device, &framebufferInfo, NULL, &framebuffer));
+  VkShaderModuleCreateInfo shaderInfo = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      .codeSize = sizeof kTriangleVertSpv, .pCode = kTriangleVertSpv};
+  TRI_STEP("vertex module", p_vkCreateShaderModule(device, &shaderInfo, NULL, &vertex));
+  shaderInfo.codeSize = sizeof kTriangleFragSpv;
+  shaderInfo.pCode = kTriangleFragSpv;
+  TRI_STEP("fragment module", p_vkCreateShaderModule(device, &shaderInfo, NULL, &fragment));
+  const VkPipelineLayoutCreateInfo layoutInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  TRI_STEP("vkCreatePipelineLayout", p_vkCreatePipelineLayout(device, &layoutInfo, NULL, &layout));
+  const VkPipelineShaderStageCreateInfo stages[] = {
+      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,
+       .module = vertex, .pName = "main"},
+      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+       .module = fragment, .pName = "main"}};
+  const VkPipelineVertexInputStateCreateInfo input = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+  const VkPipelineInputAssemblyStateCreateInfo assembly = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+  const VkViewport viewport = {0, 0, kWidth, kHeight, 0, 1};
+  const VkRect2D scissor = {{0, 0}, {kWidth, kHeight}};
+  const VkPipelineViewportStateCreateInfo viewportState = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+      .viewportCount = 1, .pViewports = &viewport, .scissorCount = 1, .pScissors = &scissor};
+  const VkPipelineRasterizationStateCreateInfo raster = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+      .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE, .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+      .lineWidth = 1.0f};
+  const VkPipelineMultisampleStateCreateInfo samples = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+  const VkPipelineColorBlendAttachmentState blendAttachment = {
+      .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT};
+  const VkPipelineColorBlendStateCreateInfo blend = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+      .attachmentCount = 1, .pAttachments = &blendAttachment};
+  const VkGraphicsPipelineCreateInfo pipelineInfo = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+      .stageCount = 2, .pStages = stages, .pVertexInputState = &input, .pInputAssemblyState = &assembly,
+      .pViewportState = &viewportState, .pRasterizationState = &raster, .pMultisampleState = &samples,
+      .pColorBlendState = &blend, .layout = layout, .renderPass = renderPass, .subpass = 0};
+  TRI_STEP("vkCreateGraphicsPipelines", p_vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, NULL, &pipeline));
+  VkCommandBuffer cmd = VK_NULL_HANDLE;
+  const VkCommandBufferAllocateInfo cmdInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
+  TRI_STEP("vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdInfo, &cmd));
+  const VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+  TRI_STEP("vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin));
+  imageBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+               VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+  // Reuse the transfer readback buffer with an explicit write-after-write dependency.
+  const VkBufferMemoryBarrier reuse = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE};
+  p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        0, 0, NULL, 1, &reuse, 0, NULL);
+  // A different background from the transfer clear also detects stale readback.
+  const VkClearValue background = {.color = {.float32 = {
+      backgroundColor[0] / 255.0f, backgroundColor[1] / 255.0f,
+      backgroundColor[2] / 255.0f, backgroundColor[3] / 255.0f}}};
+  const VkRenderPassBeginInfo renderBegin = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+      .renderPass = renderPass, .framebuffer = framebuffer, .renderArea = {{0, 0}, {kWidth, kHeight}},
+      .clearValueCount = 1, .pClearValues = &background};
+  p_vkCmdBeginRenderPass(cmd, &renderBegin, VK_SUBPASS_CONTENTS_INLINE);
+  p_vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+  p_vkCmdDraw(cmd, 3, 1, 0, 0);
+  p_vkCmdEndRenderPass(cmd);
+  imageBarrier(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+  const VkBufferImageCopy region = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                    .imageExtent = {kWidth, kHeight, 1}};
+  p_vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+  const VkBufferMemoryBarrier toHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE};
+  p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &toHost, 0, NULL);
+  TRI_STEP("vkEndCommandBuffer", p_vkEndCommandBuffer(cmd));
+  const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  TRI_STEP("vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence));
+  const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
+  TRI_STEP("vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
+  TRI_STEP("vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  if (!coherent) {
+    const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+        .memory = bufferMemory, .offset = 0, .size = VK_WHOLE_SIZE};
+    TRI_STEP("vkInvalidateMappedMemoryRanges", p_vkInvalidateMappedMemoryRanges(device, 1, &whole));
+  }
+  const volatile uint8_t *pixels = mapped;
+  const uint8_t foreground[4] = {255, 0, 255, 255};
+  uint32_t checked[2] = {0, 0}, matched[2] = {0, 0}, first = UINT32_MAX;
+  // Pixel centers: (x+.5,y+.5). Only the diagonal x+y=63 lies exactly
+  // on an edge; skip its 48 pixels to avoid dependence on edge tie-breaking.
+  for (uint32_t y = 0; y < kHeight; y++) {
+    for (uint32_t x = 0; x < kWidth; x++) {
+      if (x >= 8 && y >= 8 && x + y == 63) continue;
+      const int inside = x >= 8 && y >= 8 && x + y < 63;
+      const uint8_t *expected = inside ? foreground : backgroundColor;
+      const uint32_t i = y * kWidth + x;
+      int same = 1;
+      for (uint32_t c = 0; c < 4; c++) same &= pixels[4 * i + c] == expected[c];
+      checked[inside]++;
+      matched[inside] += same;
+      if (!same && first == UINT32_MAX) first = i;
+    }
+  }
+  if (first != UINT32_MAX) {
+    const uint32_t x = first % kWidth, y = first / kWidth;
+    const uint8_t *expected = x >= 8 && y >= 8 && x + y < 63 ? foreground : backgroundColor;
+    probe_line("vk triangle mismatch (%u,%u): %02x%02x%02x%02x expected %02x%02x%02x%02x", x, y,
+        pixels[4 * first], pixels[4 * first + 1], pixels[4 * first + 2], pixels[4 * first + 3],
+        expected[0], expected[1], expected[2], expected[3]);
+  }
+  snprintf(detail, sizeof detail, "%u/%u pixels = ff00ffff", matched[1], checked[1]);
+  const int insideOK = vkCheck("triangle interior readback", checked[1] != 0 && matched[1] == checked[1], detail);
+  snprintf(detail, sizeof detail, "%u/%u pixels = 224466ff; 48 edge pixels excluded", matched[0], checked[0]);
+  const int backgroundOK = vkCheck("triangle background readback", checked[0] != 0 && matched[0] == checked[0], detail);
+  ok = insideOK && backgroundOK;
+cleanup:
+  // As in the transfer probe, ensure pending commands no longer use resources on error.
+  p_vkDeviceWaitIdle(device);
+  if (fence) p_vkDestroyFence(device, fence, NULL);
+  if (pipeline) p_vkDestroyPipeline(device, pipeline, NULL);
+  if (layout) p_vkDestroyPipelineLayout(device, layout, NULL);
+  if (fragment) p_vkDestroyShaderModule(device, fragment, NULL);
+  if (vertex) p_vkDestroyShaderModule(device, vertex, NULL);
+  if (framebuffer) p_vkDestroyFramebuffer(device, framebuffer, NULL);
+  if (renderPass) p_vkDestroyRenderPass(device, renderPass, NULL);
+  if (view) p_vkDestroyImageView(device, view, NULL);
+#undef TRI_STEP
+  return ok;
 }
 
 int probe_vulkan(const char *library)
@@ -124,9 +292,9 @@ int probe_vulkan(const char *library)
   uint32_t familyCount = 8, family = UINT32_MAX;
   p_vkGetPhysicalDeviceQueueFamilyProperties(physical, &familyCount, families);
   for (uint32_t i = 0; i < familyCount && family == UINT32_MAX; i++)
-    if (families[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT)) family = i;
+    if (families[i].queueCount && (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) family = i;
   snprintf(detail, sizeof detail, "family %u of %u, flags 0x%x", family, familyCount, family < familyCount ? families[family].queueFlags : 0);
-  if (!vkCheck("queue family", family != UINT32_MAX, detail)) goto out_instance;
+  if (!vkCheck("graphics queue family", family != UINT32_MAX, detail)) goto out_instance;
 
   VkFormatProperties format;
   p_vkGetPhysicalDeviceFormatProperties(physical, VK_FORMAT_R8G8B8A8_UNORM, &format);
@@ -134,6 +302,9 @@ int probe_vulkan(const char *library)
   vkCheck("R8G8B8A8_UNORM transfer", (format.optimalTilingFeatures & (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                                       VK_FORMAT_FEATURE_TRANSFER_DST_BIT)) == (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                                       VK_FORMAT_FEATURE_TRANSFER_DST_BIT), detail);
+
+  if (!vkCheck("R8G8B8A8_UNORM color attachment",
+               (format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0, detail)) goto out_instance;
 
   const float priority = 1.0f;
   const VkDeviceQueueCreateInfo queueInfo = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = family,
@@ -158,12 +329,13 @@ int probe_vulkan(const char *library)
   VkDeviceMemory imageMemory = VK_NULL_HANDLE, bufferMemory = VK_NULL_HANDLE;
   VkCommandPool pool = VK_NULL_HANDLE;
   VkFence fence = VK_NULL_HANDLE;
+  void *mapped = NULL;
   const VkDeviceSize bytes = (VkDeviceSize)kWidth * kHeight * 4;
 
   const VkImageCreateInfo imageInfo = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
       .extent = {kWidth, kHeight, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
-      .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+      .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
   if (!vkStep("vkCreateImage", p_vkCreateImage(device, &imageInfo, NULL, &image), NULL)) goto out_device;
   VkMemoryRequirements need;
@@ -189,7 +361,6 @@ int probe_vulkan(const char *library)
   if (!vkStep("vkAllocateMemory buffer", type == UINT32_MAX ? VK_ERROR_OUT_OF_DEVICE_MEMORY : p_vkAllocateMemory(device, &allocate, NULL, &bufferMemory), detail) ||
       !vkStep("vkBindBufferMemory", p_vkBindBufferMemory(device, buffer, bufferMemory, 0), NULL))
     goto out_objects;
-  void *mapped = NULL;
   if (!vkStep("vkMapMemory", p_vkMapMemory(device, bufferMemory, 0, VK_WHOLE_SIZE, 0, &mapped), NULL)) goto out_objects;
   for (VkDeviceSize i = 0; i < bytes / 4; i++) ((volatile uint32_t *)mapped)[i] = 0xdeadbeefu;
   if (!coherent) {
@@ -237,7 +408,7 @@ int probe_vulkan(const char *library)
   if (!coherent) {
     const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = bufferMemory, .offset = 0,
                                        .size = VK_WHOLE_SIZE};
-    vkStep("vkInvalidateMappedMemoryRanges", p_vkInvalidateMappedMemoryRanges(device, 1, &whole), NULL);
+    if (!vkStep("vkInvalidateMappedMemoryRanges", p_vkInvalidateMappedMemoryRanges(device, 1, &whole), NULL)) goto out_objects;
   }
   const volatile uint8_t *pixels = (const volatile uint8_t *)mapped;
   uint32_t match = 0, first = UINT32_MAX;
@@ -253,13 +424,15 @@ int probe_vulkan(const char *library)
     snprintf(detail, sizeof detail, "%u/%u pixels match; first mismatch at %u: %02x%02x%02x%02x (expected %02x%02x%02x%02x)", match,
              kWidth * kHeight, first, pixels[first * 4], pixels[first * 4 + 1], pixels[first * 4 + 2], pixels[first * 4 + 3],
              kClear[0], kClear[1], kClear[2], kClear[3]);
-  if (vkCheck("clear readback", match == kWidth * kHeight, detail)) result = 0;
+  const int clearOK = vkCheck("clear readback", match == kWidth * kHeight, detail);
+  const int triangleOK = triangleProbe(device, queue, pool, image, buffer, bufferMemory, mapped, coherent);
+  if (clearOK && triangleOK) result = 0;
 
 out_objects:
   if (device) p_vkDeviceWaitIdle(device);
   if (fence) p_vkDestroyFence(device, fence, NULL);
   if (pool) p_vkDestroyCommandPool(device, pool, NULL);
-  if (bufferMemory) p_vkUnmapMemory(device, bufferMemory);
+  if (mapped) p_vkUnmapMemory(device, bufferMemory);
   if (buffer) p_vkDestroyBuffer(device, buffer, NULL);
   if (bufferMemory) p_vkFreeMemory(device, bufferMemory, NULL);
   if (image) p_vkDestroyImage(device, image, NULL);
