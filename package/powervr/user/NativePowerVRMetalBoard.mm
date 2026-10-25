@@ -14,6 +14,7 @@
 #import <Foundation/Foundation.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
+#include <mach-o/dyld.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -106,8 +107,16 @@ extern "C" void native_metal_board_prepare(unsigned port) {
     if(fetchPolicy && !strcmp(fetchPolicy,"1"))
         native_bridge_metal_require_fetch_for_apple3(true);
     const char *pipelineDiag=getenv("PVR_METAL_PIPELINE_DIAG");
-    if(pipelineDiag && !strcmp(pipelineDiag,"1"))
+    if(pipelineDiag && !strcmp(pipelineDiag,"1")) {
         native_bridge_metal_set_pipeline_failure_callback(pipelineFailure);
+        // Actual process main image, not a guessed base of a sampled dylib.
+        // One bounded record per preparation; this reads no arbitrary pointers.
+        char imageLine[64];
+        snprintf(imageLine,sizeof imageLine,"IM main=%llx slide=%llx",
+                 (unsigned long long)(uintptr_t)_dyld_get_image_header(0),
+                 (unsigned long long)_dyld_get_image_vmaddr_slide(0));
+        native_metal_board_text(imageLine);
+    }
 
     // Mesa's PowerVR driver (pvr_darwin.c): the accelerator, not the direct NativePowerVRGpu service, which sandboxed processes may not open.
     setenv("PVR_DARWIN_SERVICE", "IOAcceleratorES", 1);
