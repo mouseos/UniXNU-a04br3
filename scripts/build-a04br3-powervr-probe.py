@@ -77,6 +77,20 @@ def flags(powervr, vulkan_include):
     return [str(f) for f in result], [str(s) for s in sources]
 
 
+def tq_clip_probe_source():
+    """Owner-probe-only startup flag; absent from the default build and Mesa library."""
+    return r'''#include <stdlib.h>
+#include <stdio.h>
+__attribute__((constructor)) static void enable_tq_clip_comparison(void)
+{
+    if (setenv("PVR_DARWIN_TQ_CLIP", "1", 1) != 0) {
+        fputs("powervrprobed: cannot enable TQ clip comparison\n", stderr);
+        _Exit(1);
+    }
+}
+'''
+
+
 def job_plist():
     return plistlib.dumps(dict(Label=LABEL, ProgramArguments=[DEVICE_BIN], RunAtLoad=True, KeepAlive=False, UserName='root',
                                StandardErrorPath='/dev/null'), fmt=plistlib.FMT_XML)
@@ -215,6 +229,12 @@ def build(args, powervr):
         if not (vulkan_include / 'vulkan/vulkan.h').is_file():
             sys.exit('No vulkan/vulkan.h in %s (give --vulkan-include)' % vulkan_include)
     cflags, sources = flags(powervr, vulkan_include)
+    if args.tq_clip:
+        # This constructor belongs only to the explicitly selected owner probe.
+        # The shared Mesa library and all application defaults stay opt-in.
+        comparison = out / 'powervrprobed-tq-clip.c'
+        comparison.write_text(tq_clip_probe_source())
+        sources.append(str(comparison))
     daemon = out / 'powervrprobed'
     subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O2', '-g',
                     '-fstack-protector-strong', *cflags, *sources, '-o', str(daemon)], check=True)
@@ -301,6 +321,7 @@ def check(powervr):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--tq-clip', action='store_true', help='owner Vulkan probe only: opt in to the MT8167 TQ clip comparison')
     parser.add_argument('--check', action='store_true', help='host check only (syntax, plist, trust and addon logic)')
     parser.add_argument('--out', type=Path, default=ROOT / 'build/a04br3-powervr-probe')
     parser.add_argument('--vulkan', nargs='?', const='', default=None, metavar='LIBRARY',
@@ -315,6 +336,8 @@ def main():
                         help='also trust the CDHashes of another owner build (its trust.json, every "*cdhash" value), for example '
                              'build-a04br3-metal-plugin.py --out DIR/trust.json; one owner module carries them all')
     args = parser.parse_args()
+    if args.tq_clip and args.vulkan is None:
+        parser.error('--tq-clip requires --vulkan')
     powervr = powervr_dir()
     if args.check:
         check(powervr)
