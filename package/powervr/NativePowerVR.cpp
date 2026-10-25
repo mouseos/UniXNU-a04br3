@@ -958,16 +958,17 @@ void vmAndQueueBringUp(void)
 }
 }  // namespace
 
-// First PF only, completion-thread caller, outside jobs/FWCCB/VM locks. Copy only
+// First reset only, completion-thread caller, outside jobs/FWCCB/VM locks. Copy only
 // the existing owned FW allocation: no MMIO or physical target-memory access.
 extern "C" void native_powervr_packet_hwr(uint32_t ctx_id, uint32_t job_ref, uint32_t dm,
-                                         uint64_t fault_address, uint64_t pc_address)
+                                         uint64_t fault_address, uint64_t pc_address,
+                                         uint32_t reason, uint32_t flags)
 {
   static bool captured;
   if (!native_powervr_packet_enabled() || captured) return;
   captured = true;
-  IOLog("powervr: packet PF ctx %u job %u dm %u fault %llx pc %llx (evidence, not a fix)\n",
-        ctx_id, job_ref, dm, (unsigned long long)fault_address, (unsigned long long)pc_address);
+  IOLog("powervr: packet reset ctx %u job %u dm %u fault %llx pc %llx reason %u flags %x (fault/pc valid only if PF)\n",
+        ctx_id, job_ref, dm, (unsigned long long)fault_address, (unsigned long long)pc_address, reason, flags);
   if (!gHwrInfo) { IOLog("powervr: packet HWR unavailable\n"); return; }
   // Static snapshot avoids a large kernel stack frame. Only this completion-thread
   // entry point accesses it; captured prevents a subsequent call from overwriting it.

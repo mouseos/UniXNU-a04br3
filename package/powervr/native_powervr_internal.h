@@ -58,7 +58,8 @@ void native_powervr_dump_render_regs(void);
  * outside jobs/FWCCB/VM locks. No command submission or target-memory access. */
 int native_powervr_packet_enabled(void);
 void native_powervr_packet_hwr(uint32_t ctx_id, uint32_t job_ref, uint32_t dm,
-                               uint64_t fault_address, uint64_t pc_address);
+                               uint64_t fault_address, uint64_t pc_address,
+                               uint32_t reason, uint32_t flags);
 /* Log through IOLog with the powervr: prefix convention. */
 void native_powervr_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #ifdef __cplusplus

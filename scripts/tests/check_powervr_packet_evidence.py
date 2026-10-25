@@ -140,7 +140,7 @@ int main(int argc,char **argv){
  for(unsigned v:{0u,1u,2u,~0u}){arg=v;supplied=false;packetDiagnosticInit();assert(!native_powervr_packet_enabled());
  supplied=true;packetDiagnosticInit();assert(bool(native_powervr_packet_enabled())==(v==1));}
  if(which=="off"){
- arg=0;packetDiagnosticInit();capturePacket(nullptr);drainPackets();native_powervr_packet_hwr(1,2,3,0,0);
+ arg=0;packetDiagnosticInit();capturePacket(nullptr);drainPackets();native_powervr_packet_hwr(1,2,3,0,0,1,1);
  assert(!logs&&!reads&&!cleans&&!gPacketCount);puts("PASS off/no-op + exact bootarg gate");return 0;}
  arg=1;packetDiagnosticInit();
  if(which=="packets"){
@@ -188,16 +188,17 @@ int main(int argc,char **argv){
  if(which=="racing")racing=true;
  if(which=="wrap"){hwBuffer.hwr_counter=1;for(unsigned i=0;i<16;++i)hwBuffer.hwr_info[i].hwr_number=uint32_t(1-i);}
  }
- native_powervr_packet_hwr(1,12,3,0,0x12345000);
- assert(output.find("packet PF ctx 1 job 12 dm 3 fault 0")!=std::string::npos);
+ native_powervr_packet_hwr(1,12,3,0,0x12345000,1,which=="nonpf"?0:1);
+ assert(output.find("packet reset ctx 1 job 12 dm 3 fault 0")!=std::string::npos);
  if(which=="missing")assert(output.find("unavailable")!=std::string::npos&&!cleans);
  else if(which=="empty"||which=="racing")assert(output.find("HWR slot")==std::string::npos);
  else {assert(output.find("HWR slot")!=std::string::npos);size_t count=0,pos=0;
  while((pos=output.find("HWR slot",pos))!=std::string::npos){++count;++pos;}assert(count==(which=="firstzero"?1u:4u));
  if(which=="firstzero")assert(output.find("num 0")!=std::string::npos&&output.find("1234")!=std::string::npos);
  if(which=="normal")assert(output.find("num 20")<output.find("num 15")&&output.find("beef")!=std::string::npos);}
- unsigned old=logs;native_powervr_packet_hwr(2,99,3,1,2);assert(logs==old);
- puts(("PASS HWR "+which+" first-PF cap/owned-buffer/unlocked logs").c_str());
+ if(which=="nonpf")assert(output.find("reason 1 flags 0")!=std::string::npos);
+ unsigned old=logs;native_powervr_packet_hwr(2,99,3,1,2,1,1);assert(logs==old);
+ puts(("PASS HWR "+which+" first-reset cap/owned-buffer/unlocked logs").c_str());
 }
 '''
 
@@ -211,6 +212,8 @@ assert completion.index('IOLockUnlock(gJobs.lock);') < completion.index('native_
 assert completion.index('native_powervr_packet_hwr(') < completion.index('drainPackets();')
 assert completion.index('native_powervr_packet_hwr(') < completion.index('pvr_job_release(j);')
 assert 'd->dm, d->fault_address, d->pc_address' in JOBS
+assert 'if (notes[i].flags & ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_PF)' not in completion
+assert 'notes[i].reason, notes[i].flags' in completion
 assert function(FW, 'void native_powervr_boot(void)\n{').index('packetDiagnosticInit();') < function(FW, 'void native_powervr_boot(void)\n{').index('kernel_thread_start(')
 
 with tempfile.TemporaryDirectory(prefix='powervr-packet-') as tmp:
@@ -227,6 +230,6 @@ with tempfile.TemporaryDirectory(prefix='powervr-packet-') as tmp:
     subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
                     '-Wno-unused-parameter', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-g',
                     '-I'+str(tmp), '-I'+str(PVR), str(source), '-o', str(binary)], check=True)
-    for case in ('off', 'packets', 'normal', 'missing', 'empty', 'racing', 'wrap', 'firstzero'):
+    for case in ('off', 'packets', 'normal', 'missing', 'empty', 'racing', 'wrap', 'firstzero', 'nonpf'):
         subprocess.run([str(binary), case], check=True, timeout=30)
-print('PASS 8 actual-function ASan/UBSan scenarios + ABI/integration assertions; no device access')
+print('PASS 9 actual-function ASan/UBSan scenarios + ABI/integration assertions; no device access')

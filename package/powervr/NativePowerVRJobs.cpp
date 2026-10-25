@@ -1458,9 +1458,9 @@ void completionThread(void *, wait_result_t)
     IOLockUnlock(gJobs.lock);
     if (native_powervr_packet_enabled())
       for (uint32_t i = 0; i < nnotes; ++i)
-        if (notes[i].flags & ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_PF)
-          native_powervr_packet_hwr(notes[i].ctx_id, notes[i].job_ref, notes[i].dm,
-                                    notes[i].fault_address, notes[i].pc_address);
+        native_powervr_packet_hwr(notes[i].ctx_id, notes[i].job_ref, notes[i].dm,
+                                  notes[i].fault_address, notes[i].pc_address,
+                                  notes[i].reason, notes[i].flags);
     drainPackets();
     list_for_each_entry_safe(j, n, &done, dev_link) {
       list_del(&j->dev_link);
