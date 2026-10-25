@@ -202,6 +202,20 @@ for forbidden in ('flush_dcache(', 'dc civac', 'ttbr', 'IOLog(', 'printf('):
     assert forbidden not in function(WALK, 'void native_powervr_pte_walk(').lower()
 assert 'kIOMapReference | kIOMapAnywhere | kIOMapDefaultCache' in GPU
 
+# The real macOS failure exposed a BSD-vs-MACH compiler-record mismatch that
+# API mocks cannot detect. Require the actual pinned pmap record and prelude.
+builder = (ROOT / 'scripts/build-a04br3-board.py').read_text()
+assert "pmap_record = record('osfmk/DEVELOPMENT/pmap.o.json')" in builder
+assert "compile_one(pmap_record, KIT / 'powervr' / 'NativePowerVRPte.c'" in builder
+assert "c_record = record('bsd/DEVELOPMENT/kern_exec.o.json')" in builder
+assert 'compile_one(c_record, KIT / name, C_FLAGS)' in builder
+prelude = ('mach_assert.h', 'mach_ldebug.h', 'kern/thread.h', 'kern/sched.h',
+           'kern/spl.h', 'vm/pmap.h', 'vm/vm_map.h', 'arm/misc_protos.h',
+           'arm/pmap/pmap_internal.h')
+positions = [WALK.index(f'#include <{name}>') for name in prelude]
+assert positions == sorted(positions)
+assert '#undef' not in WALK and '-Wno-' not in builder[builder.index('pmap_record ='):builder.index('# NativePowerVR (package/powervr)')]
+
 with tempfile.TemporaryDirectory(prefix='pvr-pte-') as directory:
     for name, source in (('geometry', geometry), ('ownership', ownership)):
         path = Path(directory) / f'{name}.cpp'
@@ -216,7 +230,7 @@ with tempfile.TemporaryDirectory(prefix='pvr-pte-') as directory:
     # These are API-contract mocks, NOT proof of compatibility with an SDK's
     # generated private headers. The owner build must provide that confirmation.
     headers = Path(directory) / 'headers'
-    for name in ('kern/task.h', 'vm/vm_map.h', 'arm/pmap/pmap_internal.h'):
+    for name in (*prelude, 'kern/task.h'):
         path = headers / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('')

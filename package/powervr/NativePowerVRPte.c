@@ -1,9 +1,18 @@
 /* SPDX-License-Identifier: MIT */
 /* Device-only observation. Use XNU's lock and geometry, never switch TTBRs,
  * fault a page in, dereference a BO, or clean/invalidate any cache line. */
-#include <kern/task.h>
+/* Match the pmap translation unit's prerequisite order. This file is built
+ * with osfmk/DEVELOPMENT/pmap.o.json, not the BSD kern_exec record. */
+#include <mach_assert.h>
+#include <mach_ldebug.h>
+#include <kern/thread.h>
+#include <kern/sched.h>
+#include <kern/spl.h>
+#include <vm/pmap.h>
 #include <vm/vm_map.h>
+#include <arm/misc_protos.h>
 #include <arm/pmap/pmap_internal.h>
+#include <kern/task.h>
 #include "native_powervr_pte.h"
 
 void *native_powervr_pte_map_get(void *task)

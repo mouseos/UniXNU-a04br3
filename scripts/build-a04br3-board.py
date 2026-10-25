@@ -107,8 +107,12 @@ for name in CXX_SOURCES:
 c_record = record('bsd/DEVELOPMENT/kern_exec.o.json')
 for name in C_SOURCES:
     objects.append(compile_one(c_record, KIT / name, C_FLAGS))
-# Isolate private pmap geometry/locking from Linux compat and IOKit C++ headers.
-objects.append(compile_one(c_record, KIT / 'powervr' / 'NativePowerVRPte.c',
+# Use the actual pmap translation unit's MACH/VM private definitions and include
+# paths. kern_exec has BSD private/NOS_ARM_* settings incompatible with pmap.
+pmap_record = record('osfmk/DEVELOPMENT/pmap.o.json')
+if not Path(pmap_record['file']).as_posix().endswith('/osfmk/arm/pmap/pmap.c'):
+    raise SystemExit(f"unexpected PTE compiler record source: {pmap_record['file']}")
+objects.append(compile_one(pmap_record, KIT / 'powervr' / 'NativePowerVRPte.c',
                            C_FLAGS + ['-I', str(ROOT / '.cache/xnu-work/osfmk')]))
 # NativePowerVR (package/powervr): the unchanged Linux drm/imagination headers through the Linux type shim, and the
 # upstream PowerVR firmware for the GE8300, downloaded from imagination/linux-firmware and checked against a pinned SHA-256
