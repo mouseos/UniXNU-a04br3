@@ -622,30 +622,61 @@ IOMemoryDescriptor *hostRange(task_t task, uint64_t address, uint64_t size, IODi
 // (XNU IOMemoryDescriptor::makeMapping); copyCompatible checks task/cache/access.
 // The reserved firmware framebuffer is outside gPhysBase/gPhysSize and must
 // never be wired by a generic user-memory descriptor's prepare()/phystokv.
-IOMemoryMap *scanoutHostRange(task_t task, uint64_t address, uint64_t size)
+int scanoutHostRange(task_t task, uint64_t address, uint64_t size, IOMemoryMap **out)
 {
+  *out = nullptr;
+  if (!size || address + size < address) return -EFAULT;
   IOMemoryDescriptor *memory = native_gop_handoff_memory ? native_gop_handoff_memory() : nullptr;
-  if (!memory) return nullptr;
-  const IOOptionBits options = kIOMapReference | kIOMapInhibitCache;
-  IOMemoryMap *map = memory->createMappingInTask(task, address, options, 0, size);
-  if (!map) {
-    // Also allow a subrange of the usual whole-frame mapping without widening
-    // the caller's allocation or creating a new CPU mapping.
-    IOMemoryMap *whole = memory->createMappingInTask(task, 0, options | kIOMapAnywhere);
-    if (whole) {
-      const uint64_t base = whole->getVirtualAddress(), length = whole->getLength();
-      if (address >= base && address - base <= length && size <= length - (address - base))
-        map = memory->createMappingInTask(task, base, options, address - base, size);
-      whole->release();
+  if (!memory) return -ENOENT;
+  IOMemoryMap *map = nullptr;
+  int status = -ENOENT;
+  // DefaultCache allows classification regardless of cache mode. Read-only is
+  // probed separately because XNU copyCompatible requires an exact access match.
+  const IOOptionBits access[] = {0, kIOMapReadOnly};
+  for (unsigned i = 0; i < 2; i++) {
+    const IOOptionBits options = kIOMapReference | kIOMapDefaultCache | access[i];
+    map = memory->createMappingInTask(task, address, options, 0, size);
+    if (map) {
+      // A DefaultCache submap reports the requested default, not necessarily
+      // its parent's effective cache mode. Re-reference with strict attributes.
+      map->release();
+      map = memory->createMappingInTask(task, address, kIOMapReference | kIOMapInhibitCache, 0, size);
+      status = map ? 0 : -EFAULT;
+      break;
     }
+    // An oversized import at the known base must not fall through to prepare.
+    IOMemoryMap *first = memory->createMappingInTask(task, address, options, 0, kDevicePageSize);
+    if (first) {
+      first->release();
+      status = -EFAULT;
+      break;
+    }
+    // Reference only: no new CPU map, including when the address is unrelated.
+    IOMemoryMap *whole = memory->createMappingInTask(task, 0, options | kIOMapAnywhere);
+    if (!whole) continue;
+    const uint64_t base = whole->getVirtualAddress(), length = whole->getLength();
+    const bool overlaps = address >= base ? address - base < length : base - address < size;
+    if (overlaps) {
+      status = -EFAULT;
+      if (address >= base && address - base <= length && size <= length - (address - base)) {
+        // copyCompatible compares the parent map's base before applying offset.
+        map = memory->createMappingInTask(task, base, kIOMapReference | kIOMapInhibitCache, address - base, size);
+        if (map) status = 0;
+      }
+    }
+    whole->release();
+    if (overlaps) break;
   }
   memory->release();
   if (map && (map->getVirtualAddress() != address || map->getLength() != size ||
-              (map->getMapOptions() & kIOMapReadOnly))) {
+              (map->getMapOptions() & kIOMapReadOnly) ||
+              (map->getMapOptions() & kIOMapCacheMask) != kIOMapInhibitCache)) {
     map->release();
     map = nullptr;
+    status = -EFAULT;
   }
-  return map;
+  *out = map;
+  return status;
 }
 
 int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, native_powervr_bo **out)
@@ -655,7 +686,8 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
   bo->refs = 1;
   bo->size = size;
   bo->flags = flags;
-  bo->hostMap = scanoutHostRange(task, address, size);
+  const int scanout_status = scanoutHostRange(task, address, size, &bo->hostMap);
+  if (scanout_status && scanout_status != -ENOENT) { boDestroy(bo); return scanout_status; }
   if (bo->hostMap) {
     bo->host = bo->hostMap->getMemoryDescriptor();
     if (!bo->host) { boDestroy(bo); return -EFAULT; }

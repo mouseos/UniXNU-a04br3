@@ -191,7 +191,7 @@ int prepared=0,released=0;int prepareStatus=2;
 struct IOMemoryDescriptor;
 struct IOMemoryMap {IOMemoryDescriptor *getMemoryDescriptor(){return nullptr;}
  uint64_t getPhysicalSegment(uint64_t,IOByteCount *,int){assert(false);return 0;}};
-IOMemoryMap *scanoutHostRange(void *,uint64_t,uint64_t){return nullptr;}
+int scanoutHostRange(void *,uint64_t,uint64_t,IOMemoryMap **out){*out=nullptr;return -ENOENT;}
 constexpr uint64_t DRM_PVR_BO_BYPASS_DEVICE_CACHE=1;
 struct IOMemoryDescriptor {void retain(){}int prepare(){++prepared;return prepareStatus;}void release(){++released;}
  uint64_t getLength(){return 4096;}uint64_t getPhysicalSegment(uint64_t,IOByteCount *n,int){*n=4096;return 0x100000;}} md;
