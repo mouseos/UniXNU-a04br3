@@ -616,8 +616,17 @@ int probe_vulkan(const char *library)
   if (unsetenv("PVR_DARWIN_VENDOR_ISP_OVERLAP") != 0) return -1;
   if (setenv("PVR_DARWIN_TERMINATE_TILE_UNITS", "1", 1) != 0) return -1;
   if (setenv("PVR_DARWIN_BUFFER_GUARD", "1", 1) != 0) return -1;
+  const char *uiFillFlag = getenv("PVR_PROBE_UI_FILL");
+  const int uiFill = uiFillFlag && strcmp(uiFillFlag, "1") == 0;
+  const uint32_t width = uiFill ? 388U : kWidth, height = uiFill ? 12U : kHeight;
+  const VkFormat imageFormat = uiFill ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+  const uint8_t expected[4] = {uiFill ? kClear[2] : kClear[0], kClear[1], uiFill ? kClear[0] : kClear[2], kClear[3]};
+  if (uiFill) {
+    probe_line("vk UI-fill comparison: 388x12 optimal B8G8R8A8_UNORM; known-format comparison, exact UI format not established");
+    probe_line("vk UI-fill SKIP: original 64x64 render and host-import tests (not a PASS)");
+  }
   const char *tqFirstFlag = getenv("PVR_PROBE_TQ_FIRST");
-  const int tqFirst = tqFirstFlag && strcmp(tqFirstFlag, "1") == 0;
+  const int tqFirst = uiFill || (tqFirstFlag && strcmp(tqFirstFlag, "1") == 0);
   char detail[256];
   setenv("PVR_I_WANT_A_BROKEN_VULKAN_DRIVER", "1", 1);
   void *driver = dlopen(library, RTLD_NOW | RTLD_LOCAL);
@@ -666,7 +675,7 @@ int probe_vulkan(const char *library)
              (unsigned)driverProperties.conformanceVersion.major, (unsigned)driverProperties.conformanceVersion.minor,
              (unsigned)driverProperties.conformanceVersion.subminor, (unsigned)driverProperties.conformanceVersion.patch);
   probe_line("vk driverInfo: '%.*s'", (int)sizeof(driverProperties.driverInfo), driverProperties.driverInfo);
-  const int hostImport = hostImportSupported(physical);
+  const int hostImport = uiFill ? 0 : hostImportSupported(physical);
   VkPhysicalDeviceExternalMemoryHostPropertiesEXT hostProperties = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
   if (hostImport == 1) {
@@ -684,13 +693,13 @@ int probe_vulkan(const char *library)
   if (!vkCheck("graphics queue family", family != UINT32_MAX, detail)) goto out_instance;
 
   VkFormatProperties format;
-  p_vkGetPhysicalDeviceFormatProperties(physical, VK_FORMAT_R8G8B8A8_UNORM, &format);
+  p_vkGetPhysicalDeviceFormatProperties(physical, imageFormat, &format);
   snprintf(detail, sizeof detail, "optimal features 0x%x", format.optimalTilingFeatures);
-  vkCheck("R8G8B8A8_UNORM transfer", (format.optimalTilingFeatures & (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+  vkCheck(uiFill ? "UI-fill B8G8R8A8_UNORM transfer" : "R8G8B8A8_UNORM transfer", (format.optimalTilingFeatures & (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                                       VK_FORMAT_FEATURE_TRANSFER_DST_BIT)) == (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                                       VK_FORMAT_FEATURE_TRANSFER_DST_BIT), detail);
 
-  if (!vkCheck("R8G8B8A8_UNORM color attachment",
+  if (!vkCheck(uiFill ? "UI-fill B8G8R8A8_UNORM color attachment" : "R8G8B8A8_UNORM color attachment",
                (format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0, detail)) goto out_instance;
 
   const float priority = 1.0f;
@@ -718,11 +727,11 @@ int probe_vulkan(const char *library)
   VkCommandPool pool = VK_NULL_HANDLE;
   VkFence fence = VK_NULL_HANDLE;
   void *mapped = NULL;
-  const VkDeviceSize bytes = (VkDeviceSize)kWidth * kHeight * 4;
+  const VkDeviceSize bytes = (VkDeviceSize)width * height * 4;
 
   const VkImageCreateInfo imageInfo = {
-      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
-      .extent = {kWidth, kHeight, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = imageFormat,
+      .extent = {width, height, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
       .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
   if (!vkStep("vkCreateImage", p_vkCreateImage(device, &imageInfo, NULL, &image), NULL)) goto out_device;
@@ -806,7 +815,7 @@ int probe_vulkan(const char *library)
                VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
   const VkBufferImageCopy region = {.bufferOffset = 0, .bufferRowLength = 0, .bufferImageHeight = 0,
                                     .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageOffset = {0, 0, 0},
-                                    .imageExtent = {kWidth, kHeight, 1}};
+                                    .imageExtent = {width, height, 1}};
   p_vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
   const VkBufferMemoryBarrier toHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
                                         .dstAccessMask = VK_ACCESS_HOST_READ_BIT, .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -828,19 +837,23 @@ int probe_vulkan(const char *library)
   }
   const volatile uint8_t *pixels = (const volatile uint8_t *)mapped;
   uint32_t match = 0, first = UINT32_MAX;
-  for (uint32_t i = 0; i < kWidth * kHeight; i++) {
-    const int same = pixels[i * 4] == kClear[0] && pixels[i * 4 + 1] == kClear[1] && pixels[i * 4 + 2] == kClear[2] &&
-                     pixels[i * 4 + 3] == kClear[3];
+  for (uint32_t i = 0; i < width * height; i++) {
+    const int same = pixels[i * 4] == expected[0] && pixels[i * 4 + 1] == expected[1] && pixels[i * 4 + 2] == expected[2] &&
+                     pixels[i * 4 + 3] == expected[3];
     match += same;
     if (!same && first == UINT32_MAX) first = i;
   }
   if (first == UINT32_MAX)
-    snprintf(detail, sizeof detail, "%u/%u pixels = %02x%02x%02x%02x", match, kWidth * kHeight, kClear[0], kClear[1], kClear[2], kClear[3]);
+    snprintf(detail, sizeof detail, "%u/%u pixels = %02x%02x%02x%02x", match, width * height, expected[0], expected[1], expected[2], expected[3]);
   else
     snprintf(detail, sizeof detail, "%u/%u pixels match; first mismatch at %u: %02x%02x%02x%02x (expected %02x%02x%02x%02x)", match,
-             kWidth * kHeight, first, pixels[first * 4], pixels[first * 4 + 1], pixels[first * 4 + 2], pixels[first * 4 + 3],
-             kClear[0], kClear[1], kClear[2], kClear[3]);
-  const int clearOK = vkCheck("clear readback", match == kWidth * kHeight, detail);
+             width * height, first, pixels[first * 4], pixels[first * 4 + 1], pixels[first * 4 + 2], pixels[first * 4 + 3],
+             expected[0], expected[1], expected[2], expected[3]);
+  const int clearOK = vkCheck("clear readback", match == width * height, detail);
+  if (uiFill) {
+    result = clearOK ? 0 : -1;
+    goto out_objects;
+  }
   if (tqFirst) {
     if (!clearOK) {
       probe_line("vk TQ-first readback failed; no render tests on this context");

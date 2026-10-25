@@ -577,6 +577,18 @@ static void usage(void)
 int main(int argc, char **argv)
 {
   gConsole = open("/dev/console", O_WRONLY | O_NOCTTY | O_CLOEXEC);
+  const int consoleError = errno;
+  const char *dumpFlag = getenv("PVR_DARWIN_SIPF1_DUMP");
+  if (dumpFlag && strcmp(dumpFlag, "1") == 0) {
+    if (gConsole < 0) {
+      probe_line("FAIL SIPF1 dump: /dev/console unavailable: %s; aborting before tests", strerror(consoleError));
+      return 1;
+    }
+    if (dup2(gConsole, STDERR_FILENO) < 0) {
+      probe_line("FAIL SIPF1 dump: stderr redirect failed: %s; aborting before tests", strerror(errno));
+      return 1;
+    }
+  }
   unsigned waitSeconds = 180;
   int iokit = 1, vulkan = POWERVRPROBED_VULKAN;
   const char *library = POWERVRPROBED_VULKAN_LIBRARY;

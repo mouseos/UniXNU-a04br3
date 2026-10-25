@@ -105,6 +105,18 @@ __attribute__((constructor)) static void enable_tq_first_comparison(void)
 '''
 
 
+def ui_fill_probe_source():
+    """Select only the explicit owner UI-fill test; Mesa gates remain separate."""
+    return tq_first_probe_source().replace('enable_tq_first_comparison', 'enable_ui_fill_comparison').replace(
+        'PVR_PROBE_TQ_FIRST', 'PVR_PROBE_UI_FILL').replace('TQ-first comparison', 'UI-fill comparison')
+
+
+def sipf1_dump_probe_source():
+    """Enable existing bounded snapshot diagnostics only in this owner probe."""
+    return tq_first_probe_source().replace('enable_tq_first_comparison', 'enable_sipf1_dump_comparison').replace(
+        'PVR_PROBE_TQ_FIRST', 'PVR_DARWIN_SIPF1_DUMP').replace('TQ-first comparison', 'SIPF1 dump comparison')
+
+
 def job_plist():
     return plistlib.dumps(dict(Label=LABEL, ProgramArguments=[DEVICE_BIN], RunAtLoad=True, KeepAlive=False, UserName='root',
                                StandardErrorPath='/dev/null'), fmt=plistlib.FMT_XML)
@@ -253,6 +265,14 @@ def build(args, powervr):
         comparison = out / 'powervrprobed-tq-first.c'
         comparison.write_text(tq_first_probe_source())
         sources.append(str(comparison))
+    if args.ui_fill:
+        comparison = out / 'powervrprobed-ui-fill.c'
+        comparison.write_text(ui_fill_probe_source())
+        sources.append(str(comparison))
+    if args.sipf1_dump:
+        comparison = out / 'powervrprobed-sipf1-dump.c'
+        comparison.write_text(sipf1_dump_probe_source())
+        sources.append(str(comparison))
     daemon = out / 'powervrprobed'
     subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O2', '-g',
                     '-fstack-protector-strong', *cflags, *sources, '-o', str(daemon)], check=True)
@@ -354,7 +374,13 @@ def main():
     parser.add_argument('--extra-trust', type=Path, action='append', default=[], metavar='TRUST_JSON',
                         help='also trust the CDHashes of another owner build (its trust.json, every "*cdhash" value), for example '
                              'build-a04br3-metal-plugin.py --out DIR/trust.json; one owner module carries them all')
+    parser.add_argument('--sipf1-dump', action='store_true', help='enable existing bounded SIPF1 snapshots in this owner probe')
+    parser.add_argument('--ui-fill', action='store_true', help='388x12 optimal BGRA clear/copy comparison; skips original tests')
     args = parser.parse_args()
+    if args.sipf1_dump and args.vulkan is None:
+        parser.error('--sipf1-dump requires --vulkan')
+    if args.ui_fill and args.vulkan is None:
+        parser.error('--ui-fill requires --vulkan')
     if args.tq_first and args.vulkan is None:
         parser.error('--tq-first requires --vulkan')
     if args.tq_clip and args.vulkan is None:
