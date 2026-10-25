@@ -197,8 +197,10 @@ Supported direct-render tests must pass their complete pixel checks; unsupported
 Two default-off Darwin diagnostic switches match only BVNC 22.40.54.30:
 `PVR_DARWIN_VENDOR_ISP_OVERLAP=1` compares the vendor ISP_CTL bit 19 policy (REA `libsrv_um.so` `FUN_0012877c`);
 `PVR_DARWIN_TERMINATE_TILE_UNITS=1` compares 16-pixel terminal PPP clipping for the tile16 / SIPF-v1 device.
-The owner probe enables only the terminal-clip comparison and explicitly clears the overlap switch so their effects
-are isolated. Normal applications retain the default path. Neither switch is a verified rendering fix yet.
+The owner probe and the a04br3 Metal board hook enable the terminal-clip switch and explicitly clear the overlap switch.
+The terminal clip matches the vendor GLES path and has passed full-image clear, linear triangle, transfer and optimal
+triangle readback on the device (130 steps, zero failures). Other devices keep the default path. GPU-composited UI and
+performance still need separate validation; the overlap comparison has not been exercised on hardware.
 
 ## GPU compositing (PowerVR Metal plugin)
 
