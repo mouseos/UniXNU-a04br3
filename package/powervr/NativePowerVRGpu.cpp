@@ -625,8 +625,13 @@ IOMemoryDescriptor *hostRange(task_t task, uint64_t address, uint64_t size, IODi
 int scanoutHostRange(task_t task, uint64_t address, uint64_t size, IOMemoryMap **out)
 {
   *out = nullptr;
+  static unsigned traces;
+  const unsigned trace = __atomic_fetch_add(&traces, 1, __ATOMIC_RELAXED);
+  const bool report = trace < 4;
+  if (report) IOLog("powervr: scanout import %u lookup begin addr %llx size %llx\n", trace, (unsigned long long)address, (unsigned long long)size);
   if (!size || address + size < address) return -EFAULT;
   IOMemoryDescriptor *memory = native_gop_handoff_memory ? native_gop_handoff_memory() : nullptr;
+  if (report) IOLog("powervr: scanout import %u descriptor %s\n", trace, memory ? "present" : "absent");
   if (!memory) return -ENOENT;
   IOMemoryMap *map = nullptr;
   int status = -ENOENT;
@@ -635,7 +640,9 @@ int scanoutHostRange(task_t task, uint64_t address, uint64_t size, IOMemoryMap *
   const IOOptionBits access[] = {0, kIOMapReadOnly};
   for (unsigned i = 0; i < 2; i++) {
     const IOOptionBits options = kIOMapReference | kIOMapDefaultCache | access[i];
+    if (report) IOLog("powervr: scanout import %u reference mode %u begin\n", trace, i);
     map = memory->createMappingInTask(task, address, options, 0, size);
+    if (report) IOLog("powervr: scanout import %u reference mode %u %s\n", trace, i, map ? "found" : "missing");
     if (map) {
       // A DefaultCache submap reports the requested default, not necessarily
       // its parent's effective cache mode. Re-reference with strict attributes.
@@ -675,12 +682,15 @@ int scanoutHostRange(task_t task, uint64_t address, uint64_t size, IOMemoryMap *
     map = nullptr;
     status = -EFAULT;
   }
+  if (report) IOLog("powervr: scanout import %u lookup end status %d mapped %u\n", trace, status, map != nullptr);
   *out = map;
   return status;
 }
 
 int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, native_powervr_bo **out)
 {
+  static unsigned traces;
+  const bool report = __atomic_fetch_add(&traces, 1, __ATOMIC_RELAXED) < 4;
   auto *bo = static_cast<native_powervr_bo *>(kzallocBytes(sizeof(native_powervr_bo)));
   if (!bo) return -ENOMEM;
   bo->refs = 1;
@@ -689,6 +699,7 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
   const int scanout_status = scanoutHostRange(task, address, size, &bo->hostMap);
   if (scanout_status && scanout_status != -ENOENT) { boDestroy(bo); return scanout_status; }
   if (bo->hostMap) {
+    if (report) IOLog("powervr: known scanout import: reference retained; no generic prepare\n");
     bo->host = bo->hostMap->getMemoryDescriptor();
     if (!bo->host) { boDestroy(bo); return -EFAULT; }
     bo->host->retain();
@@ -698,6 +709,9 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
   } else {
     bo->host = hostRange(task, address, size, kIODirectionInOut);
     if (!bo->host) { boDestroy(bo); return -ENOMEM; }
+    static unsigned prepareTraces;
+    if (__atomic_fetch_add(&prepareTraces, 1, __ATOMIC_RELAXED) < 4)
+      IOLog("powervr: ordinary host import: prepare addr %llx size %llx\n", (unsigned long long)address, (unsigned long long)size);
     IOReturn status = bo->host->prepare();
     if (status != kIOReturnSuccess) { boDestroy(bo); return -EFAULT; }
     bo->hostPrepared = true;
@@ -709,6 +723,7 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
   if (!bo->sg) { boDestroy(bo); return -ENOMEM; }
   for (uint64_t offset = 0; offset < size;) {
     IOByteCount length = 0;
+    if (report && bo->hostMap && !offset) IOLog("powervr: known scanout import: physical segment begin\n");
     const uint64_t phys = bo->hostMap ? bo->hostMap->getPhysicalSegment(offset, &length, kIOMemoryMapperNone)
                                       : bo->host->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
     if (!phys || !length || (phys & (kDevicePageSize - 1))) { boDestroy(bo); return -EFAULT; }
@@ -724,6 +739,7 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
     }
     offset += length;
   }
+  if (report && bo->hostMap) IOLog("powervr: known scanout import: physical segments ready %u\n", bo->nents);
   *out = bo;
   return 0;
 }
@@ -829,7 +845,15 @@ int vmMapLocked(native_powervr_vm_context *ctx, native_powervr_bo *bo, uint64_t 
     }
   }
   // The map step (pvr_vm_gpuva_map(): pvr_mmu_map() with the BO's flags).
-  err = native_powervr_vm_map_sg(ctx->vm, addr, bo->sg, bo->nents, offset, size, bo->flags);
+  if (bo->hostMap) {
+    static unsigned scanoutMapTraces;
+    if (__atomic_fetch_add(&scanoutMapTraces, 1, __ATOMIC_RELAXED) < 4)
+      IOLog("powervr: authenticated scanout VM map: no RAM cache sync, va %llx size %llx\n",
+            (unsigned long long)addr, (unsigned long long)size);
+    err = native_powervr_vm_map_scanout_sg(ctx->vm, addr, bo->sg, bo->nents, offset, size, bo->flags);
+  } else {
+    err = native_powervr_vm_map_sg(ctx->vm, addr, bo->sg, bo->nents, offset, size, bo->flags);
+  }
   if (err) return err;
   vmInsertAt(ctx, vmFirstEndingAfter(ctx, addr), {addr, size, offset, native_powervr_bo_get(bo)});
   return 0;

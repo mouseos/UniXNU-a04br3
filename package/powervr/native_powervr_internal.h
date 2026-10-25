@@ -35,6 +35,13 @@ uint64_t native_powervr_vm_page_table_root(struct native_powervr_vm *vm);
  * caches through the firmware before returning. */
 int native_powervr_vm_map_sg(struct native_powervr_vm *vm, uint64_t device_addr, const struct native_powervr_sg *sg,
                              uint32_t nents, uint64_t offset, uint64_t size, uint64_t flags);
+/* Reserved firmware GOP only: caller holds the authenticated scanout map.
+ * Requires DRM_PVR_BO_BYPASS_DEVICE_CACHE. Skips CPU cache operations on the
+ * scanout SG, but retains normal MMU backing-page synchronization and flush.
+ * Never select this entry point from a caller-provided BO flag alone.
+ */
+int native_powervr_vm_map_scanout_sg(struct native_powervr_vm *vm, uint64_t device_addr, const struct native_powervr_sg *sg,
+                                     uint32_t nents, uint64_t offset, uint64_t size, uint64_t flags);
 int native_powervr_vm_unmap(struct native_powervr_vm *vm, uint64_t device_addr, uint64_t size);
 /* The kernel GPU VM context (pvr_vm_create_context(is_userspace_context = false) equivalent), created after boot. */
 uint32_t native_powervr_kernel_fw_mem_ctx(void);   /* FW address of its rogue_fwif_fwmemcontext, 0 if none */

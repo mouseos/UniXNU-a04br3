@@ -188,6 +188,7 @@ using IOReturn=int;using IOByteCount=uint64_t;
 constexpr int kIOReturnSuccess=0,kIODirectionInOut=3,kIOMemoryMapperNone=0;
 constexpr uint64_t kDevicePageSize=4096,kDevicePageMask=~4095ULL;
 int prepared=0,released=0;int prepareStatus=2;
+void IOLog(const char *,...){}
 struct IOMemoryDescriptor;
 struct IOMemoryMap {IOMemoryDescriptor *getMemoryDescriptor(){return nullptr;}
  uint64_t getPhysicalSegment(uint64_t,IOByteCount *,int){assert(false);return 0;}};

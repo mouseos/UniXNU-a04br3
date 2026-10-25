@@ -777,15 +777,21 @@ extern "C" void native_powervr_vm_destroy(struct native_powervr_vm *vm)
 }
 extern "C" uint32_t native_powervr_vm_fw_mem_ctx(struct native_powervr_vm *vm) { return vm ? vm->memCtx.fw_addr : 0; }
 extern "C" uint64_t native_powervr_vm_page_table_root(struct native_powervr_vm *vm) { return vm ? pvr_mmu_get_root_table_dma_addr(vm->mmu) : 0; }
-extern "C" int native_powervr_vm_map_sg(struct native_powervr_vm *vm, uint64_t device_addr, const struct native_powervr_sg *sg,
-                                        uint32_t nents, uint64_t offset, uint64_t size, uint64_t flags)
+static int vmMapSg(struct native_powervr_vm *vm, uint64_t device_addr, const struct native_powervr_sg *sg,
+                   uint32_t nents, uint64_t offset, uint64_t size, uint64_t flags, bool uncachedScanout)
 {
-  if (!vm || !sg || !nents) return -EINVAL;
+  if (!vm || !sg || !nents || (uncachedScanout && !(flags & DRM_PVR_BO_BYPASS_DEVICE_CACHE))) return -EINVAL;
   auto *list = static_cast<scatterlist *>(kcalloc(nents, sizeof(scatterlist), GFP_KERNEL));
   if (!list) return -ENOMEM;
   for (uint32_t i = 0; i < nents; i++) list[i] = {sg[i].phys, static_cast<unsigned int>(sg[i].size)};
   sg_table sgt = {list, nents, nents};
-  dma_sync_sg_for_device(nullptr, list, static_cast<int>(nents), DMA_BIDIRECTIONAL);
+  // Only the authenticated, permanently mapped GOP path may skip RAM cache
+  // maintenance. Its physical pages are outside the physmap; flush_dcache on
+  // them would panic. MMU backing pages still use their normal DMA sync path.
+  if (uncachedScanout)
+    __asm__ volatile("dsb sy" ::: "memory");
+  else
+    dma_sync_sg_for_device(nullptr, list, static_cast<int>(nents), DMA_BIDIRECTIONAL);
   pvr_mmu_op_context *op = pvr_mmu_op_context_create(vm->mmu, &sgt, device_addr, offset, size);
   int err = IS_ERR(op) ? static_cast<int>(PTR_ERR(op)) : 0;
   if (!err) {
@@ -795,6 +801,17 @@ extern "C" int native_powervr_vm_map_sg(struct native_powervr_vm *vm, uint64_t d
   kfree(list);
   if (!err) err = pvr_mmu_flush_exec(&gPvr, true);
   return err;
+}
+extern "C" int native_powervr_vm_map_sg(struct native_powervr_vm *vm, uint64_t device_addr, const struct native_powervr_sg *sg,
+                                        uint32_t nents, uint64_t offset, uint64_t size, uint64_t flags)
+{
+  return vmMapSg(vm, device_addr, sg, nents, offset, size, flags, false);
+}
+// Internal caller must hold an authenticated scanout IOMemoryMap for this BO.
+extern "C" int native_powervr_vm_map_scanout_sg(struct native_powervr_vm *vm, uint64_t device_addr, const struct native_powervr_sg *sg,
+                                                uint32_t nents, uint64_t offset, uint64_t size, uint64_t flags)
+{
+  return vmMapSg(vm, device_addr, sg, nents, offset, size, flags, true);
 }
 extern "C" int native_powervr_vm_unmap(struct native_powervr_vm *vm, uint64_t device_addr, uint64_t size)
 {

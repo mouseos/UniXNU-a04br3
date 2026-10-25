@@ -86,7 +86,7 @@ struct native_powervr_sg{uint64_t phys,size;};
 struct NativePowerVRBoView {void release(){assert(false);}};
 using IOBufferMemoryDescriptor=IOMemoryDescriptor;
 static void *kzallocBytes(size_t n){++allocs;return failAlloc==allocs?nullptr:calloc(1,n);}static void kfreeBytes(void *p,size_t){free(p);}
-static void IOLog(const char *,...){assert(false);}
+static void IOLog(const char *,...){}
 '''
 h+=fn(s,'struct native_powervr_bo {')+';\n'
 for signature in ('void boDestroy(', 'IOMemoryDescriptor *hostRange(', 'int scanoutHostRange(', 'int boImportHost('):h+=fn(s,signature)+'\n'
