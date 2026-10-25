@@ -362,7 +362,7 @@ index f1cc515..bb5ab41 100644
        /* For integer depth formats we'll convert the specified floating point
         * depth bias values and specify them as integers. In this mode a depth
 diff --git a/src/imagination/vulkan/pvr_arch_job_transfer.c b/src/imagination/vulkan/pvr_arch_job_transfer.c
-index df05efe..e4b8f68 100644
+index df05efe..63c7230 100644
 --- a/src/imagination/vulkan/pvr_arch_job_transfer.c
 +++ b/src/imagination/vulkan/pvr_arch_job_transfer.c
 @@ -26,6 +26,11 @@
@@ -377,7 +377,7 @@ index df05efe..e4b8f68 100644
  #include <vulkan/vulkan.h>
  
  #include "pvr_cmd_buffer.h"
-@@ -52,6 +57,78 @@
+@@ -52,6 +57,101 @@
  #include "vk_format.h"
  #include "vk_log.h"
  #include "vk_sync.h"
@@ -421,6 +421,29 @@ index df05efe..e4b8f68 100644
 +#endif
 +}
 +
++/* Only caller-proven initialized ranges of a CPU-owned BO, at most 128 bytes. */
++static void pvr_darwin_sipf1_dump_range(UNUSED bool enabled, UNUSED const void *map,
++                                        UNUSED uint64_t va, UNUSED uint64_t total,
++                                        UNUSED uint64_t offset, UNUSED uint64_t meaningful,
++                                        UNUSED const char *label)
++{
++#ifdef PVR_WINSYS_DARWIN
++   if (!enabled || !map || !meaningful || offset >= total) return;
++   uint64_t length = meaningful < total - offset ? meaningful : total - offset;
++   if (length > 128) length = 128;
++   char text[256];
++   snprintf(text, sizeof(text), "pvr SIPF1 %s bo=%llx size=%llu offset=%llx initialized=%llu captured=%llu",
++            label, (unsigned long long)va, (unsigned long long)total,
++            (unsigned long long)offset, (unsigned long long)meaningful,
++            (unsigned long long)length);
++   fprintf(stderr, "%s\n", text);
++   pvr_darwin_sipf1_log(text);
++   for (uint64_t i = 0; i < length; i += 16)
++      pvr_darwin_sipf1_dump_bytes(true, map, total, offset + i,
++                                  length - i < 16 ? length - i : 16, label);
++#endif
++}
++
 +/* One-quad v1 layout: ISP16, index8, XYZ32, PDS28 + reserved4.
 + * Capture only initialized fields, never the trailing PDS padding/varyings.
 + */
@@ -456,7 +479,38 @@ index df05efe..e4b8f68 100644
  
  #define PVR_TRANSFER_MAX_PASSES 10U
  #define PVR_TRANSFER_MAX_CLIP_RECTS 4U
-@@ -3410,7 +3487,8 @@ static void pvr_isp_prim_block_pds_state(const struct pvr_device_info *dev_info,
+@@ -2209,7 +2309,8 @@ pvr_pds_unitex(const struct pvr_device_info *dev_info,
+                struct pvr_transfer_ctx *ctx,
+                const struct pvr_transfer_cmd *transfer_cmd,
+                struct pvr_pds_pixel_shader_sa_program *program,
+-               struct pvr_transfer_prep_data *prep_data)
++               struct pvr_transfer_prep_data *prep_data,
++               bool dump)
+ {
+    struct pvr_pds_upload *unitex_code =
+       &ctx->pds_unitex_code[program->num_texture_dma_kicks]
+@@ -2253,6 +2354,11 @@ pvr_pds_unitex(const struct pvr_device_info *dev_info,
+ 
+    map = pvr_bo_suballoc_get_map_addr(pvr_bo);
+    pvr_pds_generate_pixel_shader_sa_texture_state_data(program, map, dev_info);
++   /* This generator writes address64 + control32; exclude its alignment padding. */
++   if (program->num_texture_dma_kicks == 1U &&
++       program->num_uniform_dma_kicks == 0U && !program->kick_usc && !program->clear)
++      pvr_darwin_sipf1_dump_range(dump, map, pvr_bo->dev_addr.addr,
++                                  pvr_bo->size, 0, 12, "unitex-texture-data");
+ 
+    /* Save the dev_addr and size in the 3D state. */
+    state->uni_tex_code_offset = unitex_code->code_offset;
+@@ -2992,7 +3098,7 @@ static VkResult pvr_3d_copy_blit_core(struct pvr_transfer_ctx *ctx,
+       state->common_ptr += tex_state_dma_size_dw;
+ 
+       result =
+-         pvr_pds_unitex(dev_info, ctx, transfer_cmd, &unitex_prog, prep_data);
++         pvr_pds_unitex(dev_info, ctx, transfer_cmd, &unitex_prog, prep_data, false);
+       if (result != VK_SUCCESS)
+          return result;
+ 
+@@ -3410,7 +3516,8 @@ static void pvr_isp_prim_block_pds_state(const struct pvr_device_info *dev_info,
           ALIGN_POT(state->common_ptr,
                     ROGUE_TA_STATE_PDS_SIZEINFO2_USC_SHAREDSIZE_UNIT_SIZE) /
           ROGUE_TA_STATE_PDS_SIZEINFO2_USC_SHAREDSIZE_UNIT_SIZE;
@@ -466,7 +520,7 @@ index df05efe..e4b8f68 100644
        info.pds_batchnum = 0U;
     }
     cs_ptr++;
-@@ -3432,6 +3510,17 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
+@@ -3432,6 +3539,17 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
     const bool has_simple_internal_parameter_format_v2 =
        PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format_v2);
     uint32_t *cs_ptr = *cs_ptr_out;
@@ -484,7 +538,7 @@ index df05efe..e4b8f68 100644
  
     if (has_simple_internal_parameter_format_v2) {
        const uint32_t tsp_data_per_vrx_in_bytes =
-@@ -3469,6 +3558,14 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
+@@ -3469,6 +3587,14 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
     }
     cs_ptr += pvr_cmd_length(TA_STATE_ISPA);
  
@@ -499,7 +553,7 @@ index df05efe..e4b8f68 100644
     if (has_simple_internal_parameter_format_v2) {
        *cs_ptr_out = cs_ptr;
        return;
-@@ -4002,6 +4099,12 @@ pvr_transfer_prim_blocks_per_alloc(const struct pvr_device_info *dev_info)
+@@ -4002,6 +4128,12 @@ pvr_transfer_prim_blocks_per_alloc(const struct pvr_device_info *dev_info)
  {
     uint32_t ret = PVR_DW_TO_BYTES(ROGUE_IPF_CONTROL_STREAM_SIZE_DWORDS);
  
@@ -512,7 +566,7 @@ index df05efe..e4b8f68 100644
     if (PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format))
        return ret / sizeof(uint64_t) / 2U;
  
-@@ -4047,8 +4150,13 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4047,8 +4179,13 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
                                      struct pvr_transfer_cmd *transfer_cmd,
                                      struct pvr_transfer_prep_data *prep_data)
  {
@@ -527,7 +581,7 @@ index df05efe..e4b8f68 100644
     uint32_t free_ctrl_stream_words = ROGUE_IPF_CONTROL_STREAM_SIZE_DWORDS;
     struct pvr_transfer_3d_state *const state = &prep_data->state;
     struct pvr_winsys_transfer_regs *const regs = &state->regs;
-@@ -4124,6 +4232,9 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4124,6 +4261,9 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
        }
     }
  
@@ -537,7 +591,7 @@ index df05efe..e4b8f68 100644
     num_region_arrays =
        (num_prim_blks + (pvr_transfer_prim_blocks_per_alloc(dev_info) - 1U)) /
        pvr_transfer_prim_blocks_per_alloc(dev_info);
-@@ -4142,9 +4253,28 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4142,9 +4282,28 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
     stream_base_vaddr =
        PVR_DEV_ADDR(pvr_cs_bo->dev_addr.addr -
                     ctx->device->heaps.transfer_frag_heap->base_addr.addr);
@@ -566,7 +620,7 @@ index df05efe..e4b8f68 100644
  
     source = 0;
     while (source < num_sources) {
-@@ -4207,6 +4337,29 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4207,6 +4366,29 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
  
              state->pds_shader_task_offset =
                 transfer_cmd->cmd_buffer->device->nop_program.pds.data_offset;
@@ -596,7 +650,34 @@ index df05efe..e4b8f68 100644
  
              unitex_pds_prog.kick_usc = false;
              unitex_pds_prog.clear = false;
-@@ -4358,8 +4511,8 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4346,20 +4528,34 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+                                     sh_reg_layout,
+                                     pvr_bo_suballoc_get_map_addr(pvr_bo));
+             }
++            /* Snapshot only fields initialized above, not layout holes or padding. */
++            const void *dump_dma_map = pvr_bo_suballoc_get_map_addr(pvr_bo);
++            const uint64_t dump_dma_size = pvr_bo->size;
++            pvr_darwin_sipf1_dump_range(dump, dump_dma_map, pvr_bo->dev_addr.addr,
++               dump_dma_size, (uint64_t)sh_reg_layout->combined_image_samplers.offsets[0].sampler * 4,
++               16, "texture-dma-sampler");
++            pvr_darwin_sipf1_dump_range(dump, dump_dma_map, pvr_bo->dev_addr.addr,
++               dump_dma_size, (uint64_t)sh_reg_layout->combined_image_samplers.offsets[0].image * 4,
++               ROGUE_MAXIMUM_IMAGE_STATE_SIZE * 4, "texture-dma-image");
++            pvr_darwin_sipf1_dump_range(dump, dump_dma_map, pvr_bo->dev_addr.addr,
++               dump_dma_size, (uint64_t)sh_reg_layout->driver_total * 4,
++               (uint64_t)sh_reg_layout->compiler_out.usc_constants.count * 4,
++               "texture-dma-constants");
+          }
+ 
+          result = pvr_pds_unitex(dev_info,
+                                  ctx,
+                                  transfer_cmd,
+                                  &unitex_pds_prog,
+-                                 prep_data);
++                                 prep_data,
++                                 dump);
+          if (result != VK_SUCCESS)
+             return result;
  
           while (rem_mappings > 0U) {
              const uint32_t min_free_ctrl_stream_words =
@@ -607,7 +688,7 @@ index df05efe..e4b8f68 100644
              const uint32_t num_mappings =
                 MIN2(max_mappings_per_pb, rem_mappings);
              struct pvr_rect_mapping *mappings = NULL;
-@@ -4369,10 +4522,20 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4369,10 +4565,20 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
              if (free_ctrl_stream_words < min_free_ctrl_stream_words) {
                 pvr_dev_addr_t next_region_array_vaddr = stream_base_vaddr;
  
@@ -632,7 +713,7 @@ index df05efe..e4b8f68 100644
  
                 if (PVR_HAS_FEATURE(dev_info,
                                     simple_internal_parameter_format_v2)) {
-@@ -4391,6 +4554,14 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4391,6 +4597,14 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
                       link_addr,
                       PVR_DW_TO_BYTES(
                          pvr_cmd_length(IPF_CONTROL_STREAM_LINK_SIPF2)));
@@ -647,7 +728,7 @@ index df05efe..e4b8f68 100644
                 } else {
                    pvr_csb_pack (cs_ptr, IPF_CONTROL_STREAM, control_stream) {
                       control_stream.cs_type = ROGUE_IPF_CS_TYPE_LINK;
-@@ -4400,7 +4571,8 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4400,7 +4614,8 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
  
                 cs_ptr =
                    (uint32_t *)pvr_bo_suballoc_get_map_addr(pvr_cs_bo) +
@@ -657,7 +738,7 @@ index df05efe..e4b8f68 100644
                 free_ctrl_stream_words = ROGUE_IPF_CONTROL_STREAM_SIZE_DWORDS;
  
                 was_linked = PVR_HAS_FEATURE(dev_info, ipf_creq_pf);
-@@ -4416,6 +4588,7 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4416,6 +4631,7 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
                 (uintptr_t)blk_cs_ptr -
                 (uintptr_t)pvr_bo_suballoc_get_map_addr(pvr_cs_bo);
  
@@ -665,7 +746,7 @@ index df05efe..e4b8f68 100644
              result = pvr_isp_primitive_block(dev_info,
                                               ctx,
                                               transfer_cmd,
-@@ -4432,6 +4605,19 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4432,6 +4648,19 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
                 return result;
  
              prim_blk_addr.addr += stream_start_offset;
@@ -685,7 +766,7 @@ index df05efe..e4b8f68 100644
  
              if (PVR_HAS_FEATURE(dev_info,
                                  simple_internal_parameter_format_v2)) {
-@@ -4494,6 +4680,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4494,6 +4723,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
  
                 cs_ptr = (uint32_t *)cs_byte_ptr;
  
@@ -702,7 +783,7 @@ index df05efe..e4b8f68 100644
                 free_ctrl_stream_words -= 2;
              } else {
                 pvr_csb_pack (cs_ptr, IPF_PRIMITIVE_FORMAT, word) {
-@@ -4534,9 +4730,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4534,9 +4773,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
     }
  
     if (PVR_HAS_FEATURE(dev_info, ipf_creq_pf))
@@ -722,7 +803,7 @@ index df05efe..e4b8f68 100644
        uint8_t *cs_byte_ptr = (uint8_t *)cs_ptr;
        uint32_t tmp;
  
-@@ -4555,7 +4758,12 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4555,7 +4801,12 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
     }
  
     pvr_csb_pack (&regs->isp_mtile_base, CR_ISP_MTILE_BASE, reg) {
@@ -736,7 +817,7 @@ index df05efe..e4b8f68 100644
           PVR_DEV_ADDR(pvr_cs_bo->dev_addr.addr -
                        ctx->device->heaps.transfer_frag_heap->base_addr.addr);
     }
-@@ -4564,8 +4772,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4564,8 +4815,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
        reg.mode_type = ROGUE_CR_ISP_RENDER_MODE_TYPE_FAST_2D;
     }
  
@@ -755,7 +836,7 @@ index df05efe..e4b8f68 100644
        pvr_csb_pack (&regs->isp_rgn, CR_ISP_RGN_SIPF, isp_rgn) {
           /* Bit 0 in CR_ISP_RGN.cs_size_ipf_creq_pf is used to indicate the
            * presence of a link.
-@@ -4578,6 +4794,18 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4578,6 +4837,18 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
        /* clang-format on */
     }
  
@@ -774,7 +855,7 @@ index df05efe..e4b8f68 100644
     return VK_SUCCESS;
  }
  
-@@ -5596,6 +5824,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
+@@ -5596,6 +5867,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
     return vk_error(ctx->device, VK_ERROR_FORMAT_NOT_SUPPORTED);
  }
  
@@ -799,7 +880,7 @@ index df05efe..e4b8f68 100644
  static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
                                   struct pvr_transfer_cmd *transfer_cmd,
                                   struct pvr_transfer_prep_data *prep_data,
-@@ -5677,6 +5923,27 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
+@@ -5677,6 +5966,27 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
           state->custom_mapping.texel_extend_dst = 1U;
     }
  
@@ -827,7 +908,7 @@ index df05efe..e4b8f68 100644
     if (state->custom_mapping.pass_count > 0U) {
        struct pvr_transfer_pass *pass = &state->custom_mapping.passes[pass_idx];
  
-@@ -5736,6 +6003,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
+@@ -5736,6 +6046,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
        }
     }
  
