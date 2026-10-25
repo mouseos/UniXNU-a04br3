@@ -284,6 +284,12 @@ void drainPtes(bool failed)
   IOLockUnlock(gJobs.lock);
   for (uint32_t i = 0; i < count; ++i) {
     const auto &r = records[i];
+    if (i == 0) {
+      const auto &p = r.first_bo;
+      native_powervr_log("powervr: first BO policy v1 ready %u initialized %u enabled %u supplied %u request %u allocationOptions %x descriptorPresent %u descriptorFlags %x size %llu\n",
+        p.ready, p.initialized, p.enabled, p.supplied, p.requested, p.allocation_options,
+        p.descriptor_present, p.descriptor_flags, (unsigned long long)p.size);
+    }
     native_powervr_log("powervr: PTE pre-submit %llu index %u job %u ctx %u seq %u fence %llu fixed-NOP-probes (not decoded targets)\n",
                        (unsigned long long)r.submission, r.index, r.job, r.ctx, r.seqno, (unsigned long long)r.fence);
     for (unsigned n = 0; n < NATIVE_PVR_PTE_TARGETS; ++n) {

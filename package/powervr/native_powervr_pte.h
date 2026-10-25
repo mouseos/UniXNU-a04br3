@@ -13,6 +13,11 @@ struct native_powervr_pte_alias {
   uint32_t status, level, attr, sh;
 };
 enum { NATIVE_PVR_PTE_TARGETS = 3 };
+struct native_powervr_bo_policy_record {
+  uint64_t size;
+  uint32_t ready, initialized, enabled, supplied, requested;
+  uint32_t allocation_options, descriptor_flags, descriptor_present;
+};
 struct native_powervr_pte_target {
   uint64_t gpu, mapping_va, mapping_size, bo_offset, expected_pa;
   uint32_t status, map_options;
@@ -21,6 +26,7 @@ struct native_powervr_pte_target {
 struct native_powervr_pte_record {
   uint64_t fence, submission;
   uint32_t job, seqno, ctx, index;
+  struct native_powervr_bo_policy_record first_bo;
   struct native_powervr_pte_target target[NATIVE_PVR_PTE_TARGETS];
 };
 int native_powervr_pte_enabled(void);

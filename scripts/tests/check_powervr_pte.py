@@ -135,6 +135,7 @@ int native_powervr_vm_find_bo(native_powervr_vm_context*v,uint64_t a,native_powe
 static unsigned mapRefs;
 extern "C" void *native_powervr_pte_map_get(void*t){++mapRefs;return t;}
 extern "C" void native_powervr_pte_map_put(void*t){if(t){assert(mapRefs);--mapRefs;}}
+void copyBoAllocationPolicy(native_powervr_bo_policy_record*out){*out={};out->ready=1;out->allocation_options=0x403;}
 uintptr_t phystokv(uint64_t p){return p+0x100000000ULL;}
 extern "C" void native_powervr_pte_walk(void*m,uint64_t va,native_powervr_pte_alias*out){
  assert(m&&!conn.held&&!vmLock.held&&!jobsLock.held);++walks;out->va=va;out->status=0;out->entry=0x123;}

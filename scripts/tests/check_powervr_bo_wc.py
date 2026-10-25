@@ -26,25 +26,33 @@ h = r'''
 #include <cstring>
 #include <cerrno>
 #include <initializer_list>
+#include "native_powervr_pte.h"
 using IOOptionBits=unsigned;using IOByteCount=uint64_t;using vm_offset_t=uintptr_t;
 constexpr unsigned kIODirectionInOut=3,kIOMapWriteCombineCache=4u<<8,
  kIOWriteCombineCache=4,kIOMemoryBufferCacheShift=28,kIOMemoryTypePhysical64=0x20,kIOMemoryMapperNone=1;
 constexpr uint64_t kDevicePageSize=4096,kBoPhysicalMask=0xfffff000ULL,SZ_1G=1ULL<<30;
 constexpr int kIOReturnSuccess=0;
 void *kernel_task=(void*)1;
+static bool pteSupplied=true; static unsigned pteArg=1;
 static bool supplied,held,failMd,shortMd,badSg,failCpu,failView;
 static unsigned arg,parses,allocations,failAt,heapLive,mdLive,viewLive,allocOptions,barriers,flushes;
 bool PE_parse_boot_argn(const char*k,void*out,size_t n){
- assert(!held&&!strcmp(k,"a04br3-gpu-bo-wc")&&n==4);++parses;memcpy(out,&arg,4);return supplied;}
+ assert(!held&&n==4);++parses;
+ if(!strcmp(k,"a04br3-gpu-pte")){memcpy(out,&pteArg,4);return pteSupplied;}
+ assert(!strcmp(k,"a04br3-gpu-bo-wc"));memcpy(out,&arg,4);return supplied;}
 void *kzallocBytes(size_t n){if(++allocations==failAt)return nullptr;void*p=calloc(1,n);if(p)++heapLive;return p;}
 void kfreeBytes(void*p,size_t){if(p){assert(heapLive);--heapLive;free(p);}}
 void IOLog(const char*,...){assert(false);}
 void flush_dcache(vm_offset_t,unsigned n,int physical){assert(n&&physical==1);++flushes;}
 struct IOAddressRange{uint64_t address,length;};
 struct native_powervr_sg{uint64_t phys,size;};
-class IOBufferMemoryDescriptor{
+class IOMemoryDescriptor{
+ protected:IOOptionBits _flags=0;
+ public:virtual ~IOMemoryDescriptor()=default;
+};
+class IOBufferMemoryDescriptor:public IOMemoryDescriptor{
  public:unsigned refs=1;uint64_t size;void *bytes;
- explicit IOBufferMemoryDescriptor(uint64_t n):size(n),bytes(calloc(1,n)){++mdLive;}
+ explicit IOBufferMemoryDescriptor(uint64_t n):size(n),bytes(calloc(1,n)){_flags=0x13579bdf; ++mdLive;}
  ~IOBufferMemoryDescriptor(){free(bytes);assert(mdLive);--mdLive;}
  static IOBufferMemoryDescriptor *inTaskWithPhysicalMask(void*t,IOOptionBits options,uint64_t n,uint64_t mask){
   assert(t==kernel_task&&mask==kBoPhysicalMask);allocOptions=options;
@@ -77,8 +85,13 @@ struct native_powervr_bo{
  uint32_t refs;uint64_t size,flags;IOBufferMemoryDescriptor*md;void*cpu;native_powervr_sg*sg;
  uint32_t nents,sgCapacity;NativePowerVRBoView*view;Host*host;bool hostPrepared;HostMap*hostMap;
 };
-bool gBoWcEnabled,gBoWcInitialized;
+bool gBoPolicyCaptureEnabled;
+bool gBoWcEnabled,gBoWcInitialized,gBoWcSupplied;uint32_t gBoWcRequested;
 '''
+h += function('class BoDescriptorFlags') + ';\n'
+h += 'native_powervr_bo_policy_record gFirstBoPolicy; uint32_t gFirstBoPolicyState;\n'
+for signature in ('void recordBoAllocation(', 'void copyBoAllocationPolicy('):
+    h += function(signature) + '\n'
 for signature in ('void initBoWcPolicy()',
                   'NativePowerVRBoView *NativePowerVRBoView::withBacking(',
                   'void NativePowerVRBoView::free()', 'void boDestroy('):
@@ -87,16 +100,23 @@ h += function('int boCreate(').replace('__asm__ volatile("dsb sy" ::: "memory");
 h += r'''
 static void policy(bool present,unsigned value){
  supplied=present;arg=value;gBoWcInitialized=gBoWcEnabled=false;held=false;
- unsigned old=parses;initBoWcPolicy();assert(parses==old+1);
- supplied=!present;arg=value^1;held=true;initBoWcPolicy();assert(parses==old+1);held=false;
+ unsigned old=parses;initBoWcPolicy();assert(parses==old+2);
+ supplied=!present;arg=value^1;held=true;initBoWcPolicy();assert(parses==old+2);held=false;
 }
 static void reset(){allocations=failAt=0;failMd=shortMd=badSg=failCpu=failView=false;}
 int main(){
  for(bool present:{false,true})for(unsigned value:{0u,1u,2u,~0u}){
   policy(present,value);bool wc=present&&value==1;assert(gBoWcEnabled==wc);reset();
+  gFirstBoPolicyState=0;
   native_powervr_bo*bo=nullptr;unsigned before=parses;
   held=true;assert(!boCreate(12288,0x1234,&bo));held=false;
   assert(parses==before&&allocOptions==(kIODirectionInOut|(wc?kIOMapWriteCombineCache:0)));
+  native_powervr_bo_policy_record observed{};copyBoAllocationPolicy(&observed);
+  assert(observed.ready&&observed.initialized&&bool(observed.enabled)==wc);
+  assert(bool(observed.supplied)==present&&observed.requested==value);
+  assert(observed.allocation_options==allocOptions&&observed.descriptor_present&&observed.descriptor_flags==0x13579bdf&&observed.size==12288);
+  recordBoAllocation(nullptr,1,0);native_powervr_bo_policy_record same{};copyBoAllocationPolicy(&same);
+  assert(!memcmp(&observed,&same,sizeof(same))); // the first record is immutable
   assert(bo->flags==0x1234&&bo->size==12288&&bo->nents==2&&bo->sg[0].size==8192&&bo->sg[1].size==4096);
   // Exercise actual view retention/free: user mapping survives BO destruction.
   bo->view=NativePowerVRBoView::withBacking(bo->md,bo->sg,bo->nents,bo->size);
@@ -112,6 +132,20 @@ int main(){
   assert(!bo->view&&bo->md->refs==1);boDestroy(bo);assert(!mdLive&&!viewLive&&!heapLive);
  }
  assert(barriers&&flushes);
+ // Disabled/absent/non-one PTE flags leave the singleton entirely untouched.
+ for(bool present:{false,true})for(unsigned value:{0u,1u,2u,~0u}){
+  pteSupplied=present;pteArg=value;policy(true,1);reset();gFirstBoPolicyState=0;
+  native_powervr_bo*bo=nullptr;held=true;assert(!boCreate(12288,0,&bo));held=false;
+  native_powervr_bo_policy_record r{};copyBoAllocationPolicy(&r);
+  bool capture=present&&value==1;assert(bool(r.ready)==capture);
+  assert(gFirstBoPolicyState==(capture?2u:0u));
+  boDestroy(bo);assert(!mdLive&&!viewLive&&!heapLive);
+ }
+ // Before initialization the capture gate is default-off too.
+ gFirstBoPolicyState=0;gBoPolicyCaptureEnabled=false;gBoWcInitialized=false;reset();
+ native_powervr_bo*early=nullptr;assert(!boCreate(12288,0,&early));
+ native_powervr_bo_policy_record r{};copyBoAllocationPolicy(&r);assert(!r.ready&&!gFirstBoPolicyState);
+ boDestroy(early);assert(!mdLive&&!viewLive&&!heapLive);
 }
 '''
 
@@ -126,7 +160,7 @@ with tempfile.TemporaryDirectory(prefix='pvr-bo-wc-') as directory:
     binary = source.with_suffix('')
     subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
                     '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-g',
-                    str(source), '-o', str(binary)], check=True)
+                    '-I', str(ROOT / 'package/powervr'), str(source), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=30)
 print('PASS actual BO allocator/view/free: exact bootarg gate, once-only policy, flags, SG, retained user mapping and failure cleanup (ASan/UBSan)')
 print('API mocks do not prove real PTE attributes or XNU page-cache restoration; actual kernel build/PTE test remains required.')

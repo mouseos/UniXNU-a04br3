@@ -287,11 +287,18 @@ bool gTqLowInitialized;
 // or changes the allocation policy while connection/VM/jobs locks are held.
 bool gBoWcEnabled;
 bool gBoWcInitialized;
+bool gBoWcSupplied;
+uint32_t gBoWcRequested;
+bool gBoPolicyCaptureEnabled;
 void initBoWcPolicy()
 {
   if (gBoWcInitialized) return;
   uint32_t requested = 0;
-  gBoWcEnabled = PE_parse_boot_argn("a04br3-gpu-bo-wc", &requested, sizeof(requested)) && requested == 1;
+  gBoWcSupplied = PE_parse_boot_argn("a04br3-gpu-bo-wc", &requested, sizeof(requested));
+  gBoWcRequested = requested;
+  gBoWcEnabled = gBoWcSupplied && requested == 1;
+  uint32_t pte = 0;
+  gBoPolicyCaptureEnabled = PE_parse_boot_argn("a04br3-gpu-pte", &pte, sizeof(pte)) && pte == 1;
   gBoWcInitialized = true;
 }
 drm_pvr_heap effective_heap(uint32_t id)
@@ -586,6 +593,40 @@ struct native_powervr_bo {
 };
 
 namespace {
+// A standard pointer-to-base-member accesses the declared field of the actual
+// descriptor. No downcast, guessed offset, new descriptor type or allocation.
+class BoDescriptorFlags : public IOMemoryDescriptor {
+public:
+  static IOOptionBits read(const IOMemoryDescriptor *md) {
+    const IOOptionBits IOMemoryDescriptor::*member = &BoDescriptorFlags::_flags;
+    return md->*member;
+  }
+};
+native_powervr_bo_policy_record gFirstBoPolicy;
+uint32_t gFirstBoPolicyState; // 0 absent, 1 writing, 2 immutable/published
+void recordBoAllocation(const IOMemoryDescriptor *md, uint64_t size, IOOptionBits options)
+{
+  if (!gBoPolicyCaptureEnabled) return;
+  uint32_t expected = 0;
+  if (!__atomic_compare_exchange_n(&gFirstBoPolicyState, &expected, 1u, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
+  gFirstBoPolicy = {};
+  gFirstBoPolicy.size = size;
+  gFirstBoPolicy.initialized = gBoWcInitialized;
+  gFirstBoPolicy.enabled = gBoWcEnabled;
+  gFirstBoPolicy.supplied = gBoWcSupplied;
+  gFirstBoPolicy.requested = gBoWcRequested;
+  gFirstBoPolicy.allocation_options = options;
+  gFirstBoPolicy.descriptor_present = md != nullptr;
+  if (md) gFirstBoPolicy.descriptor_flags = BoDescriptorFlags::read(md);
+  gFirstBoPolicy.ready = 1;
+  __atomic_store_n(&gFirstBoPolicyState, 2u, __ATOMIC_RELEASE);
+}
+void copyBoAllocationPolicy(native_powervr_bo_policy_record *out)
+{
+  *out = {};
+  if (__atomic_load_n(&gFirstBoPolicyState, __ATOMIC_ACQUIRE) == 2) *out = gFirstBoPolicy;
+}
+
 void boDestroy(native_powervr_bo *bo)
 {
   if (bo->hostMap) bo->hostMap->release();
@@ -613,6 +654,7 @@ int boCreate(uint64_t size, uint64_t flags, native_powervr_bo **out)
   const IOOptionBits allocationOptions = IOOptionBits(kIODirectionInOut) |
       (gBoWcEnabled ? IOOptionBits(kIOMapWriteCombineCache) : IOOptionBits(0));
   bo->md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, allocationOptions, size, kBoPhysicalMask);
+  recordBoAllocation(bo->md, size, allocationOptions);
   if (!bo->md || bo->md->getLength() < size) { boDestroy(bo); return -ENOMEM; }
   bo->cpu = bo->md->getBytesNoCopy();
   // The physical runs (pvr_gem_object_get_pages_sgt()), adjacent pages merged.
@@ -1019,6 +1061,7 @@ extern "C" native_powervr_pte_snapshot *native_powervr_pte_prepare(native_powerv
 }
 extern "C" void native_powervr_pte_capture(native_powervr_pte_snapshot *s, native_powervr_pte_record *r)
 {
+  copyBoAllocationPolicy(&r->first_bo);
   if (!s) { for (auto &t : r->target) t.status = 5; return; }
   // UserClient pre-phase ONLY: connection/VM/jobs locks are all absent.
   // Prepared BO/map/VM references keep metadata and page-table roots alive.
