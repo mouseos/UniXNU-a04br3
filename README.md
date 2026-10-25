@@ -192,8 +192,9 @@ PowerVR driver (`scripts/build-pvr-darwin.py`), clears an image on the GPU and r
 
 QuartzCore renders through the native Metal frontend of UniXNU on the GE8300: Metal, metal2vulkan, Mesa's PowerVR Vulkan
 driver, the NativePowerVR user client. The plugin is UniXNU's vendor-neutral `drivers/NativeMetal/NativeVulkanMetalPlugin.mm`;
-this repository adds the board hooks, the accelerator and the Mesa and kernel pieces. State: built and compile-checked, not yet run
-on the tablet.
+this repository adds the board hooks, the accelerator and the Mesa and kernel pieces. The tablet passes Vulkan transfer/readback
+and loads the Metal plugin in backboardd. Full-target 3D rendering and Metal UI composition are still under test; publication
+alone is not a successful accelerated frame.
 
 | Piece | Where |
 | --- | --- |
@@ -214,6 +215,34 @@ on the tablet.
   lines: `M s.. c.. r.. i.. q.. k<ok>/<failed> p<ok>/<failed>` (self-test: compute, render, host import, QuartzCore kernels and
   render pairs), `P<step> e<hex>` and `PF <frames>/<failures> ...` (scanout), `ST..`/`PUB ..` (status every 20 s).
 - Offline pipeline check: `scripts/make-pvr-m2v-profile.py` writes a Khronos profile of the driver for the metal2vulkan command line.
+
+### GPU updates preserving Data
+
+The normal clean build above prepares its own Data seed. For subsequent GPU iterations, UniXNU's official `NGPUADD2` addon
+can replace the signed GPU files before launchd without regenerating that seed. Keep the original prepared `data.dbr`, its
+volume UUID (`XNU_OWNER_DATA_VOLUME_UUID`), the unique chip ID and the same skip-setup option. Do not feed a previously combined
+owner trust bundle as the base: regenerate the original pinned bundle with `build-a04br3-trust-cache.py`.
+
+Run from the UniXNU checkout after updating the device source and generating its tree. These examples use the Actions
+layout (`device/` inside UniXNU); for the sibling checkouts in the clean-build instructions, replace `device/` with
+`../UniXNU-a04br3/`:
+
+```sh
+python3 device/scripts/build-pvr-darwin.py --target ios --reset-source
+python3 out/a04br3/tree/scripts/build-a04br3-metal-plugin.py \
+  --vulkan "$PWD/device/build/mesa-pvr-ios/src/imagination/vulkan/libvulkan_powervr_mesa.dylib" --out "$RUNNER_TEMP/powervr-metal"
+python3 device/scripts/build-a04br3-powervr-probe.py --vulkan --out "$RUNNER_TEMP/powervr-probe"
+python3 device/scripts/build-a04br3-trust-cache.py --tree "$PWD" --out "$RUNNER_TEMP/trustcache-original"
+python3 device/scripts/make-a04br3-gpu-addon.py --probe-dir "$RUNNER_TEMP/powervr-probe" \
+  --metal-plugin "$RUNNER_TEMP/powervr-metal" --trust-base "$RUNNER_TEMP/trustcache-original" \
+  --trust-out "$RUNNER_TEMP/trustcache-update" --out "$RUNNER_TEMP/gpu-update.addon"
+```
+
+Rebuild the kernel when its source changed. Build the payload with `--gpu-addon "$RUNNER_TEMP/gpu-update.addon"`,
+`--owner-trust-cache "$RUNNER_TEMP/trustcache-update"` and the original `--data-ramdisk`, plus the original identity/options.
+The exporter includes the complete signed Metal bundle (including its resource seal), the probe and the standalone Vulkan
+bundle at their existing union-mount paths. It refuses output overwrites and validates the original trust-cache pin.
+Check payload capacity and run `scripts/check-a04br3-bootimg.py` after packaging; the boot partition limit is 128 MiB.
 
 ## Credits
 
