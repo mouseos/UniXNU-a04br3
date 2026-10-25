@@ -76,15 +76,21 @@ static uint32_t memoryType(const VkPhysicalDeviceMemoryProperties *memory, uint3
   return UINT32_MAX;
 }
 
-static void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags srcAccess,
-                         VkAccessFlags dstAccess, VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage)
+static void imageBarrierLevels(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags srcAccess,
+                         VkAccessFlags dstAccess, VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage, uint32_t levels)
 {
   const VkImageMemoryBarrier barrier = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .srcAccessMask = srcAccess, .dstAccessMask = dstAccess,
       .oldLayout = from, .newLayout = to, .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
       .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .image = image,
-      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+      .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1}};
   p_vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, NULL, 0, NULL, 1, &barrier);
+}
+
+static void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to, VkAccessFlags srcAccess,
+                         VkAccessFlags dstAccess, VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage)
+{
+  imageBarrierLevels(cmd, image, from, to, srcAccess, dstAccess, srcStage, dstStage, 1);
 }
 
 // Eight rows of eight 8x8 cells; all 64 pixels of each cell are accounted for.
@@ -616,12 +622,24 @@ int probe_vulkan(const char *library)
   if (unsetenv("PVR_DARWIN_VENDOR_ISP_OVERLAP") != 0) return -1;
   if (setenv("PVR_DARWIN_TERMINATE_TILE_UNITS", "1", 1) != 0) return -1;
   if (setenv("PVR_DARWIN_BUFFER_GUARD", "1", 1) != 0) return -1;
+  const char *uiBatchFlag = getenv("PVR_PROBE_UI_BATCH");
+  const int uiBatch = uiBatchFlag && strcmp(uiBatchFlag, "1") == 0;
   const char *uiFillFlag = getenv("PVR_PROBE_UI_FILL");
-  const int uiFill = uiFillFlag && strcmp(uiFillFlag, "1") == 0;
+  const int uiFill = uiBatch || (uiFillFlag && strcmp(uiFillFlag, "1") == 0);
   const uint32_t width = uiFill ? 388U : kWidth, height = uiFill ? 12U : kHeight;
+  const uint32_t mipLevels = uiBatch ? 4U : 1U;
+  uint32_t pixelCount = 0;
+  for (uint32_t level = 0; level < mipLevels; ++level) {
+    const uint32_t w = (width >> level) ? width >> level : 1U;
+    const uint32_t h = (height >> level) ? height >> level : 1U;
+    pixelCount += w * h;
+  }
   const VkFormat imageFormat = uiFill ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
   const uint8_t expected[4] = {uiFill ? kClear[2] : kClear[0], kClear[1], uiFill ? kClear[0] : kClear[2], kClear[3]};
-  if (uiFill) {
+  if (uiBatch) {
+    probe_line("vk UI-batch comparison: optimal B8G8R8A8_UNORM mips 388x12/194x6/97x3/48x1, 6159 pixels; exact UI format not established");
+    probe_line("vk UI-batch SKIP: original 64x64 render and host-import tests (not a PASS)");
+  } else if (uiFill) {
     probe_line("vk UI-fill comparison: 388x12 optimal B8G8R8A8_UNORM; known-format comparison, exact UI format not established");
     probe_line("vk UI-fill SKIP: original 64x64 render and host-import tests (not a PASS)");
   }
@@ -727,11 +745,11 @@ int probe_vulkan(const char *library)
   VkCommandPool pool = VK_NULL_HANDLE;
   VkFence fence = VK_NULL_HANDLE;
   void *mapped = NULL;
-  const VkDeviceSize bytes = (VkDeviceSize)width * height * 4;
+  const VkDeviceSize bytes = (VkDeviceSize)pixelCount * 4;
 
   const VkImageCreateInfo imageInfo = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = imageFormat,
-      .extent = {width, height, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+      .extent = {width, height, 1}, .mipLevels = mipLevels, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
       .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
   if (!vkStep("vkCreateImage", p_vkCreateImage(device, &imageInfo, NULL, &image), NULL)) goto out_device;
@@ -788,10 +806,10 @@ int probe_vulkan(const char *library)
   if (!vkStep("clear vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdAlloc, &cmd), NULL) ||
       !vkStep("clear vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin), NULL))
     goto out_objects;
-  imageBarrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-               VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+  imageBarrierLevels(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+               VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, mipLevels);
   const VkClearColorValue color = {.float32 = {kClear[0] / 255.0f, kClear[1] / 255.0f, kClear[2] / 255.0f, kClear[3] / 255.0f}};
-  const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
   p_vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
   if (!vkStep("clear vkEndCommandBuffer", p_vkEndCommandBuffer(cmd), NULL)) goto out_objects;
   const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -811,12 +829,18 @@ int probe_vulkan(const char *library)
   if (!vkStep("copy vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdAlloc, &cmd), NULL) ||
       !vkStep("copy vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin), NULL)) goto out_objects;
   // The previous submission left the image in TRANSFER_DST; retain the write-to-read dependency across submissions.
-  imageBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
-               VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-  const VkBufferImageCopy region = {.bufferOffset = 0, .bufferRowLength = 0, .bufferImageHeight = 0,
-                                    .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageOffset = {0, 0, 0},
-                                    .imageExtent = {width, height, 1}};
-  p_vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+  imageBarrierLevels(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+               VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, mipLevels);
+  VkBufferImageCopy regions[4] = {0};
+  VkDeviceSize bufferOffset = 0;
+  for (uint32_t level = 0; level < mipLevels; ++level) {
+    const uint32_t w = (width >> level) ? width >> level : 1U;
+    const uint32_t h = (height >> level) ? height >> level : 1U;
+    regions[level] = (VkBufferImageCopy){.bufferOffset = bufferOffset,
+        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1}, .imageExtent = {w, h, 1}};
+    bufferOffset += (VkDeviceSize)w * h * 4;
+  }
+  p_vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, mipLevels, regions);
   const VkBufferMemoryBarrier toHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
                                         .dstAccessMask = VK_ACCESS_HOST_READ_BIT, .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .buffer = buffer, .offset = 0,
@@ -837,19 +861,19 @@ int probe_vulkan(const char *library)
   }
   const volatile uint8_t *pixels = (const volatile uint8_t *)mapped;
   uint32_t match = 0, first = UINT32_MAX;
-  for (uint32_t i = 0; i < width * height; i++) {
+  for (uint32_t i = 0; i < pixelCount; i++) {
     const int same = pixels[i * 4] == expected[0] && pixels[i * 4 + 1] == expected[1] && pixels[i * 4 + 2] == expected[2] &&
                      pixels[i * 4 + 3] == expected[3];
     match += same;
     if (!same && first == UINT32_MAX) first = i;
   }
   if (first == UINT32_MAX)
-    snprintf(detail, sizeof detail, "%u/%u pixels = %02x%02x%02x%02x", match, width * height, expected[0], expected[1], expected[2], expected[3]);
+    snprintf(detail, sizeof detail, "%u/%u pixels = %02x%02x%02x%02x", match, pixelCount, expected[0], expected[1], expected[2], expected[3]);
   else
     snprintf(detail, sizeof detail, "%u/%u pixels match; first mismatch at %u: %02x%02x%02x%02x (expected %02x%02x%02x%02x)", match,
-             width * height, first, pixels[first * 4], pixels[first * 4 + 1], pixels[first * 4 + 2], pixels[first * 4 + 3],
+             pixelCount, first, pixels[first * 4], pixels[first * 4 + 1], pixels[first * 4 + 2], pixels[first * 4 + 3],
              expected[0], expected[1], expected[2], expected[3]);
-  const int clearOK = vkCheck("clear readback", match == width * height, detail);
+  const int clearOK = vkCheck("clear readback", match == pixelCount, detail);
   if (uiFill) {
     result = clearOK ? 0 : -1;
     goto out_objects;

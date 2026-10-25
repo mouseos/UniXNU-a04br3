@@ -45,6 +45,7 @@ static int hostImportSupported(VkPhysicalDevice p){(void)p;return 1;}
 static int hostImportProbe(VkPhysicalDevice p,VkDevice d,VkQueue q,uint32_t f,const VkPhysicalDeviceMemoryProperties *m,VkDeviceSize a){(void)p;(void)d;(void)q;(void)f;(void)m;assert(a==4096);event('H');return strcmp(failure,"host")!=0;}
 static int linearTriangleProbe(VkDevice d,VkQueue q,VkCommandPool p,const VkPhysicalDeviceMemoryProperties *m,VkFormatFeatureFlags f,int clear){(void)d;(void)q;(void)p;(void)m;(void)f;event(clear?'L':'R');return !(clear&&!strcmp(failure,"linear"));}
 static int triangleProbe(VkDevice d,VkQueue q,VkCommandPool p,VkImage i,VkBuffer b,VkDeviceMemory m,void *map,int c){(void)d;(void)q;(void)p;(void)i;(void)b;(void)m;(void)map;(void)c;event('O');return strcmp(failure,"triangle")!=0;}
+static void imageBarrierLevels(VkCommandBuffer c,VkImage i,VkImageLayout a,VkImageLayout b,VkAccessFlags x,VkAccessFlags y,VkPipelineStageFlags s,VkPipelineStageFlags t,uint32_t levels){(void)c;(void)i;(void)a;(void)b;(void)x;(void)y;(void)s;(void)t;assert(levels==1);}
 static void imageBarrier(VkCommandBuffer c,VkImage i,VkImageLayout a,VkImageLayout b,VkAccessFlags x,VkAccessFlags y,VkPipelineStageFlags s,VkPipelineStageFlags t){(void)c;(void)i;(void)a;(void)b;(void)x;(void)y;(void)s;(void)t;}
 #define HANDLE(t) ((t)(uintptr_t)1)
 static VkResult vkCreateInstance_(const VkInstanceCreateInfo *i,const VkAllocationCallbacks *a,VkInstance *v){(void)i;(void)a;*v=HANDLE(VkInstance);return VK_SUCCESS;}

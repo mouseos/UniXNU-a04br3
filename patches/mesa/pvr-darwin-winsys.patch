@@ -362,7 +362,7 @@ index f1cc515..bb5ab41 100644
        /* For integer depth formats we'll convert the specified floating point
         * depth bias values and specify them as integers. In this mode a depth
 diff --git a/src/imagination/vulkan/pvr_arch_job_transfer.c b/src/imagination/vulkan/pvr_arch_job_transfer.c
-index df05efe..a759f42 100644
+index df05efe..ff4c628 100644
 --- a/src/imagination/vulkan/pvr_arch_job_transfer.c
 +++ b/src/imagination/vulkan/pvr_arch_job_transfer.c
 @@ -26,6 +26,11 @@
@@ -754,7 +754,26 @@ index df05efe..a759f42 100644
        pvr_csb_pack (&regs->isp_rgn, CR_ISP_RGN_SIPF, isp_rgn) {
           /* Bit 0 in CR_ISP_RGN.cs_size_ipf_creq_pf is used to indicate the
            * presence of a link.
-@@ -5596,6 +5811,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
+@@ -4578,6 +4793,18 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+       /* clang-format on */
+    }
+ 
++#ifdef PVR_WINSYS_DARWIN
++   if (dump) {
++      char text[192];
++      snprintf(text, sizeof(text), "pvr SIPF1 final regs bo=%llx mtile=%llx render=%x rgn=%x blocks=%u regions=%u linked_index=%u",
++               (unsigned long long)pvr_cs_bo->dev_addr.addr,
++               (unsigned long long)regs->isp_mtile_base, regs->isp_render,
++               regs->isp_rgn, num_prim_blks, num_region_arrays, sipf1_region_index);
++      fprintf(stderr, "%s\n", text);
++      pvr_darwin_sipf1_log(text);
++   }
++#endif
++
+    return VK_SUCCESS;
+ }
+ 
+@@ -5596,6 +5823,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
     return vk_error(ctx->device, VK_ERROR_FORMAT_NOT_SUPPORTED);
  }
  
@@ -779,7 +798,7 @@ index df05efe..a759f42 100644
  static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
                                   struct pvr_transfer_cmd *transfer_cmd,
                                   struct pvr_transfer_prep_data *prep_data,
-@@ -5677,6 +5910,27 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
+@@ -5677,6 +5922,27 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
           state->custom_mapping.texel_extend_dst = 1U;
     }
  
@@ -807,7 +826,7 @@ index df05efe..a759f42 100644
     if (state->custom_mapping.pass_count > 0U) {
        struct pvr_transfer_pass *pass = &state->custom_mapping.passes[pass_idx];
  
-@@ -5736,6 +5990,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
+@@ -5736,6 +6002,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
        }
     }
  

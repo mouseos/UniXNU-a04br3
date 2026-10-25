@@ -129,7 +129,7 @@ static int region_fixture(const struct pvr_device_info *dev_info,unsigned blocks
 '''
     rgn_start = ctrl.index('if (sipf1 && PVR_HAS_FEATURE(dev_info, ipf_creq_pf))')
     rgn_end = ctrl.index('\n\n   return VK_SUCCESS;', rgn_start)
-    rgn_block = ctrl[rgn_start:rgn_end]
+    rgn_block = ctrl[rgn_start:rgn_end].split("\n#ifdef PVR_WINSYS_DARWIN\n   if (dump)", 1)[0]
     h += '\nstatic uint32_t rgn_fixture(const struct pvr_device_info *dev_info,bool sipf1,unsigned num_prim_blks,unsigned sipf1_region_index,bool was_linked) {\nstruct {uint32_t isp_rgn;} storage={0},*regs=&storage;\n'
     h += rgn_block + '\nreturn regs->isp_rgn; }\n'
     # region_fixture's declaration was already emitted; move this definition before it.
