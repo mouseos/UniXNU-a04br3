@@ -29,6 +29,7 @@ void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
 int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
 void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
+extern volatile uint64_t native_msdc_verified_cache_stats[3] __attribute__((weak_import));
 extern volatile uint32_t native_keyevents_stage;
 extern volatile int native_keyevents_status;
 // Existing kern_exec.c addon installer and union-mount diagnostics.
@@ -139,8 +140,21 @@ int procCallout(proc_t p, void *arg)
   return kProcReturned;
 }
 
+// Existing process-report thread only: no storage hot-path logging.
+void msdcCacheReport()
+{
+  if (!native_msdc_verified_cache_stats) return;
+  const uint64_t hits = __atomic_load_n(&native_msdc_verified_cache_stats[0], __ATOMIC_RELAXED);
+  const uint64_t misses = __atomic_load_n(&native_msdc_verified_cache_stats[1], __ATOMIC_RELAXED);
+  const uint64_t reused = __atomic_load_n(&native_msdc_verified_cache_stats[2], __ATOMIC_RELAXED);
+  if (hits || misses || reused)
+    IOLog("a04br3 msdc vcache: hits=%llu misses=%llu reused_bytes=%llu\n",
+          (unsigned long long)hits, (unsigned long long)misses, (unsigned long long)reused);
+}
+
 void procLogThread(void *, wait_result_t)
 {
+  uint64_t cacheReportSeconds = 0;
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
     static ProcLine line;
@@ -150,6 +164,11 @@ void procLogThread(void *, wait_result_t)
     IOLog("a04br3 procs: round %u, %u processes\n", round, line.count);
     a04br3_display_report();
     a04br3_thread_report();
+    cacheReportSeconds += gProcLogSeconds;
+    if (cacheReportSeconds >= 60) {
+      cacheReportSeconds %= 60;
+      msdcCacheReport();
+    }
   }
 }
 }
