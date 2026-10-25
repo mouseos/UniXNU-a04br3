@@ -5,6 +5,7 @@ import subprocess, tempfile, runpy, sys
 R=Path(__file__).resolve().parents[2]
 s=(R/'.cache/mesa-pvr/src/imagination/vulkan/winsys/darwin/pvr_darwin.c').read_text()
 f=s[s.index('VkResult pvr_darwin_submit_jobs('):s.index('/* The signal resolves',s.index('VkResult pvr_darwin_submit_jobs('))]
+f=s[s.index('static void pvr_darwin_submit_barrier('):s.index('VkResult pvr_darwin_submit_jobs(')]+f
 pre=r'''#define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
 #include <stdbool.h>

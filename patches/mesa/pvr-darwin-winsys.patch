@@ -1695,10 +1695,10 @@ index 0000000..dafbb55
 +#endif
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.c b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
 new file mode 100644
-index 0000000..737b82a
+index 0000000..2f269e6
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
-@@ -0,0 +1,899 @@
+@@ -0,0 +1,910 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: talks to the NativePowerVR IOKit user client (NativePowerVRABI.h,
 + * version 1). Modelled on Turnip's darwin backend (tu_knl_darwin.cc).
@@ -2452,6 +2452,16 @@ index 0000000..737b82a
 +   ws->sync_types[2] = NULL;
 +}
 +
++/* Explicit diagnostic comparison only; no reads, logging or cache maintenance. */
++static void pvr_darwin_submit_barrier(void)
++{
++#if defined(__aarch64__) || defined(__arm64__)
++   const char *flag = getenv("PVR_DARWIN_SUBMIT_BARRIER");
++   if (flag && strcmp(flag, "1") == 0)
++      __asm__ volatile("dsb sy" ::: "memory");
++#endif
++}
++
 +VkResult pvr_darwin_submit_jobs(int fd,
 +                                const struct drm_pvr_ioctl_submit_jobs_args *args,
 +                                struct vk_sync *const *waits,
@@ -2488,6 +2498,7 @@ index 0000000..737b82a
 +                       args->jobs.count);
 +   }
 +
++   pvr_darwin_submit_barrier();
 +   kr = pvr_darwin_call(fd,
 +                        NativePowerVRMethodSubmitJobs,
 +                        args,
