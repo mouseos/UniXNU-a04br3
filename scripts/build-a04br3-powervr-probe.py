@@ -117,6 +117,12 @@ def ui_batch_probe_source():
         'PVR_PROBE_TQ_FIRST', 'PVR_PROBE_UI_BATCH').replace('TQ-first comparison', 'UI-batch comparison')
 
 
+def serial_transfer_probe_source():
+    """Serialize transfer submissions only in the explicit diagnostic probe."""
+    return tq_first_probe_source().replace('enable_tq_first_comparison', 'enable_serial_transfer_comparison').replace(
+        'PVR_PROBE_TQ_FIRST', 'PVR_DARWIN_SERIAL_TRANSFER').replace('TQ-first comparison', 'serial transfer comparison')
+
+
 def sipf1_encoding_probe_source():
     """Enable v1 encoding only; leave upstream routing and external gates intact."""
     return tq_first_probe_source().replace('enable_tq_first_comparison', 'enable_sipf1_encoding_comparison').replace(
@@ -289,6 +295,10 @@ def build(args, powervr):
         comparison = out / 'powervrprobed-ui-batch.c'
         comparison.write_text(ui_batch_probe_source())
         sources.append(str(comparison))
+    if args.serial_transfer:
+        comparison = out / 'powervrprobed-serial-transfer.c'
+        comparison.write_text(serial_transfer_probe_source())
+        sources.append(str(comparison))
     if args.sipf1_encoding:
         comparison = out / 'powervrprobed-sipf1-encoding.c'
         comparison.write_text(sipf1_encoding_probe_source())
@@ -409,6 +419,7 @@ def main():
     parser.add_argument('--extra-trust', type=Path, action='append', default=[], metavar='TRUST_JSON',
                         help='also trust the CDHashes of another owner build (its trust.json, every "*cdhash" value), for example '
                              'build-a04br3-metal-plugin.py --out DIR/trust.json; one owner module carries them all')
+    parser.add_argument('--serial-transfer', action='store_true', help='wait transfer fences synchronously for overlap comparison')
     parser.add_argument('--sipf1-encoding', action='store_true', help='enable SIPF1 encoding without forcing TQ Clip routing')
     parser.add_argument('--sipf1-dump', action='store_true', help='enable existing bounded SIPF1 snapshots in this owner probe')
     parser.add_argument('--ui-batch', action='store_true', help='four-mip UI-shaped clear/copy batch; skips original tests')
@@ -416,6 +427,8 @@ def main():
     args = parser.parse_args()
     if args.ui_batch and args.vulkan is None:
         parser.error('--ui-batch requires --vulkan')
+    if args.serial_transfer and args.vulkan is None:
+        parser.error('--serial-transfer requires --vulkan')
     if args.sipf1_encoding and args.vulkan is None:
         parser.error('--sipf1-encoding requires --vulkan')
     if args.sipf1_dump and args.vulkan is None:

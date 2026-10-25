@@ -1613,10 +1613,10 @@ index 0000000..dafbb55
 +#endif
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.c b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
 new file mode 100644
-index 0000000..7e04972
+index 0000000..737b82a
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
-@@ -0,0 +1,877 @@
+@@ -0,0 +1,899 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: talks to the NativePowerVR IOKit user client (NativePowerVRABI.h,
 + * version 1). Modelled on Turnip's darwin backend (tu_knl_darwin.cc).
@@ -2419,6 +2419,28 @@ index 0000000..7e04972
 +                       "Failed to submit %s job: 0x%x",
 +                       what,
 +                       kr);
++   }
++
++   /* Diagnostic only: isolate overlap between transfer kicks. Never wait under lock. */
++   const char *serial_transfer = getenv("PVR_DARWIN_SERIAL_TRANSFER");
++   if (what && !strcmp(what, "transfer") && serial_transfer &&
++       !strcmp(serial_transfer, "1")) {
++      const uint64_t now = os_time_get_nano();
++      const uint64_t duration = 10000000000ull;
++      /* UINT64_MAX means infinite to wait_fence, so saturate below it. */
++      const uint64_t deadline = now >= UINT64_MAX - duration
++                                  ? UINT64_MAX - 1 : now + duration;
++      for (uint32_t i = 0; i < args->jobs.count; i++) {
++         const struct pvr_darwin_fence fence = {
++            .fd = fd,
++            .value = reply.fence[i],
++         };
++         if (!fence.value || os_time_get_nano() >= deadline ||
++             pvr_darwin_wait_fence(&fence, deadline) != VK_SUCCESS) {
++            return vk_errorf(NULL, VK_ERROR_DEVICE_LOST,
++                             "Serial transfer fence wait failed");
++         }
++      }
 +   }
 +
 +   pthread_mutex_lock(&pvr_dw.lock);
