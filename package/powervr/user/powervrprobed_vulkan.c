@@ -402,6 +402,7 @@ int probe_vulkan(const char *library)
 #undef CHECK_LOADED
 
   int result = -1;
+  const char *transferStage = NULL;
   VkDevice device = VK_NULL_HANDLE;
   uint32_t count = 1;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
@@ -520,14 +521,34 @@ int probe_vulkan(const char *library)
   cmdAlloc.commandPool = pool;
   const VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                           .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
-  if (!vkStep("vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdAlloc, &cmd), NULL) ||
-      !vkStep("vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin), NULL))
+  transferStage = "clear";
+  probe_line("vk initial transfer %s begin", transferStage);
+  if (!vkStep("clear vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdAlloc, &cmd), NULL) ||
+      !vkStep("clear vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin), NULL))
     goto out_objects;
   imageBarrier(cmd, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
   const VkClearColorValue color = {.float32 = {kClear[0] / 255.0f, kClear[1] / 255.0f, kClear[2] / 255.0f, kClear[3] / 255.0f}};
   const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
   p_vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+  if (!vkStep("clear vkEndCommandBuffer", p_vkEndCommandBuffer(cmd), NULL)) goto out_objects;
+  const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  if (!vkStep("clear vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence), NULL)) goto out_objects;
+  // Distinct submissions and fences identify which TQ operation first fails.
+  // submit references cmd, which is replaced with a fresh command buffer for copy below.
+  const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
+  if (!vkStep("clear vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence), NULL) ||
+      !vkStep("clear vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull), NULL)) goto out_objects;
+  probe_line("vk initial transfer clear end PASS (fence completed; pixels checked after copy)");
+  transferStage = NULL;
+  p_vkDestroyFence(device, fence, NULL);
+  fence = VK_NULL_HANDLE;
+
+  transferStage = "copy";
+  probe_line("vk initial transfer %s begin", transferStage);
+  if (!vkStep("copy vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdAlloc, &cmd), NULL) ||
+      !vkStep("copy vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin), NULL)) goto out_objects;
+  // The previous submission left the image in TRANSFER_DST; retain the write-to-read dependency across submissions.
   imageBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
   const VkBufferImageCopy region = {.bufferOffset = 0, .bufferRowLength = 0, .bufferImageHeight = 0,
@@ -539,14 +560,13 @@ int probe_vulkan(const char *library)
                                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .buffer = buffer, .offset = 0,
                                         .size = VK_WHOLE_SIZE};
   p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &toHost, 0, NULL);
-  if (!vkStep("vkEndCommandBuffer", p_vkEndCommandBuffer(cmd), NULL)) goto out_objects;
-
-  const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-  if (!vkStep("vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence), NULL)) goto out_objects;
-  const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
-  if (!vkStep("vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence), NULL)) goto out_objects;
-  // 10 s: a clear and a copy of 16 KiB; a firmware hang shows as VK_TIMEOUT (2) or VK_ERROR_DEVICE_LOST (-4).
-  if (!vkStep("vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull), NULL)) goto out_objects;
+  if (!vkStep("copy vkEndCommandBuffer", p_vkEndCommandBuffer(cmd), NULL)) goto out_objects;
+  if (!vkStep("copy vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence), NULL)) goto out_objects;
+  if (!vkStep("copy vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence), NULL)) goto out_objects;
+  // Each operation has its own 10 s bound; no arbitrary delay between stages.
+  if (!vkStep("copy vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull), NULL)) goto out_objects;
+  probe_line("vk initial transfer copy end PASS (fence completed)");
+  transferStage = NULL;
 
   if (!coherent) {
     const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = bufferMemory, .offset = 0,
@@ -572,6 +592,7 @@ int probe_vulkan(const char *library)
   if (clearOK && triangleOK && linearOK != 0) result = 0;
 
 out_objects:
+  if (transferStage) probe_line("vk initial transfer %s end FAIL", transferStage);
   if (device) p_vkDeviceWaitIdle(device);
   if (fence) p_vkDestroyFence(device, fence, NULL);
   if (pool) p_vkDestroyCommandPool(device, pool, NULL);
