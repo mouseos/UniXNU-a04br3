@@ -362,7 +362,7 @@ index f1cc515..bb5ab41 100644
        /* For integer depth formats we'll convert the specified floating point
         * depth bias values and specify them as integers. In this mode a depth
 diff --git a/src/imagination/vulkan/pvr_arch_job_transfer.c b/src/imagination/vulkan/pvr_arch_job_transfer.c
-index df05efe..2c016dc 100644
+index df05efe..9731ddb 100644
 --- a/src/imagination/vulkan/pvr_arch_job_transfer.c
 +++ b/src/imagination/vulkan/pvr_arch_job_transfer.c
 @@ -26,6 +26,9 @@
@@ -375,7 +375,136 @@ index df05efe..2c016dc 100644
  #include <vulkan/vulkan.h>
  
  #include "pvr_cmd_buffer.h"
-@@ -5596,6 +5599,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
+@@ -52,6 +55,23 @@
+ #include "vk_format.h"
+ #include "vk_log.h"
+ #include "vk_sync.h"
++#include "pvr_darwin_sipf1.h"
++
++static bool pvr_darwin_tq_sipf1(const struct pvr_device_info *dev_info)
++{
++#ifdef PVR_WINSYS_DARWIN
++   const char *flag = getenv("PVR_DARWIN_TQ_CLIP");
++   return dev_info->ident.b == 22 && dev_info->ident.v == 40 &&
++          dev_info->ident.n == 54 && dev_info->ident.c == 30 &&
++          PVR_HAS_FEATURE(dev_info, tile_size_16x16) &&
++          PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format) &&
++          PVR_GET_FEATURE_VALUE(dev_info, simple_parameter_format_version, 0) == 1 &&
++          flag && strcmp(flag, "1") == 0;
++#else
++   (void)dev_info;
++   return false;
++#endif
++}
+ 
+ #define PVR_TRANSFER_MAX_PASSES 10U
+ #define PVR_TRANSFER_MAX_CLIP_RECTS 4U
+@@ -3432,6 +3452,17 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
+    const bool has_simple_internal_parameter_format_v2 =
+       PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format_v2);
+    uint32_t *cs_ptr = *cs_ptr_out;
++   const bool sipf1 = pvr_darwin_tq_sipf1(dev_info);
++
++   if (sipf1) {
++      uint32_t header = 0;
++      bool valid = pvr_sipf1_vertex_header(num_isp_vertices,
++                                          tsp_data_size_in_bytes / num_isp_vertices,
++                                          &header);
++      assert(valid);
++      (void)valid;
++      *cs_ptr++ = header;
++   }
+ 
+    if (has_simple_internal_parameter_format_v2) {
+       const uint32_t tsp_data_per_vrx_in_bytes =
+@@ -3469,6 +3500,14 @@ static void pvr_isp_prim_block_isp_state(const struct pvr_device_info *dev_info,
+    }
+    cs_ptr += pvr_cmd_length(TA_STATE_ISPA);
+ 
++   if (sipf1) {
++      /* Exactly four dwords, matching primitive_block_size(): v1 header,
++       * ISPCTL, ISPA, alignment. The legacy compression path writes five.
++       */
++      *cs_ptr++ = 0;
++      *cs_ptr_out = cs_ptr;
++      return;
++   }
+    if (has_simple_internal_parameter_format_v2) {
+       *cs_ptr_out = cs_ptr;
+       return;
+@@ -4047,7 +4086,9 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+                                     struct pvr_transfer_cmd *transfer_cmd,
+                                     struct pvr_transfer_prep_data *prep_data)
+ {
+-   const uint32_t max_mappings_per_pb = pvr_transfer_max_quads_per_pb(dev_info);
++   const bool sipf1 = pvr_darwin_tq_sipf1(dev_info);
++   /* Limit the new v1 path to the vendor-observed one-quad records. */
++   const uint32_t max_mappings_per_pb = sipf1 ? 1U : pvr_transfer_max_quads_per_pb(dev_info);
+    bool fill_blit = (transfer_cmd->flags & PVR_TRANSFER_CMD_FLAGS_FILL) != 0U;
+    uint32_t free_ctrl_stream_words = ROGUE_IPF_CONTROL_STREAM_SIZE_DWORDS;
+    struct pvr_transfer_3d_state *const state = &prep_data->state;
+@@ -4124,6 +4165,9 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+       }
+    }
+ 
++   if (sipf1 && !num_prim_blks)
++      return vk_error(ctx->device, VK_ERROR_FORMAT_NOT_SUPPORTED);
++
+    num_region_arrays =
+       (num_prim_blks + (pvr_transfer_prim_blocks_per_alloc(dev_info) - 1U)) /
+       pvr_transfer_prim_blocks_per_alloc(dev_info);
+@@ -4358,8 +4402,8 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+ 
+          while (rem_mappings > 0U) {
+             const uint32_t min_free_ctrl_stream_words =
+-               PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format) ? 2
+-                                                                           : 3;
++               sipf1 ? 4 :
++               (PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format) ? 2 : 3);
+             const uint32_t num_mappings =
+                MIN2(max_mappings_per_pb, rem_mappings);
+             struct pvr_rect_mapping *mappings = NULL;
+@@ -4391,6 +4435,11 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+                      link_addr,
+                      PVR_DW_TO_BYTES(
+                         pvr_cmd_length(IPF_CONTROL_STREAM_LINK_SIPF2)));
++               } else if (sipf1) {
++                  uint64_t link;
++                  if (!pvr_sipf1_link(next_region_array_vaddr.addr, &link))
++                     return vk_error(ctx->device, VK_ERROR_FORMAT_NOT_SUPPORTED);
++                  memcpy(cs_ptr, &link, sizeof(link));
+                } else {
+                   pvr_csb_pack (cs_ptr, IPF_CONTROL_STREAM, control_stream) {
+                      control_stream.cs_type = ROGUE_IPF_CS_TYPE_LINK;
+@@ -4494,6 +4543,13 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+ 
+                cs_ptr = (uint32_t *)cs_byte_ptr;
+ 
++               free_ctrl_stream_words -= 2;
++            } else if (sipf1) {
++               uint64_t word;
++               if (!pvr_sipf1_primitive(prim_blk_addr.addr, num_mappings, fill_blit, &word))
++                  return vk_error(ctx->device, VK_ERROR_FORMAT_NOT_SUPPORTED);
++               memcpy(cs_ptr, &word, sizeof(word));
++               cs_ptr += 2;
+                free_ctrl_stream_words -= 2;
+             } else {
+                pvr_csb_pack (cs_ptr, IPF_PRIMITIVE_FORMAT, word) {
+@@ -4536,7 +4592,12 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+    if (PVR_HAS_FEATURE(dev_info, ipf_creq_pf))
+       assert((num_region_arrays > 1) == was_linked);
+ 
+-   if (PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format_v2)) {
++   if (sipf1) {
++      uint64_t last;
++      memcpy(&last, cs_ptr - 2, sizeof(last));
++      last |= UINT64_C(2); /* v1 terminates on the final primitive record. */
++      memcpy(cs_ptr - 2, &last, sizeof(last));
++   } else if (PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format_v2)) {
+       uint8_t *cs_byte_ptr = (uint8_t *)cs_ptr;
+       uint32_t tmp;
+ 
+@@ -5596,6 +5657,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
     return vk_error(ctx->device, VK_ERROR_FORMAT_NOT_SUPPORTED);
  }
  
@@ -400,7 +529,7 @@ index df05efe..2c016dc 100644
  static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
                                   struct pvr_transfer_cmd *transfer_cmd,
                                   struct pvr_transfer_prep_data *prep_data,
-@@ -5736,6 +5757,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
+@@ -5736,6 +5815,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
        }
     }
  
@@ -440,6 +569,55 @@ index 2315235..f43124d 100644
  struct pvr_buffer {
     struct vk_buffer vk;
  
+diff --git a/src/imagination/vulkan/pvr_darwin_sipf1.h b/src/imagination/vulkan/pvr_darwin_sipf1.h
+new file mode 100644
+index 0000000..b01b205
+--- /dev/null
++++ b/src/imagination/vulkan/pvr_darwin_sipf1.h
+@@ -0,0 +1,43 @@
++/* SPDX-License-Identifier: MIT
++ * MT8167 22.40.54.30 SIPF v1 transfer records. Derived from observed vendor
++ * libsrv_um.so d32a4a224d06302d9bec0a66cbb7d17dec663d3985f1c8592f5bb77353ca1d4b:
++ * primitive builder 0x12dc50, clip emitter 0x12934c. Not SIPF v2/legacy.
++ * Callers must opt in for this exact core. Pure checked encoders only.
++ */
++#ifndef PVR_DARWIN_SIPF1_H
++#define PVR_DARWIN_SIPF1_H
++#include <stdbool.h>
++#include <stdint.h>
++static inline bool pvr_sipf1_vertex_header(unsigned vertices, unsigned varying_bytes,
++                                           uint32_t *out)
++{
++   if (!out || vertices < 4 || vertices > 16 || vertices % 4 || varying_bytes > 511)
++      return false;
++   *out = ((vertices - 1U) << 5) | (varying_bytes << 10);
++   return true;
++}
++static inline bool pvr_sipf1_address_valid(uint64_t addr)
++{
++   return !(addr & 7U) && addr < (UINT64_C(1) << 34);
++}
++static inline bool pvr_sipf1_primitive(uint64_t addr, unsigned quads, bool fill,
++                                       uint64_t *out)
++{
++   if (!out || !pvr_sipf1_address_valid(addr) || !quads || quads > 4 || (fill && quads != 1))
++      return false;
++   /* Complete two-triangle-per-quad mask. Vendor's normal clip batches and
++    * dedicated one-quad fill use distinct low headers; preserve both records.
++    */
++   uint64_t mask = ((UINT64_C(1) << (2U * quads)) - 1U) << 8;
++   uint32_t group = ((((quads * 16U + 24U) & 0xe0U) + 0xe0U) & 0xe0U);
++   uint64_t header = fill ? UINT64_C(0x100000028) : UINT64_C(0x100000008) | group;
++   *out = ((addr >> 3) << 33) | mask | header;
++   return true;
++}
++static inline bool pvr_sipf1_link(uint64_t addr, uint64_t *out)
++{
++   if (!out || !pvr_sipf1_address_valid(addr)) return false;
++   *out = ((addr >> 3) << 33) | UINT64_C(1);
++   return true;
++}
++#endif
 diff --git a/src/imagination/vulkan/pvr_device.c b/src/imagination/vulkan/pvr_device.c
 index 7ba4fb8..ecf4d86 100644
 --- a/src/imagination/vulkan/pvr_device.c
