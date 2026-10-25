@@ -188,11 +188,16 @@ using IOReturn=int;using IOByteCount=uint64_t;
 constexpr int kIOReturnSuccess=0,kIODirectionInOut=3,kIOMemoryMapperNone=0;
 constexpr uint64_t kDevicePageSize=4096,kDevicePageMask=~4095ULL;
 int prepared=0,released=0;int prepareStatus=2;
-struct IOMemoryDescriptor {int prepare(){++prepared;return prepareStatus;}void release(){++released;}
+struct IOMemoryDescriptor;
+struct IOMemoryMap {IOMemoryDescriptor *getMemoryDescriptor(){return nullptr;}
+ uint64_t getPhysicalSegment(uint64_t,IOByteCount *,int){assert(false);return 0;}};
+IOMemoryMap *scanoutHostRange(void *,uint64_t,uint64_t){return nullptr;}
+constexpr uint64_t DRM_PVR_BO_BYPASS_DEVICE_CACHE=1;
+struct IOMemoryDescriptor {void retain(){}int prepare(){++prepared;return prepareStatus;}void release(){++released;}
  uint64_t getLength(){return 4096;}uint64_t getPhysicalSegment(uint64_t,IOByteCount *n,int){*n=4096;return 0x100000;}} md;
 struct native_powervr_sg {uint64_t phys,size;};
 struct native_powervr_bo {uint32_t refs;uint64_t size,flags;IOMemoryDescriptor *host;bool hostPrepared;
- uint32_t sgCapacity,nents;native_powervr_sg *sg;};
+ uint32_t sgCapacity,nents;native_powervr_sg *sg;IOMemoryMap *hostMap;};
 void *kzallocBytes(size_t n){return calloc(1,n);}
 IOMemoryDescriptor *hostRange(void *,uint64_t,uint64_t,int direction){assert(direction==kIODirectionInOut);return &md;}
 void boDestroy(native_powervr_bo *b){if(b->host)b->host->release();free(b->sg);free(b);}

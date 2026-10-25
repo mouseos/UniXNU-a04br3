@@ -542,11 +542,13 @@ struct native_powervr_bo {
   // has no md, no kernel view (cpu is null, so the job layer refuses it as a firmware object) and no user view.
   IOMemoryDescriptor *host;
   bool hostPrepared;
+  IOMemoryMap *hostMap;            // existing, uncached firmware scanout mapping; never wired as normal RAM
 };
 
 namespace {
 void boDestroy(native_powervr_bo *bo)
 {
+  if (bo->hostMap) bo->hostMap->release();
   if (bo->view) bo->view->release();   // the pages live on while user mappings of the view do
   if (bo->md) bo->md->release();
   if (bo->host) {
@@ -615,6 +617,37 @@ IOMemoryDescriptor *hostRange(task_t task, uint64_t address, uint64_t size, IODi
 }
 // A BO over [address, address + size) of task, pinned for writing. Read-only imports are refused: the current GPU mapping
 // path has no per-BO write protection. Jobs snapshot these BOs and maintain their caches before submission and completion.
+// Only reference an existing writable, uncached mapping of the descriptor
+// supplied by NativeGOPPresenter. kIOMapReference cannot create a new mapping
+// (XNU IOMemoryDescriptor::makeMapping); copyCompatible checks task/cache/access.
+// The reserved firmware framebuffer is outside gPhysBase/gPhysSize and must
+// never be wired by a generic user-memory descriptor's prepare()/phystokv.
+IOMemoryMap *scanoutHostRange(task_t task, uint64_t address, uint64_t size)
+{
+  IOMemoryDescriptor *memory = native_gop_handoff_memory ? native_gop_handoff_memory() : nullptr;
+  if (!memory) return nullptr;
+  const IOOptionBits options = kIOMapReference | kIOMapInhibitCache;
+  IOMemoryMap *map = memory->createMappingInTask(task, address, options, 0, size);
+  if (!map) {
+    // Also allow a subrange of the usual whole-frame mapping without widening
+    // the caller's allocation or creating a new CPU mapping.
+    IOMemoryMap *whole = memory->createMappingInTask(task, 0, options | kIOMapAnywhere);
+    if (whole) {
+      const uint64_t base = whole->getVirtualAddress(), length = whole->getLength();
+      if (address >= base && address - base <= length && size <= length - (address - base))
+        map = memory->createMappingInTask(task, base, options, address - base, size);
+      whole->release();
+    }
+  }
+  memory->release();
+  if (map && (map->getVirtualAddress() != address || map->getLength() != size ||
+              (map->getMapOptions() & kIOMapReadOnly))) {
+    map->release();
+    map = nullptr;
+  }
+  return map;
+}
+
 int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, native_powervr_bo **out)
 {
   auto *bo = static_cast<native_powervr_bo *>(kzallocBytes(sizeof(native_powervr_bo)));
@@ -622,19 +655,30 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
   bo->refs = 1;
   bo->size = size;
   bo->flags = flags;
-  bo->host = hostRange(task, address, size, kIODirectionInOut);
-  if (!bo->host) { boDestroy(bo); return -ENOMEM; }
-  IOReturn status = bo->host->prepare();
-  if (status != kIOReturnSuccess) { boDestroy(bo); return -EFAULT; }
-  bo->hostPrepared = true;
-  if (bo->host->getLength() != size) { boDestroy(bo); return -EINVAL; }
+  bo->hostMap = scanoutHostRange(task, address, size);
+  if (bo->hostMap) {
+    bo->host = bo->hostMap->getMemoryDescriptor();
+    if (!bo->host) { boDestroy(bo); return -EFAULT; }
+    bo->host->retain();
+    // The display engine reads these permanent device pages outside the GPU
+    // cache domain; do not cache the scanout in the GPU either.
+    bo->flags |= DRM_PVR_BO_BYPASS_DEVICE_CACHE;
+  } else {
+    bo->host = hostRange(task, address, size, kIODirectionInOut);
+    if (!bo->host) { boDestroy(bo); return -ENOMEM; }
+    IOReturn status = bo->host->prepare();
+    if (status != kIOReturnSuccess) { boDestroy(bo); return -EFAULT; }
+    bo->hostPrepared = true;
+    if (bo->host->getLength() != size) { boDestroy(bo); return -EINVAL; }
+  }
   const uint64_t pages = size / kDevicePageSize;
   bo->sgCapacity = pages > 0xffffffffULL ? 0 : static_cast<uint32_t>(pages);
   bo->sg = static_cast<native_powervr_sg *>(kzallocBytes(sizeof(native_powervr_sg) * bo->sgCapacity));
   if (!bo->sg) { boDestroy(bo); return -ENOMEM; }
   for (uint64_t offset = 0; offset < size;) {
     IOByteCount length = 0;
-    const uint64_t phys = bo->host->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
+    const uint64_t phys = bo->hostMap ? bo->hostMap->getPhysicalSegment(offset, &length, kIOMemoryMapperNone)
+                                      : bo->host->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
     if (!phys || !length || (phys & (kDevicePageSize - 1))) { boDestroy(bo); return -EFAULT; }
     if (length > size - offset) length = size - offset;
     length &= kDevicePageMask;
