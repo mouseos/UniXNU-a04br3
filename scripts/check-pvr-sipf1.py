@@ -51,6 +51,7 @@ with tempfile.TemporaryDirectory(prefix='pvr-sipf1-') as tmp:
     src = (img / 'vulkan/pvr_arch_job_transfer.c').read_text()
     csb = (img / 'vulkan/pvr_csb.h').read_text()
     functions = '\n'.join(definition(src, s) for s in (
+        'static inline bool pvr_darwin_sipf1_touch_only(',
         'static bool pvr_darwin_sipf1_dump_begin(',
         'static void pvr_darwin_sipf1_dump_bytes(',
         'static bool pvr_darwin_tq_sipf1(',

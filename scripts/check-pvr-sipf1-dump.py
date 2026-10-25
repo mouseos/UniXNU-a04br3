@@ -25,7 +25,7 @@ static inline void pvr_darwin_sipf1_log(const char *text) {(void)text;}
 #include <unistd.h>
 #include <pthread.h>
 #define UNUSED __attribute__((unused))
-'''+function('static bool pvr_darwin_sipf1_dump_begin(')+'\n'+function('static void pvr_darwin_sipf1_dump_bytes(')+'\n'+function('static void pvr_darwin_sipf1_dump_primitive(')+r'''
+'''+function('static inline bool pvr_darwin_sipf1_touch_only(')+'\n'+function('static bool pvr_darwin_sipf1_dump_begin(')+'\n'+function('static void pvr_darwin_sipf1_dump_bytes(')+'\n'+function('static void pvr_darwin_sipf1_dump_primitive(')+r'''
 static unsigned accepted;
 static void *worker(void *unused){(void)unused;if(pvr_darwin_sipf1_dump_begin(true))__atomic_fetch_add(&accepted,1,__ATOMIC_RELAXED);return NULL;}
 int main(void){

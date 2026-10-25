@@ -14,6 +14,7 @@ def function(sig):
  return s[a:e]
 pre=r'''#define _GNU_SOURCE
 #include <stdint.h>
+#include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <assert.h>
@@ -38,7 +39,7 @@ pvr_darwin_sipf1_dump_range(true,end-128,0x30000,128,0,256,"cap");
 assert(!munmap(p,page*2));}
 '''
 with tempfile.TemporaryDirectory(prefix='pvr-dma-dump-') as t:
- p=Path(t);(p/'t.c').write_text(pre+function('static void pvr_darwin_sipf1_dump_bytes(')+function('static void pvr_darwin_sipf1_dump_range(')+main)
+ p=Path(t);(p/'t.c').write_text(pre+function('static inline bool pvr_darwin_sipf1_touch_only(')+function('static void pvr_darwin_sipf1_dump_bytes(')+function('static void pvr_darwin_sipf1_dump_range(')+main)
  for darwin in (False,True):
   subprocess.run([os.environ.get('CC','cc'),'-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-function','-fsanitize=address,undefined','-fno-pie','-no-pie',*(['-DPVR_WINSYS_DARWIN'] if darwin else []),str(p/'t.c'),'-o',str(p/'t')],check=True)
   r=subprocess.run([str(p/'t')],check=True,capture_output=True,text=True)
