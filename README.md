@@ -214,6 +214,8 @@ The stock state observed on this board is MMPLL CON0 `0x11`, CON1 `0x020e9d8a`, 
 (configured 1.1875 V). The Linux MT8167 PLL formula yields 380,000,062 Hz. This is a configured clock/rail state,
 not a measurement of analog voltage or performance. `a04br3-gpu-clock-diagnostic=1` logs the startup raw values.
 The opt-in path is under hardware validation. No change is made for other boards or normal boot arguments.
+Run `python3 scripts/check-a04br3-gpu-clock.py` in a normal clone to exercise the actual helpers and initializer
+with ASan/UBSan (151 host fixtures, no device or proprietary dump required).
 
 ## GPU compositing (PowerVR Metal plugin)
 
