@@ -89,10 +89,14 @@ static void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from,
 // Eight rows of eight 8x8 cells; all 64 pixels of each cell are accounted for.
 // Keep the diagnostic independent of the strict readback verdict below.
 static void triangleCoverageGrid(const volatile uint8_t *pixels, const uint8_t foreground[4],
-                                 const uint8_t background[4])
+                                 const uint8_t background[4], int clearOnly)
 {
-  probe_line("vk triangle grid: columns x=0,8,...,56; cells C/T/B/O counts (sum 64): "
-             "C=old clear T=expected triangle B=expected background O=other; diagonal accepts T or B");
+  const char *kind = clearOnly ? "linear-clear-direct" : "triangle";
+  if (clearOnly)
+    probe_line("vk %s grid: columns x=0,8,...,56; cells C/B/O counts (sum 64): C=old clear B=expected background O=other", kind);
+  else
+    probe_line("vk triangle grid: columns x=0,8,...,56; cells C/T/B/O counts (sum 64): "
+               "C=old clear T=expected triangle B=expected background O=other; diagonal accepts T or B");
   for (uint32_t cy = 0; cy < kHeight; cy += 8) {
     char row[128];
     size_t used = 0;
@@ -107,31 +111,35 @@ static void triangleCoverageGrid(const volatile uint8_t *pixels, const uint8_t f
             tri &= pixels[4 * i + c] == foreground[c];
             bg &= pixels[4 * i + c] == background[c];
           }
-          const int inside = x >= 8 && y >= 8 && x + y < 63;
-          const int edge = x >= 8 && y >= 8 && x + y == 63;
+          const int inside = !clearOnly && x >= 8 && y >= 8 && x + y < 63;
+          const int edge = !clearOnly && x >= 8 && y >= 8 && x + y == 63;
           const unsigned category = old ? 0 : tri && (inside || edge) ? 1 : bg && (!inside || edge) ? 2 : 3;
           counts[category]++;
         }
       }
-      const int n = snprintf(row + used, sizeof(row) - used, "%s%02u/%02u/%02u/%02u",
-                              cx ? " " : "", counts[0], counts[1], counts[2], counts[3]);
+      const int n = clearOnly ? snprintf(row + used, sizeof(row) - used, "%s%02u/%02u/%02u",
+                                          cx ? " " : "", counts[0], counts[2], counts[3]) :
+                               snprintf(row + used, sizeof(row) - used, "%s%02u/%02u/%02u/%02u",
+                                          cx ? " " : "", counts[0], counts[1], counts[2], counts[3]);
       if (n < 0 || (size_t)n >= sizeof(row) - used) return;
       used += (size_t)n;
     }
-    probe_line("vk triangle grid y=%02u..%02u: %s", cy, cy + 7, row);
+    probe_line("vk %s grid y=%02u..%02u: %s", kind, cy, cy + 7, row);
   }
 }
 
 // Vertex + fragment execution, separate from transfer-only clear/copy.
 // Geometry has no vertex buffers or descriptors; direct readback does not use TQ.
-struct TriangleDirectReadback { VkDeviceSize offset, rowPitch; };
+struct TriangleDirectReadback { VkDeviceSize offset, rowPitch; int clearOnly; };
 
 static int triangleProbeReadback(VkDevice device, VkQueue queue, VkCommandPool pool, VkImage image, VkBuffer buffer,
                                  VkDeviceMemory bufferMemory, void *mapped, int coherent,
                                  const struct TriangleDirectReadback *direct)
 {
-  const char *mode = direct ? "linear-direct" : "optimal-copy";
-  probe_line("vk triangle mode %s begin", mode);
+  const int clearOnly = direct && direct->clearOnly;
+  const char *mode = clearOnly ? "linear-clear-direct" : direct ? "linear-direct" : "optimal-copy";
+  const char *kind = clearOnly ? "clear" : "triangle";
+  probe_line("vk %s mode %s begin", kind, mode);
   VkImageView view = VK_NULL_HANDLE;
   VkRenderPass renderPass = VK_NULL_HANDLE;
   VkFramebuffer framebuffer = VK_NULL_HANDLE;
@@ -142,7 +150,10 @@ static int triangleProbeReadback(VkDevice device, VkQueue queue, VkCommandPool p
   int ok = 0;
   char detail[256];
   const uint8_t backgroundColor[4] = {0x22, 0x44, 0x66, 0xff};
-#define TRI_STEP(name, expression) do { if (!vkStep("triangle " name, (expression), NULL)) goto cleanup; } while (0)
+#define TRI_STEP(name, expression) do { \
+  snprintf(detail, sizeof detail, "%s %s", mode, name); \
+  if (!vkStep(detail, (expression), NULL)) goto cleanup; \
+} while (0)
   const VkImageViewCreateInfo viewInfo = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = image, .viewType = VK_IMAGE_VIEW_TYPE_2D,
       .format = VK_FORMAT_R8G8B8A8_UNORM, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
@@ -161,40 +172,42 @@ static int triangleProbeReadback(VkDevice device, VkQueue queue, VkCommandPool p
   const VkFramebufferCreateInfo framebufferInfo = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
       .renderPass = renderPass, .attachmentCount = 1, .pAttachments = &view, .width = kWidth, .height = kHeight, .layers = 1};
   TRI_STEP("vkCreateFramebuffer", p_vkCreateFramebuffer(device, &framebufferInfo, NULL, &framebuffer));
-  VkShaderModuleCreateInfo shaderInfo = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-      .codeSize = sizeof kTriangleVertSpv, .pCode = kTriangleVertSpv};
-  TRI_STEP("vertex module", p_vkCreateShaderModule(device, &shaderInfo, NULL, &vertex));
-  shaderInfo.codeSize = sizeof kTriangleFragSpv;
-  shaderInfo.pCode = kTriangleFragSpv;
-  TRI_STEP("fragment module", p_vkCreateShaderModule(device, &shaderInfo, NULL, &fragment));
-  const VkPipelineLayoutCreateInfo layoutInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-  TRI_STEP("vkCreatePipelineLayout", p_vkCreatePipelineLayout(device, &layoutInfo, NULL, &layout));
-  const VkPipelineShaderStageCreateInfo stages[] = {
-      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,
-       .module = vertex, .pName = "main"},
-      {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-       .module = fragment, .pName = "main"}};
-  const VkPipelineVertexInputStateCreateInfo input = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-  const VkPipelineInputAssemblyStateCreateInfo assembly = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-      .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
-  const VkViewport viewport = {0, 0, kWidth, kHeight, 0, 1};
-  const VkRect2D scissor = {{0, 0}, {kWidth, kHeight}};
-  const VkPipelineViewportStateCreateInfo viewportState = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-      .viewportCount = 1, .pViewports = &viewport, .scissorCount = 1, .pScissors = &scissor};
-  const VkPipelineRasterizationStateCreateInfo raster = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-      .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE, .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-      .lineWidth = 1.0f};
-  const VkPipelineMultisampleStateCreateInfo samples = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-      .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
-  const VkPipelineColorBlendAttachmentState blendAttachment = {
-      .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT};
-  const VkPipelineColorBlendStateCreateInfo blend = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-      .attachmentCount = 1, .pAttachments = &blendAttachment};
-  const VkGraphicsPipelineCreateInfo pipelineInfo = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-      .stageCount = 2, .pStages = stages, .pVertexInputState = &input, .pInputAssemblyState = &assembly,
-      .pViewportState = &viewportState, .pRasterizationState = &raster, .pMultisampleState = &samples,
-      .pColorBlendState = &blend, .layout = layout, .renderPass = renderPass, .subpass = 0};
-  TRI_STEP("vkCreateGraphicsPipelines", p_vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, NULL, &pipeline));
+  if (!clearOnly) {
+    VkShaderModuleCreateInfo shaderInfo = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = sizeof kTriangleVertSpv, .pCode = kTriangleVertSpv};
+    TRI_STEP("vertex module", p_vkCreateShaderModule(device, &shaderInfo, NULL, &vertex));
+    shaderInfo.codeSize = sizeof kTriangleFragSpv;
+    shaderInfo.pCode = kTriangleFragSpv;
+    TRI_STEP("fragment module", p_vkCreateShaderModule(device, &shaderInfo, NULL, &fragment));
+    const VkPipelineLayoutCreateInfo layoutInfo = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    TRI_STEP("vkCreatePipelineLayout", p_vkCreatePipelineLayout(device, &layoutInfo, NULL, &layout));
+    const VkPipelineShaderStageCreateInfo stages[] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,
+         .module = vertex, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+         .module = fragment, .pName = "main"}};
+    const VkPipelineVertexInputStateCreateInfo input = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    const VkPipelineInputAssemblyStateCreateInfo assembly = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+    const VkViewport viewport = {0, 0, kWidth, kHeight, 0, 1};
+    const VkRect2D scissor = {{0, 0}, {kWidth, kHeight}};
+    const VkPipelineViewportStateCreateInfo viewportState = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1, .pViewports = &viewport, .scissorCount = 1, .pScissors = &scissor};
+    const VkPipelineRasterizationStateCreateInfo raster = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE, .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .lineWidth = 1.0f};
+    const VkPipelineMultisampleStateCreateInfo samples = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+    const VkPipelineColorBlendAttachmentState blendAttachment = {
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT};
+    const VkPipelineColorBlendStateCreateInfo blend = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = 1, .pAttachments = &blendAttachment};
+    const VkGraphicsPipelineCreateInfo pipelineInfo = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2, .pStages = stages, .pVertexInputState = &input, .pInputAssemblyState = &assembly,
+        .pViewportState = &viewportState, .pRasterizationState = &raster, .pMultisampleState = &samples,
+        .pColorBlendState = &blend, .layout = layout, .renderPass = renderPass, .subpass = 0};
+    TRI_STEP("vkCreateGraphicsPipelines", p_vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, NULL, &pipeline));
+  }
   VkCommandBuffer cmd = VK_NULL_HANDLE;
   const VkCommandBufferAllocateInfo cmdInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
       .commandPool = pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
@@ -224,8 +237,10 @@ static int triangleProbeReadback(VkDevice device, VkQueue queue, VkCommandPool p
       .renderPass = renderPass, .framebuffer = framebuffer, .renderArea = {{0, 0}, {kWidth, kHeight}},
       .clearValueCount = 1, .pClearValues = &background};
   p_vkCmdBeginRenderPass(cmd, &renderBegin, VK_SUBPASS_CONTENTS_INLINE);
-  p_vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-  p_vkCmdDraw(cmd, 3, 1, 0, 0);
+  if (!clearOnly) {
+    p_vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    p_vkCmdDraw(cmd, 3, 1, 0, 0);
+  }
   p_vkCmdEndRenderPass(cmd);
   if (direct) {
     imageBarrier(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
@@ -264,7 +279,18 @@ static int triangleProbeReadback(VkDevice device, VkQueue queue, VkCommandPool p
   }
   const volatile uint8_t *pixels = direct ? packed : mapped;
   const uint8_t foreground[4] = {255, 0, 255, 255};
-  triangleCoverageGrid(pixels, foreground, backgroundColor);
+  triangleCoverageGrid(pixels, foreground, backgroundColor, clearOnly);
+  if (clearOnly) {
+    uint32_t matched = 0;
+    for (uint32_t i = 0; i < kWidth * kHeight; i++) {
+      int same = 1;
+      for (uint32_t c = 0; c < 4; c++) same &= pixels[4 * i + c] == backgroundColor[c];
+      matched += same;
+    }
+    snprintf(detail, sizeof detail, "%u/%u pixels = 224466ff; no Draw and no edge exclusions", matched, kWidth * kHeight);
+    ok = vkCheck("linear-clear-direct readback", matched == kWidth * kHeight, detail);
+    goto cleanup;
+  }
   uint32_t checked[2] = {0, 0}, matched[2] = {0, 0}, first = UINT32_MAX;
   // Pixel centers: (x+.5,y+.5). Only the diagonal x+y=63 lies exactly
   // on an edge; skip its 48 pixels to avoid dependence on edge tie-breaking.
@@ -305,7 +331,7 @@ cleanup:
   if (renderPass) p_vkDestroyRenderPass(device, renderPass, NULL);
   if (view) p_vkDestroyImageView(device, view, NULL);
 #undef TRI_STEP
-  probe_line("vk triangle mode %s end %s", mode, ok ? "PASS" : "FAIL");
+  probe_line("vk %s mode %s end %s", kind, mode, ok ? "PASS" : "FAIL");
   return ok;
 }
 
@@ -317,10 +343,11 @@ static int triangleProbe(VkDevice device, VkQueue queue, VkCommandPool pool, VkI
 
 // Optional isolation of rendering from TQ readback: no GPU clear or image-to-buffer copy on this image.
 static int linearTriangleProbe(VkDevice device, VkQueue queue, VkCommandPool pool,
-                               const VkPhysicalDeviceMemoryProperties *memory, VkFormatFeatureFlags features)
+                               const VkPhysicalDeviceMemoryProperties *memory, VkFormatFeatureFlags features, int clearOnly)
 {
+  const char *mode = clearOnly ? "linear-clear-direct" : "linear-direct";
   if (!(features & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) {
-    probe_line("vk triangle mode linear-direct SKIP: linear COLOR_ATTACHMENT unsupported (features 0x%x)", features);
+    probe_line("vk mode %s SKIP: linear COLOR_ATTACHMENT unsupported (features 0x%x)", mode, features);
     return -1;
   }
   VkImage image = VK_NULL_HANDLE;
@@ -338,7 +365,7 @@ static int linearTriangleProbe(VkDevice device, VkQueue queue, VkCommandPool poo
   const int coherent = type != UINT32_MAX;
   if (!coherent) type = memoryType(memory, need.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
   if (type == UINT32_MAX) {
-    probe_line("vk triangle mode linear-direct SKIP: no HOST_VISIBLE image memory");
+    probe_line("vk mode %s SKIP: no HOST_VISIBLE image memory", mode);
     ok = -1;
     goto cleanup;
   }
@@ -349,8 +376,8 @@ static int linearTriangleProbe(VkDevice device, VkQueue queue, VkCommandPool poo
   const VkImageSubresource subresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0};
   VkSubresourceLayout layout;
   p_vkGetImageSubresourceLayout(device, image, &subresource, &layout);
-  probe_line("vk linear layout: allocation %llu offset %llu size %llu rowPitch %llu type %u coherent %d",
-             (unsigned long long)need.size, (unsigned long long)layout.offset, (unsigned long long)layout.size,
+  probe_line("vk %s layout: allocation %llu offset %llu size %llu rowPitch %llu type %u coherent %d",
+             mode, (unsigned long long)need.size, (unsigned long long)layout.offset, (unsigned long long)layout.size,
              (unsigned long long)layout.rowPitch, type, coherent);
   // Bound every CPU access without overflow, including nonzero offsets and padded rows.
   const VkDeviceSize rowBytes = kWidth * 4;
@@ -365,10 +392,10 @@ static int linearTriangleProbe(VkDevice device, VkQueue queue, VkCommandPool poo
   const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
       .memory = allocation, .offset = 0, .size = VK_WHOLE_SIZE};
   if (!vkStep("linear vkFlushMappedMemoryRanges", p_vkFlushMappedMemoryRanges(device, 1, &whole), NULL)) goto cleanup;
-  const struct TriangleDirectReadback direct = {layout.offset, layout.rowPitch};
+  const struct TriangleDirectReadback direct = {layout.offset, layout.rowPitch, clearOnly};
   ok = triangleProbeReadback(device, queue, pool, image, VK_NULL_HANDLE, allocation, mapped, coherent, &direct);
 cleanup:
-  if (!ok) probe_line("vk triangle mode linear-direct setup/render FAIL");
+  if (!ok) probe_line("vk mode %s setup/render FAIL", mode);
   if (mapped) p_vkUnmapMemory(device, allocation);
   if (image) p_vkDestroyImage(device, image, NULL);
   if (allocation) p_vkFreeMemory(device, allocation, NULL);
@@ -516,7 +543,8 @@ int probe_vulkan(const char *library)
   // Run the TQ-independent comparison before any transfer submission: a transfer
   // context lockup must not prevent observation of the render path. All required
   // transfer and optimal-copy checks below still determine the final result.
-  const int linearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures);
+  const int linearClearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures, 1);
+  const int linearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures, 0);
   VkCommandBufferAllocateInfo cmdAlloc = cmdInfo;
   cmdAlloc.commandPool = pool;
   const VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -589,7 +617,7 @@ int probe_vulkan(const char *library)
              kClear[0], kClear[1], kClear[2], kClear[3]);
   const int clearOK = vkCheck("clear readback", match == kWidth * kHeight, detail);
   const int triangleOK = triangleProbe(device, queue, pool, image, buffer, bufferMemory, mapped, coherent);
-  if (clearOK && triangleOK && linearOK != 0) result = 0;
+  if (clearOK && triangleOK && linearOK != 0 && linearClearOK != 0) result = 0;
 
 out_objects:
   if (transferStage) probe_line("vk initial transfer %s end FAIL", transferStage);
