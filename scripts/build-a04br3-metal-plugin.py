@@ -3,7 +3,7 @@
 (drivers/NativeMetal/NativeVulkanMetalPlugin.mm, scripts/build-vulkan-metal-plugin.py) with this board's hooks
 (package/powervr/user/NativePowerVRMetalBoard.mm) and Mesa's PowerVR Vulkan driver (scripts/build-pvr-darwin.py --target ios).
 
-  build-a04br3-metal-plugin.py [--vulkan LIBRARY] [--out DIR] [--skip-bridge]
+  build-a04br3-metal-plugin.py [--vulkan LIBRARY] [--out DIR] [--skip-bridge] [--sipf1-dump]
 
 Runs in a UniXNU build tree (out/a04br3/tree: the tree's scripts/ holds both repositories' scripts, kits/a04br3 this package).
 The names match the accelerator of package/powervr/NativePowerVRMetal.cpp: MetalPluginName NativePowerVRMetal, MetalPluginClassName
@@ -38,6 +38,8 @@ def main():
     parser.add_argument('--vulkan', type=Path, help='Mesa PowerVR driver (default: build-pvr-darwin.py --target ios output)')
     parser.add_argument('--out', type=Path, default=ROOT / 'build/a04br3-metal-plugin')
     parser.add_argument('--skip-bridge', action='store_true')
+    parser.add_argument('--sipf1-dump', action='store_true',
+                        help='enable bounded CPU-owned SIPF1 command snapshots in this diagnostic bundle only')
     args = parser.parse_args()
     builder = ROOT / 'scripts/build-vulkan-metal-plugin.py'
     if not builder.is_file():
@@ -49,6 +51,15 @@ def main():
     command = ['python3', str(builder), '--name', NAME, '--principal-class', PRINCIPAL, '--vulkan-driver', str(library),
                '--driver-name', LIB_NAME, '--driver-identifier', LIB_IDENTIFIER, '--identifier', 'org.unixnu.a04br3.' + NAME,
                '--board-source', str(board), '--out', str(args.out.resolve()), '--portable-sha2']
+    if args.sipf1_dump:
+        args.out.mkdir(parents=True, exist_ok=True)
+        diagnostic = args.out.resolve() / 'sipf1-dump-enable.mm'
+        diagnostic.write_text(
+            '#include <stdlib.h>\n'
+            '__attribute__((constructor)) static void a04br3_sipf1_dump_enable(void) {\n'
+            '  setenv("PVR_DARWIN_SIPF1_DUMP", "1", 1);\n'
+            '}\n')
+        command += ['--board-source', str(diagnostic)]
     # MT8167's optional SHA2 instruction support is not assumed from Apple's target triple.
     if args.skip_bridge:
         command.append('--skip-bridge')

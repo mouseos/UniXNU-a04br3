@@ -51,6 +51,8 @@ with tempfile.TemporaryDirectory(prefix='pvr-sipf1-') as tmp:
     src = (img / 'vulkan/pvr_arch_job_transfer.c').read_text()
     csb = (img / 'vulkan/pvr_csb.h').read_text()
     functions = '\n'.join(definition(src, s) for s in (
+        'static bool pvr_darwin_sipf1_dump_begin(',
+        'static void pvr_darwin_sipf1_dump_bytes(',
         'static bool pvr_darwin_tq_sipf1(',
         'static void pvr_isp_prim_block_pds_state(',
         'static void pvr_isp_prim_block_isp_state(',
@@ -109,10 +111,12 @@ static void *pvr_bo_suballoc_get_map_addr(struct pvr_suballoc_bo *bo) {return bo
  * this fixture. The oracle independently walks every encoded region. */
 static int region_fixture(const struct pvr_device_info *dev_info,unsigned blocks,unsigned forced_regions) {
  const bool sipf1=true;
+ const bool dump=false; unsigned dump_links=0;
  const unsigned capacity=pvr_transfer_prim_blocks_per_alloc(dev_info);
  unsigned num_region_arrays=forced_regions?forced_regions:DIV_ROUND_UP(blocks,capacity);
  const unsigned reserved=num_region_arrays;
  const unsigned bytes=reserved*128;
+ const unsigned total_stream_size=bytes;
  uint32_t *buffer=malloc(bytes+128);assert(buffer);
  for(unsigned i=0;i<(bytes+128)/4;i++)buffer[i]=0xaabbccdd;
  struct pvr_suballoc_bo bo={buffer},*pvr_cs_bo=&bo;
@@ -215,6 +219,19 @@ int main(void) {
  d.ident.c++;assert(!pvr_darwin_tq_sipf1(&d));d.ident.c--;
  assert(setenv("PVR_DARWIN_TQ_CLIP","01",1)==0);assert(!pvr_darwin_tq_sipf1(&d));
  assert(setenv("PVR_DARWIN_TQ_CLIP","1",1)==0);
+ {
+  uint32_t words[8];for(unsigned i=0;i<8;i++)words[i]=0xbadface;
+  uint32_t *cur=words;
+  struct pvr_transfer_3d_state state={.pds_shader_task_offset=0x120,.uni_tex_code_offset=0x230,
+   .uniform_data_size=20,.tex_state_data_size=28,.coeff_data_size=36,.usc_coeff_regs=17,
+   .pds_temps=5,.pds_coeff_task_offset=0x340,.tex_state_data_offset=0x450,.common_ptr=17};
+  pvr_isp_prim_block_pds_state(&d,NULL,&state,&cur);
+  /* Independent vendor seven-DW field formulas (units/rounding included). */
+  const uint32_t expected[]={0x120,0x230,(5u<<23)|(7u<<16)|(9u<<10)|(2u<<4)|2u,0x340,0x450,0,(2u<<23)|0x4000};
+  for(unsigned i=0;i<7;i++)assert(words[i]==expected[i]);
+  assert(cur==words+8&&words[7]==0xbadface);
+  puts("actual PDS seven-DW nonzero vendor-formula vector passed; reserved DW untouched");
+ }
  unsigned capacity=pvr_transfer_prim_blocks_per_alloc(&d);
  assert(capacity==15); /* 15 records plus a link in a 128-byte region. */
  const unsigned blocks[]={1,8,9,15,16,29,30,31,60,120};
