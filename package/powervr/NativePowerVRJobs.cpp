@@ -325,7 +325,7 @@ void printPacket(const PacketRecord &r)
 
 // Completion-thread only. Each record is copied under the jobs lock, then printed
 // after unlocking. Nothing references a retired Job or context. IDs can be reused;
-// the first-four records are not asserted to match a later reset solely by job ID.
+// the bounded records are not asserted to match a later reset solely by job ID.
 void drainPackets()
 {
   if (!native_powervr_packet_enabled()) return;
