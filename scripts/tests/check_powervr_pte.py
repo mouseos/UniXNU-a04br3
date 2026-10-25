@@ -108,16 +108,17 @@ struct IOMemoryMap{
  void release(){assert(refs);--refs;}uint64_t getVirtualAddress(){return addr;}
  unsigned getMapOptions(){return options;}
 } user;
-struct View{
- bool present=true;
+bool gBoMapEnabled;
+struct IOMemoryDescriptor{
+ bool present=true;unsigned calls=0;
  IOMemoryMap *createMappingInTask(void*t,uint64_t a,unsigned opts,uint64_t off,uint64_t size){
   assert(t==current_task()&&!a&&opts==(kIOMapReference|kIOMapAnywhere)&&!off&&size==0x4000);
-  ++mappingCalls;if(!present)return nullptr;++user.refs;return &user;
+  ++calls;++mappingCalls;if(!present)return nullptr;++user.refs;return &user;
  }
-}view;
+}view,backing;
 struct native_powervr_sg{uint64_t phys,size;};
-struct native_powervr_bo{unsigned refs=1;uint64_t size=0x4000;void *md=(void*)1,*host=nullptr,*cpu=(void*)0xdead0000;
- View *view;native_powervr_sg *sg;unsigned nents=2;};
+struct native_powervr_bo{unsigned refs=1;uint64_t size=0x4000;IOMemoryDescriptor *md=&backing;void *host=nullptr,*cpu=(void*)0xdead0000;
+ IOMemoryDescriptor *view;native_powervr_sg *sg;unsigned nents=2;};
 struct native_powervr_bo_mapping{native_powervr_bo *bo;uint64_t va_addr,va_range,bo_offset;};
 struct Mapping{uint64_t addr,range,offset;native_powervr_bo *bo;};
 struct native_powervr_vm_context{unsigned refs=1;Lock *lock=&vmLock;unsigned count=3;Mapping maps[3];}vm;
@@ -181,6 +182,20 @@ int main(){
  assert(!missing.target[0].kernel.status);native_powervr_pte_put(s);assert(user.refs==1&&bo.refs==1&&!mapRefs);
  bo.host=(void*)1;s=native_powervr_pte_prepare(&vm,0x10100);unsigned before=walks;
  native_powervr_pte_capture(s,&missing);assert(walks==before&&missing.target[0].status==2);native_powervr_pte_put(s);
+ // Direct mode references only the owning descriptor, even with no view.
+ bo.host=nullptr;bo.view=nullptr;gBoMapEnabled=true;
+ unsigned viewCalls=view.calls,backingCalls=backing.calls;
+ s=native_powervr_pte_prepare(&vm,0x10100);native_powervr_pte_capture(s,&missing);
+ assert(missing.target[0].status==0&&view.calls==viewCalls&&backing.calls==backingCalls+3);
+ native_powervr_pte_put(s);
+ // Never fall back to another descriptor's map (or create one).
+ bo.view=&view;view.present=true;backing.present=false;
+ s=native_powervr_pte_prepare(&vm,0x10100);native_powervr_pte_capture(s,&missing);
+ assert(missing.target[0].status==3&&view.calls==viewCalls);native_powervr_pte_put(s);
+ gBoMapEnabled=false;view.present=false;backing.present=true;backingCalls=backing.calls;
+ s=native_powervr_pte_prepare(&vm,0x10100);native_powervr_pte_capture(s,&missing);
+ assert(missing.target[0].status==3&&backing.calls==backingCalls);native_powervr_pte_put(s);
+ before=walks;
  // Closing while unlocked must not permit a subsequent kick.
  IOLockLock(&conn);client.closing_=true;assert(client.ptePrephase(&client,nullptr,nullptr,0)==-ENODEV&&conn.held);
  IOLockUnlock(&conn);

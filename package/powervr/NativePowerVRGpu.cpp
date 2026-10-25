@@ -286,6 +286,7 @@ bool gTqLowInitialized;
 // Selected once before publishing any clients; boCreate never parses boot args
 // or changes the allocation policy while connection/VM/jobs locks are held.
 bool gBoWcEnabled;
+bool gBoMapEnabled;
 bool gBoWcInitialized;
 bool gBoWcSupplied;
 uint32_t gBoWcRequested;
@@ -297,6 +298,8 @@ void initBoWcPolicy()
   gBoWcSupplied = PE_parse_boot_argn("a04br3-gpu-bo-wc", &requested, sizeof(requested));
   gBoWcRequested = requested;
   gBoWcEnabled = gBoWcSupplied && requested == 1;
+  uint32_t map = 0;
+  gBoMapEnabled = PE_parse_boot_argn("a04br3-gpu-bo-map", &map, sizeof(map)) && map == 1;
   uint32_t pte = 0;
   gBoPolicyCaptureEnabled = PE_parse_boot_argn("a04br3-gpu-pte", &pte, sizeof(pte)) && pte == 1;
   gBoWcInitialized = true;
@@ -1044,7 +1047,8 @@ extern "C" native_powervr_pte_snapshot *native_powervr_pte_prepare(native_powerv
     native_powervr_bo *bo = t.mapping.bo;
     t.offset = t.mapping.bo_offset + (t.gpu - t.mapping.va_addr);
     t.status = 2; // host/nonordinary/invalid BO; do not inspect host memory
-    if (!bo->md || bo->host || !bo->view || !bo->cpu || t.offset >= bo->size) continue;
+    IOMemoryDescriptor *mapped = gBoMapEnabled ? bo->md : static_cast<IOMemoryDescriptor *>(bo->view);
+    if (!bo->md || bo->host || !mapped || !bo->cpu || t.offset >= bo->size) continue;
     uint64_t offset = t.offset;
     for (uint32_t n = 0; n < bo->nents; ++n) {
       if (offset < bo->sg[n].size) { t.expectedPa = bo->sg[n].phys + offset; break; }
@@ -1053,7 +1057,7 @@ extern "C" native_powervr_pte_snapshot *native_powervr_pte_prepare(native_powerv
     if (!t.expectedPa) continue;
     // Reference ONLY. Anywhere permits lookup of the actual existing base;
     // DefaultCache accepts its existing cache attribute without changing it.
-    t.user = bo->view->createMappingInTask(current_task(), 0,
+    t.user = mapped->createMappingInTask(current_task(), 0,
                  kIOMapReference | kIOMapAnywhere | kIOMapDefaultCache, 0, bo->size);
     t.status = t.user ? 0 : 3; // absent existing user map
   }
@@ -1372,6 +1376,13 @@ IOReturn NativePowerVRUserClient::clientMemoryForType(UInt32 type, IOOptionBits 
     status = closing_ ? kIOReturnNotReady : kIOReturnNotFound;
   } else if (!(bo->flags & DRM_PVR_BO_ALLOW_CPU_USERSPACE_ACCESS)) {
     status = kIOReturnBadArgument;   // pvr_gem_mmap(): -EINVAL
+  } else if (gBoMapEnabled && bo->md && !bo->host) {
+    // Share the owning VM object, avoiding a second physical/device pager for
+    // managed RAM. IOMemoryMap retains this descriptor past BO destruction.
+    // Allocation cache policy remains independently gated by gpu-bo-wc.
+    bo->md->retain();
+    *memory = bo->md;
+    *options = kIOMapAnywhere | kIOMapDefaultCache;
   } else {
     if (!bo->view) bo->view = NativePowerVRBoView::withBacking(bo->md, bo->sg, bo->nents, bo->size);
     if (!bo->view) {
