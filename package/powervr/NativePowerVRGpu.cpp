@@ -283,6 +283,17 @@ static_assert(SZ_4K == 1u << 12, "page_size_log2");
 // Experimental IPF 34-bit window comparison; selected before publishing clients.
 bool gTqLowEnabled;
 bool gTqLowInitialized;
+// Selected once before publishing any clients; boCreate never parses boot args
+// or changes the allocation policy while connection/VM/jobs locks are held.
+bool gBoWcEnabled;
+bool gBoWcInitialized;
+void initBoWcPolicy()
+{
+  if (gBoWcInitialized) return;
+  uint32_t requested = 0;
+  gBoWcEnabled = PE_parse_boot_argn("a04br3-gpu-bo-wc", &requested, sizeof(requested)) && requested == 1;
+  gBoWcInitialized = true;
+}
 drm_pvr_heap effective_heap(uint32_t id)
 {
   drm_pvr_heap heap = kHeaps[id];
@@ -563,7 +574,7 @@ struct native_powervr_bo {
   uint32_t refs;
   uint64_t size, flags;
   IOBufferMemoryDescriptor *md;   // the pages, wired, below 4 GiB
-  void *cpu;                      // the kernel's (cached) view
+  void *cpu;                      // kernel view; cached by default, allocator WC requested only by the BO-WC experiment
   native_powervr_sg *sg;          // physical runs of the whole BO
   uint32_t nents, sgCapacity;
   NativePowerVRBoView *view;      // created at the first user mapping (under the owning connection's lock)
@@ -597,7 +608,11 @@ int boCreate(uint64_t size, uint64_t flags, native_powervr_bo **out)
   bo->refs = 1;
   bo->size = size;
   bo->flags = flags;
-  bo->md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIODirectionInOut, size, kBoPhysicalMask);
+  // Opt-in: let the allocator's original RAM VM object own the WC attributes
+  // and their teardown, instead of relying only on a physical-descriptor alias.
+  const IOOptionBits allocationOptions = IOOptionBits(kIODirectionInOut) |
+      (gBoWcEnabled ? IOOptionBits(kIOMapWriteCombineCache) : IOOptionBits(0));
+  bo->md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, allocationOptions, size, kBoPhysicalMask);
   if (!bo->md || bo->md->getLength() < size) { boDestroy(bo); return -ENOMEM; }
   bo->cpu = bo->md->getBytesNoCopy();
   // The physical runs (pvr_gem_object_get_pages_sgt()), adjacent pages merged.
@@ -1891,6 +1906,7 @@ extern "C" int native_powervr_publish(void)
     return err;
   }
   initTqLowPolicy();
+  initBoWcPolicy();
   IOLog("powervr: device info: gpu_id %llx, phantoms %u, quirks 47217:%d 48545:%d 49927:%d 51764:%d 62269:%d 63142:%d, "
         "enhancements 35421:%d 42064:%d, VA bits %llu, free list min pages %u, max coeffs %u, CDM local mem %u%s\n",
         static_cast<unsigned long long>(gGpuId), rogue_get_num_phantoms(&gDev), gDev.quirks.has_brn47217, gDev.quirks.has_brn48545,

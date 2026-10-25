@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""実allocator/view/free関数のフラグ・参照寿命・失敗解放をASan/UBSanで検証する。"""
+from pathlib import Path
+import os
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[2]
+GPU = (ROOT / 'package/powervr/NativePowerVRGpu.cpp').read_text()
+
+
+def function(signature):
+    start = GPU.index(signature)
+    brace = GPU.index('{', start)
+    depth, end = 1, brace + 1
+    while depth:
+        depth += (GPU[end] == '{') - (GPU[end] == '}')
+        end += 1
+    return GPU[start:end]
+
+
+h = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <cerrno>
+#include <initializer_list>
+using IOOptionBits=unsigned;using IOByteCount=uint64_t;using vm_offset_t=uintptr_t;
+constexpr unsigned kIODirectionInOut=3,kIOMapWriteCombineCache=4u<<8,
+ kIOWriteCombineCache=4,kIOMemoryBufferCacheShift=28,kIOMemoryTypePhysical64=0x20,kIOMemoryMapperNone=1;
+constexpr uint64_t kDevicePageSize=4096,kBoPhysicalMask=0xfffff000ULL,SZ_1G=1ULL<<30;
+constexpr int kIOReturnSuccess=0;
+void *kernel_task=(void*)1;
+static bool supplied,held,failMd,shortMd,badSg,failCpu,failView;
+static unsigned arg,parses,allocations,failAt,heapLive,mdLive,viewLive,allocOptions,barriers,flushes;
+bool PE_parse_boot_argn(const char*k,void*out,size_t n){
+ assert(!held&&!strcmp(k,"a04br3-gpu-bo-wc")&&n==4);++parses;memcpy(out,&arg,4);return supplied;}
+void *kzallocBytes(size_t n){if(++allocations==failAt)return nullptr;void*p=calloc(1,n);if(p)++heapLive;return p;}
+void kfreeBytes(void*p,size_t){if(p){assert(heapLive);--heapLive;free(p);}}
+void IOLog(const char*,...){assert(false);}
+void flush_dcache(vm_offset_t,unsigned n,int physical){assert(n&&physical==1);++flushes;}
+struct IOAddressRange{uint64_t address,length;};
+struct native_powervr_sg{uint64_t phys,size;};
+class IOBufferMemoryDescriptor{
+ public:unsigned refs=1;uint64_t size;void *bytes;
+ explicit IOBufferMemoryDescriptor(uint64_t n):size(n),bytes(calloc(1,n)){++mdLive;}
+ ~IOBufferMemoryDescriptor(){free(bytes);assert(mdLive);--mdLive;}
+ static IOBufferMemoryDescriptor *inTaskWithPhysicalMask(void*t,IOOptionBits options,uint64_t n,uint64_t mask){
+  assert(t==kernel_task&&mask==kBoPhysicalMask);allocOptions=options;
+  return failMd?nullptr:new IOBufferMemoryDescriptor(n);}
+ uint64_t getLength(){return shortMd?size-1:size;}
+ void *getBytesNoCopy(){return failCpu?nullptr:bytes;}
+ uint64_t getPhysicalSegment(uint64_t off,IOByteCount*len,unsigned mapper){
+  assert(mapper==kIOMemoryMapperNone&&off<size);*len=4096;
+  return badSg?0:(off<8192?0x80000000ULL+off:0x90000000ULL+off-8192);}
+ void retain(){++refs;}void release(){assert(refs);if(!--refs)delete this;}
+};
+class IOGeneralMemoryDescriptor{
+ public:unsigned refs=1;
+ virtual ~IOGeneralMemoryDescriptor()=default;
+ bool initWithOptions(IOAddressRange*r,unsigned count,unsigned off,void*t,IOOptionBits opts,void*mapper){
+  assert(r&&count==2&&!off&&!t&&!mapper);
+  assert(opts==(kIOMemoryTypePhysical64|kIODirectionInOut|(kIOWriteCombineCache<<kIOMemoryBufferCacheShift)));
+  return !failView;}
+ virtual void free(){}void retain(){++refs;}void release(){assert(refs);if(!--refs){free();delete this;}}
+};
+class NativePowerVRBoView:public IOGeneralMemoryDescriptor{
+ IOBufferMemoryDescriptor *backing_=nullptr;
+ public:NativePowerVRBoView(){++viewLive;}~NativePowerVRBoView(){assert(viewLive);--viewLive;}
+ static NativePowerVRBoView *withBacking(IOBufferMemoryDescriptor*,const native_powervr_sg*,uint32_t,uint64_t);
+ void free() override;
+};
+struct Host{int complete(){return 0;}void release(){assert(false);}};
+struct HostMap{void release(){assert(false);}};
+struct native_powervr_bo{
+ uint32_t refs;uint64_t size,flags;IOBufferMemoryDescriptor*md;void*cpu;native_powervr_sg*sg;
+ uint32_t nents,sgCapacity;NativePowerVRBoView*view;Host*host;bool hostPrepared;HostMap*hostMap;
+};
+bool gBoWcEnabled,gBoWcInitialized;
+'''
+for signature in ('void initBoWcPolicy()',
+                  'NativePowerVRBoView *NativePowerVRBoView::withBacking(',
+                  'void NativePowerVRBoView::free()', 'void boDestroy('):
+    h += function(signature) + '\n'
+h += function('int boCreate(').replace('__asm__ volatile("dsb sy" ::: "memory");', '++barriers;')
+h += r'''
+static void policy(bool present,unsigned value){
+ supplied=present;arg=value;gBoWcInitialized=gBoWcEnabled=false;held=false;
+ unsigned old=parses;initBoWcPolicy();assert(parses==old+1);
+ supplied=!present;arg=value^1;held=true;initBoWcPolicy();assert(parses==old+1);held=false;
+}
+static void reset(){allocations=failAt=0;failMd=shortMd=badSg=failCpu=failView=false;}
+int main(){
+ for(bool present:{false,true})for(unsigned value:{0u,1u,2u,~0u}){
+  policy(present,value);bool wc=present&&value==1;assert(gBoWcEnabled==wc);reset();
+  native_powervr_bo*bo=nullptr;unsigned before=parses;
+  held=true;assert(!boCreate(12288,0x1234,&bo));held=false;
+  assert(parses==before&&allocOptions==(kIODirectionInOut|(wc?kIOMapWriteCombineCache:0)));
+  assert(bo->flags==0x1234&&bo->size==12288&&bo->nents==2&&bo->sg[0].size==8192&&bo->sg[1].size==4096);
+  // Exercise actual view retention/free: user mapping survives BO destruction.
+  bo->view=NativePowerVRBoView::withBacking(bo->md,bo->sg,bo->nents,bo->size);
+  assert(bo->view&&bo->md->refs==2);auto*map=bo->view;map->retain();
+  boDestroy(bo);assert(mdLive==1&&viewLive==1&&!heapLive);
+  map->release();assert(!mdLive&&!viewLive&&!heapLive);
+  // Both allocation failures and partial descriptor/SG failures release everything.
+  for(unsigned fault=0;fault<6;++fault){reset();
+   failAt=fault<2?fault+1:0;failMd=fault==2;shortMd=fault==3;failCpu=fault==4;badSg=fault==5;
+   bo=nullptr;assert(boCreate(12288,0,&bo)==-ENOMEM&&!bo&&!mdLive&&!viewLive&&!heapLive);}
+  reset();bo=nullptr;assert(!boCreate(12288,0,&bo));failView=true;
+  bo->view=NativePowerVRBoView::withBacking(bo->md,bo->sg,bo->nents,bo->size);
+  assert(!bo->view&&bo->md->refs==1);boDestroy(bo);assert(!mdLive&&!viewLive&&!heapLive);
+ }
+ assert(barriers&&flushes);
+}
+'''
+
+publish = function('extern "C" int native_powervr_publish(')
+assert publish.index('initBoWcPolicy();') < publish.index('new NativePowerVRGpu')
+assert 'IOLock' not in function('void initBoWcPolicy()')
+assert 'PE_parse_boot_argn' not in function('int boCreate(')
+assert 'gBoWcEnabled' not in function('int boImportHost(')
+with tempfile.TemporaryDirectory(prefix='pvr-bo-wc-') as directory:
+    source = Path(directory) / 'fixture.cpp'
+    source.write_text(h)
+    binary = source.with_suffix('')
+    subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
+                    '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-g',
+                    str(source), '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True, timeout=30)
+print('PASS actual BO allocator/view/free: exact bootarg gate, once-only policy, flags, SG, retained user mapping and failure cleanup (ASan/UBSan)')
+print('API mocks do not prove real PTE attributes or XNU page-cache restoration; actual kernel build/PTE test remains required.')
