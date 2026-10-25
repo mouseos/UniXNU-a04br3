@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "NativeMetalBoard.h"
+#include "NativeBridgeMetalFrontend.h"
 
 namespace {
 // NativePowerVRABI.h (kept in step; the header itself needs the Linux uAPI first).
@@ -66,6 +67,25 @@ int handoffMap(void *context, uint64_t *address, uint64_t *length) {
     return gIOKit.map ? gIOKit.map(h->conn, kScanoutType, mach_task_self(), address, length, kMapScanout) : -1;
 }
 void handoffMark(void *, uint32_t value) {native_metal_board_mark(value);}
+// Only called after a real pipeline failure; field limits bound UART round trips.
+void pipelineFailureField(unsigned sequence,const char *field,const char *text,size_t limit) {
+    if(!text)text="<null>";
+    size_t at=0;unsigned part=0;
+    do {
+        size_t count=0;while(count<48 && at+count<limit && text[at+count])++count;
+        char line[64];snprintf(line,sizeof line,"PF%u %s%02u %.*s",sequence,field,part++,int(count),text+at);
+        native_metal_board_text(line);at+=count;
+    } while(at<limit && text[at]);
+    if(at==limit && text[at]) {
+        char line[64];snprintf(line,sizeof line,"PF%u %s truncated at %zu",sequence,field,limit);native_metal_board_text(line);
+    }
+}
+void pipelineFailure(unsigned sequence,const char *stage,const char *error,const char *spec) {
+    pipelineFailureField(sequence,"S",stage,32);
+    pipelineFailureField(sequence,"E",error,512);
+    pipelineFailureField(sequence,"D",spec,384);
+}
+
 }  // namespace
 
 extern "C" void native_metal_board_prepare(unsigned port) {
@@ -81,6 +101,10 @@ extern "C" void native_metal_board_prepare(unsigned port) {
         if (auto retain = (RetainFn)dlsym(iokit, "IOObjectRetain")) retain(port);
     }
     gIOKit.port = port;
+    const char *pipelineDiag=getenv("PVR_METAL_PIPELINE_DIAG");
+    if(pipelineDiag && !strcmp(pipelineDiag,"1"))
+        native_bridge_metal_set_pipeline_failure_callback(pipelineFailure);
+
     // Mesa's PowerVR driver (pvr_darwin.c): the accelerator, not the direct NativePowerVRGpu service, which sandboxed processes may not open.
     setenv("PVR_DARWIN_SERVICE", "IOAcceleratorES", 1);
     char type[16];

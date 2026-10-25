@@ -3,7 +3,7 @@
 (drivers/NativeMetal/NativeVulkanMetalPlugin.mm, scripts/build-vulkan-metal-plugin.py) with this board's hooks
 (package/powervr/user/NativePowerVRMetalBoard.mm) and Mesa's PowerVR Vulkan driver (scripts/build-pvr-darwin.py --target ios).
 
-  build-a04br3-metal-plugin.py [--vulkan LIBRARY] [--out DIR] [--skip-bridge] [--sipf1-dump] [--submit-barrier] [--serial-transfer] [--tq-clip]
+  build-a04br3-metal-plugin.py [--vulkan LIBRARY] [--out DIR] [--skip-bridge] [--sipf1-dump] [--submit-barrier] [--serial-transfer] [--tq-clip] [--pipeline-failure-diag]
 
 Runs in a UniXNU build tree (out/a04br3/tree: the tree's scripts/ holds both repositories' scripts, kits/a04br3 this package).
 The names match the accelerator of package/powervr/NativePowerVRMetal.cpp: MetalPluginName NativePowerVRMetal, MetalPluginClassName
@@ -46,6 +46,8 @@ def main():
                         help='enable diagnostic synchronous transfer fence waits')
     parser.add_argument('--tq-clip', action='store_true',
                         help='enable explicit experimental TQ Clip routing')
+    parser.add_argument('--pipeline-failure-diag', action='store_true',
+                        help='report the first two real Metal render-pipeline failures through the board log')
     args = parser.parse_args()
     builder = ROOT / 'scripts/build-vulkan-metal-plugin.py'
     if not builder.is_file():
@@ -70,7 +72,8 @@ def main():
     for enabled, suffix, variable in (
             (args.submit_barrier, 'submit-barrier', 'PVR_DARWIN_SUBMIT_BARRIER'),
             (args.serial_transfer, 'serial-transfer', 'PVR_DARWIN_SERIAL_TRANSFER'),
-            (args.tq_clip, 'tq-clip', 'PVR_DARWIN_TQ_CLIP')):
+            (args.tq_clip, 'tq-clip', 'PVR_DARWIN_TQ_CLIP'),
+            (args.pipeline_failure_diag, 'pipeline-failure-diag', 'PVR_METAL_PIPELINE_DIAG')):
         if not enabled:
             continue
         # As with the dump source, survive the generic builder's OUT cleanup.
