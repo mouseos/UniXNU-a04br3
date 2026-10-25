@@ -155,7 +155,8 @@ objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRMetal.cpp
 # the headers of the unchanged kernel/ sources it drives and the pvr_device stand-in (stub/).
 objects.append(compile_one(cxx_record, KIT / 'powervr' / 'NativePowerVRJobs.cpp',
                            powervr_flags + ['-I', str(KIT / 'powervr' / 'stub'), '-I', str(KIT / 'powervr' / 'kernel')]))
-# The unchanged Linux kernel sources (package/powervr/kernel: pvr_mmu.c and the job layer's pvr_context.c, pvr_cccb.c,
+# The Linux kernel sources (pvr_hwrt.c adds format-v1 single-macrotile support; the others are unchanged)
+# (package/powervr/kernel: pvr_mmu.c and the job layer's pvr_context.c, pvr_cccb.c,
 # pvr_free_list.c, pvr_hwrt.c, pvr_stream.c, pvr_stream_defs.c, pvr_dump.c) as C with the kern_exec.c record, through the
 # Linux API shim (compat/native_powervr_linux_kernel.h, _jobs.h) and the pvr_device stand-in (stub/). Their own warnings that the
 # kernel's -Werror set rejects (signed/unsigned comparisons, packed member addresses, C23 static_assert) are not changed

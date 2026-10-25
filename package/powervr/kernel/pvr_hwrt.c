@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only OR MIT
 /* Copyright (c) 2023 Imagination Technologies Ltd. */
+/* Local change: support simple parameter format v1's single-macrotile layout. */
 
 #include "pvr_free_list.h"
 #include "pvr_hwrt.h"
@@ -254,20 +255,32 @@ hwrt_init_common_fw_structure(struct pvr_file *pvr_file,
 		if (WARN_ON(err))
 			return err;
 
-		WARN_ON(parameter_format != 2);
+		if (parameter_format == 1) {
+			/* Format v1 uses one macrotile covering the entire render target. */
+			info.mtile_x[0] = info.num_tiles_x;
+			info.mtile_y[0] = info.num_tiles_y;
+			info.mtile_x[1] = 0;
+			info.mtile_y[1] = 0;
+			info.mtile_x[2] = 0;
+			info.mtile_y[2] = 0;
+			info.tile_max_x = info.num_tiles_x - 1;
+			info.tile_max_y = info.num_tiles_y - 1;
+		} else {
+			WARN_ON(parameter_format != 2);
 
-		/*
-		 * Set up 16 macrotiles with a multiple of 2x2 tiles per macrotile, which is
-		 * aligned to a tile group.
-		 */
-		info.mtile_x[0] = DIV_ROUND_UP(info.num_tiles_x, 8) * 2;
-		info.mtile_y[0] = DIV_ROUND_UP(info.num_tiles_y, 8) * 2;
-		info.mtile_x[1] = 0;
-		info.mtile_y[1] = 0;
-		info.mtile_x[2] = 0;
-		info.mtile_y[2] = 0;
-		info.tile_max_x = round_up(info.num_tiles_x, 2) - 1;
-		info.tile_max_y = round_up(info.num_tiles_y, 2) - 1;
+			/*
+			 * Set up 16 macrotiles with a multiple of 2x2 tiles per macrotile, which is
+			 * aligned to a tile group.
+			 */
+			info.mtile_x[0] = DIV_ROUND_UP(info.num_tiles_x, 8) * 2;
+			info.mtile_y[0] = DIV_ROUND_UP(info.num_tiles_y, 8) * 2;
+			info.mtile_x[1] = 0;
+			info.mtile_y[1] = 0;
+			info.mtile_x[2] = 0;
+			info.mtile_y[2] = 0;
+			info.tile_max_x = round_up(info.num_tiles_x, 2) - 1;
+			info.tile_max_y = round_up(info.num_tiles_y, 2) - 1;
+		}
 	} else {
 		/* Set up 16 macrotiles with a multiple of 4x4 tiles per macrotile. */
 		info.mtile_x[0] = round_up(DIV_ROUND_UP(info.num_tiles_x, 4), 4);

@@ -161,6 +161,32 @@ index 2c5cf4c..43d27a3 100644
    ],
    link_depends : vulkan_icd_link_depends,
    gnu_symbol_visibility : 'hidden',
+diff --git a/src/imagination/vulkan/pvr_arch_job_render.c b/src/imagination/vulkan/pvr_arch_job_render.c
+index f1cc515..083cece 100644
+--- a/src/imagination/vulkan/pvr_arch_job_render.c
++++ b/src/imagination/vulkan/pvr_arch_job_render.c
+@@ -126,7 +126,20 @@ void pvr_arch_rt_mtile_info_init(const struct pvr_device_info *dev_info,
+ 
+    rogue_get_num_macrotiles_xy(dev_info, &info->mtiles_x, &info->mtiles_y);
+ 
+-   if (PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format)) {
++   if (PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format) &&
++       PVR_GET_FEATURE_VALUE(dev_info, simple_parameter_format_version, 0) == 1) {
++      /* GE8XE v1 has one macrotile covering the complete render target, not
++       * the v2 layout of 16 macrotiles containing 2x2 tile groups. The v1
++       * producer (RGXAddRenderTarget) programs the full tile count at X1/Y1.
++       * Keep this in agreement with the kernel HWRT common structure.
++       */
++      info->mtile_x1 = info->num_tiles_x;
++      info->mtile_y1 = info->num_tiles_y;
++      info->mtile_x2 = info->mtile_x3 = 0;
++      info->mtile_y2 = info->mtile_y3 = 0;
++      info->x_tile_max = info->num_tiles_x - 1;
++      info->y_tile_max = info->num_tiles_y - 1;
++   } else if (PVR_HAS_FEATURE(dev_info, simple_internal_parameter_format)) {
+       assert(PVR_GET_FEATURE_VALUE(dev_info,
+                                    simple_parameter_format_version,
+                                    0) == 2);
 diff --git a/src/imagination/vulkan/pvr_device.c b/src/imagination/vulkan/pvr_device.c
 index 7ba4fb8..654f737 100644
 --- a/src/imagination/vulkan/pvr_device.c
