@@ -84,6 +84,42 @@ static void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from,
   p_vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, NULL, 0, NULL, 1, &barrier);
 }
 
+// Eight rows of eight 8x8 cells; all 64 pixels of each cell are accounted for.
+// Keep the diagnostic independent of the strict readback verdict below.
+static void triangleCoverageGrid(const volatile uint8_t *pixels, const uint8_t foreground[4],
+                                 const uint8_t background[4])
+{
+  probe_line("vk triangle grid: columns x=0,8,...,56; cells C/T/B/O counts (sum 64): "
+             "C=old clear T=expected triangle B=expected background O=other; diagonal accepts T or B");
+  for (uint32_t cy = 0; cy < kHeight; cy += 8) {
+    char row[128];
+    size_t used = 0;
+    for (uint32_t cx = 0; cx < kWidth; cx += 8) {
+      unsigned counts[4] = {0};
+      for (uint32_t y = cy; y < cy + 8; y++) {
+        for (uint32_t x = cx; x < cx + 8; x++) {
+          const uint32_t i = y * kWidth + x;
+          int old = 1, tri = 1, bg = 1;
+          for (uint32_t c = 0; c < 4; c++) {
+            old &= pixels[4 * i + c] == kClear[c];
+            tri &= pixels[4 * i + c] == foreground[c];
+            bg &= pixels[4 * i + c] == background[c];
+          }
+          const int inside = x >= 8 && y >= 8 && x + y < 63;
+          const int edge = x >= 8 && y >= 8 && x + y == 63;
+          const unsigned category = old ? 0 : tri && (inside || edge) ? 1 : bg && (!inside || edge) ? 2 : 3;
+          counts[category]++;
+        }
+      }
+      const int n = snprintf(row + used, sizeof(row) - used, "%s%02u/%02u/%02u/%02u",
+                              cx ? " " : "", counts[0], counts[1], counts[2], counts[3]);
+      if (n < 0 || (size_t)n >= sizeof(row) - used) return;
+      used += (size_t)n;
+    }
+    probe_line("vk triangle grid y=%02u..%02u: %s", cy, cy + 7, row);
+  }
+}
+
 // Vertex + fragment execution, separate from transfer-only clear/copy. Call only after
 // the first submission has completed. Geometry has no vertex buffers or descriptors.
 static int triangleProbe(VkDevice device, VkQueue queue, VkCommandPool pool, VkImage image, VkBuffer buffer,
@@ -204,6 +240,7 @@ static int triangleProbe(VkDevice device, VkQueue queue, VkCommandPool pool, VkI
   }
   const volatile uint8_t *pixels = mapped;
   const uint8_t foreground[4] = {255, 0, 255, 255};
+  triangleCoverageGrid(pixels, foreground, backgroundColor);
   uint32_t checked[2] = {0, 0}, matched[2] = {0, 0}, first = UINT32_MAX;
   // Pixel centers: (x+.5,y+.5). Only the diagonal x+y=63 lies exactly
   // on an edge; skip its 48 pixels to avoid dependence on edge tie-breaking.
@@ -249,6 +286,8 @@ cleanup:
 
 int probe_vulkan(const char *library)
 {
+  // Owner probe only: the Darwin winsys bounds its opt-in geometry trace to 32 lines.
+  if (setenv("PVR_DARWIN_DEBUG_GEOMETRY", "1", 1) != 0) return -1;
   char detail[256];
   setenv("PVR_I_WANT_A_BROKEN_VULKAN_DRIVER", "1", 1);
   void *driver = dlopen(library, RTLD_NOW | RTLD_LOCAL);

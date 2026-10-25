@@ -161,11 +161,79 @@ index 2c5cf4c..43d27a3 100644
    ],
    link_depends : vulkan_icd_link_depends,
    gnu_symbol_visibility : 'hidden',
+diff --git a/src/imagination/vulkan/pvr_arch_cmd_buffer.c b/src/imagination/vulkan/pvr_arch_cmd_buffer.c
+index a029859..78690b7 100644
+--- a/src/imagination/vulkan/pvr_arch_cmd_buffer.c
++++ b/src/imagination/vulkan/pvr_arch_cmd_buffer.c
+@@ -33,6 +33,9 @@
+ 
+ #include "hwdef/rogue_hw_defs.h"
+ #include "hwdef/rogue_hw_utils.h"
++#ifdef PVR_WINSYS_DARWIN
++#include "winsys/darwin/pvr_darwin.h"
++#endif
+ #include "pvr_blit.h"
+ #include "pvr_bo.h"
+ #include "pvr_buffer.h"
+@@ -7433,6 +7436,14 @@ pvr_setup_isp_depth_bias_scissor_state(struct pvr_cmd_buffer *const cmd_buffer)
+          word1.top = top;
+       }
+ 
++#ifdef PVR_WINSYS_DARWIN
++      pvr_darwin_debug("clip rect %u,%u+%ux%u unit %u bounds %u,%u..%u,%u words %08x/%08x",
++                       x, y, width, height, region_clip_align_size,
++                       left, top, right, bottom,
++                       ppp_state->region_clipping.word0,
++                       ppp_state->region_clipping.word1);
++#endif
++
+       ppp_state->depthbias_scissor_indices.scissor_index =
+          util_dynarray_num_elements(&cmd_buffer->scissor_array,
+                                     struct pvr_scissor_words);
+diff --git a/src/imagination/vulkan/pvr_arch_job_common.c b/src/imagination/vulkan/pvr_arch_job_common.c
+index f420deb..c650d83 100644
+--- a/src/imagination/vulkan/pvr_arch_job_common.c
++++ b/src/imagination/vulkan/pvr_arch_job_common.c
+@@ -26,6 +26,9 @@
+ 
+ #include "hwdef/rogue_hw_defs.h"
+ #include "hwdef/rogue_hw_utils.h"
++#ifdef PVR_WINSYS_DARWIN
++#include "winsys/darwin/pvr_darwin.h"
++#endif
+ #include "pvr_csb_enum_helpers.h"
+ #include "pvr_device_info.h"
+ #include "pvr_formats.h"
+@@ -294,6 +297,14 @@ void pvr_arch_pbe_pack_state(
+       reg.zslice = render_params->slice;
+       reg.maxclip_y = render_params->max_y_clip;
+    }
++#ifdef PVR_WINSYS_DARWIN
++   pvr_darwin_debug("pbe layout %u %ux%u stride %u clip %u,%u..%u,%u reg %016llx/%016llx/%016llx",
++                    (unsigned)surface_params->mem_layout, surface_params->width, surface_params->height,
++                    surface_params->stride, render_params->min_x_clip, render_params->min_y_clip,
++                    render_params->max_x_clip, render_params->max_y_clip,
++                    (unsigned long long)pbe_reg_words[0], (unsigned long long)pbe_reg_words[1],
++                    (unsigned long long)pbe_reg_words[2]);
++#endif
+ }
+ 
+ /* TODO: Split this into smaller functions to make it easier to follow. When
 diff --git a/src/imagination/vulkan/pvr_arch_job_render.c b/src/imagination/vulkan/pvr_arch_job_render.c
-index f1cc515..083cece 100644
+index f1cc515..b860cf3 100644
 --- a/src/imagination/vulkan/pvr_arch_job_render.c
 +++ b/src/imagination/vulkan/pvr_arch_job_render.c
-@@ -126,7 +126,20 @@ void pvr_arch_rt_mtile_info_init(const struct pvr_device_info *dev_info,
+@@ -28,6 +28,9 @@
+ 
+ #include "hwdef/rogue_hw_defs.h"
+ #include "hwdef/rogue_hw_utils.h"
++#ifdef PVR_WINSYS_DARWIN
++#include "winsys/darwin/pvr_darwin.h"
++#endif
+ #include "pvr_bo.h"
+ #include "pvr_border.h"
+ #include "pvr_cmd_buffer.h"
+@@ -126,7 +129,20 @@ void pvr_arch_rt_mtile_info_init(const struct pvr_device_info *dev_info,
  
     rogue_get_num_macrotiles_xy(dev_info, &info->mtiles_x, &info->mtiles_y);
  
@@ -187,6 +255,19 @@ index f1cc515..083cece 100644
        assert(PVR_GET_FEATURE_VALUE(dev_info,
                                     simple_parameter_format_version,
                                     0) == 2);
+@@ -155,6 +171,12 @@ void pvr_arch_rt_mtile_info_init(const struct pvr_device_info *dev_info,
+ 
+    info->tiles_per_mtile_x = info->mtile_x1 * samples_in_x;
+    info->tiles_per_mtile_y = info->mtile_y1 * samples_in_y;
++#ifdef PVR_WINSYS_DARWIN
++   pvr_darwin_debug("rt %ux%u tiles %ux%u size %ux%u macro %ux%u x1/y1 %u/%u max %u/%u",
++                    width, height, info->num_tiles_x, info->num_tiles_y,
++                    info->tile_size_x, info->tile_size_y, info->mtiles_x, info->mtiles_y,
++                    info->mtile_x1, info->mtile_y1, info->x_tile_max, info->y_tile_max);
++#endif
+ }
+ 
+ /* Note that the unit of the return value depends on the GPU. For cores with the
 diff --git a/src/imagination/vulkan/pvr_device.c b/src/imagination/vulkan/pvr_device.c
 index 7ba4fb8..654f737 100644
 --- a/src/imagination/vulkan/pvr_device.c
@@ -765,10 +846,10 @@ index 0000000..dafbb55
 +#endif
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.c b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
 new file mode 100644
-index 0000000..3d26fe5
+index 0000000..a15fa9b
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.c
-@@ -0,0 +1,798 @@
+@@ -0,0 +1,834 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: talks to the NativePowerVR IOKit user client (NativePowerVRABI.h,
 + * version 1). Modelled on Turnip's darwin backend (tu_knl_darwin.cc).
@@ -778,6 +859,9 @@ index 0000000..3d26fe5
 +
 +#include <assert.h>
 +#include <errno.h>
++#include <fcntl.h>
++#include <stdarg.h>
++#include <stdio.h>
 +#include <pthread.h>
 +#include <stdlib.h>
 +#include <string.h>
@@ -798,6 +882,39 @@ index 0000000..3d26fe5
 +#include "vk_log.h"
 +#include "vk_sync.h"
 +#include "vk_sync_timeline.h"
++
++/* Deliberately off unless the owner probe requests it; at most 32 short lines. */
++void pvr_darwin_debug(const char *format, ...)
++{
++   if (!getenv("PVR_DARWIN_DEBUG_GEOMETRY"))
++      return;
++   static unsigned emitted;
++   if (__atomic_fetch_add(&emitted, 1, __ATOMIC_RELAXED) >= 32)
++      return;
++   char text[512];
++   int prefix = snprintf(text, sizeof(text), "pvr-darwin geometry: ");
++   va_list args;
++   va_start(args, format);
++   int count = vsnprintf(text + prefix, sizeof(text) - prefix - 1, format, args);
++   va_end(args);
++   if (count < 0)
++      return;
++   size_t size = MIN2((size_t)prefix + count, sizeof(text) - 2);
++   text[size++] = '\n';
++   int fd = open("/dev/console", O_WRONLY);
++   if (fd < 0)
++      return;
++   size_t at = 0;
++   while (at < size) {
++      ssize_t n = write(fd, text + at, size - at);
++      if (n < 0 && errno == EINTR)
++         continue;
++      if (n <= 0)
++         break;
++      at += n;
++   }
++   close(fd);
++}
 +
 +/* Process state shared by every connection: the tunnel selector of a sandboxed process and the lock and condition
 + * that resolve syncs. */
@@ -1569,10 +1686,10 @@ index 0000000..3d26fe5
 +}
 diff --git a/src/imagination/vulkan/winsys/darwin/pvr_darwin.h b/src/imagination/vulkan/winsys/darwin/pvr_darwin.h
 new file mode 100644
-index 0000000..fec6ef3
+index 0000000..ee24eb1
 --- /dev/null
 +++ b/src/imagination/vulkan/winsys/darwin/pvr_darwin.h
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,63 @@
 +/*
 + * Darwin kernel interface of the PowerVR winsys: the requests of winsys/powervr travel to the NativePowerVR IOKit
 + * user client (NativePowerVRABI.h, version 1) instead of the Linux DRM device. Modelled on Turnip's darwin backend
@@ -1598,6 +1715,9 @@ index 0000000..fec6ef3
 +/* The connection is the winsys's render_fd (the io_connect_t, a Mach port name). */
 +VkResult pvr_darwin_open(int *const fd_out);
 +void pvr_darwin_close(int fd);
++
++/* Opt-in, bounded console trace for owner probe geometry diagnostics. */
++void pvr_darwin_debug(const char *format, ...) __attribute__((format(printf, 1, 2)));
 +
 +/* Declared in pvr_winsys_helper.h, which routes pvr_ioctl() here: 0, or -1 with errno set. */
 +int pvr_darwin_ioctl(int fd, unsigned long request, void *arg);
