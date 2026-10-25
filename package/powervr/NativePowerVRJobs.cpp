@@ -1291,6 +1291,14 @@ void applyResets(const ResetNote *notes, uint32_t count)
                         r.reason == ROGUE_CONTEXT_RESET_REASON_GUILTY_OVERRUNING ||
                         (r.flags & ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_PF);
     if (!guilty || (r.flags & ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_ALL_CTXS)) continue;
+    // A completed UFO can retire the last queued job before its FW reset note
+    // arrives. Keep the user-owned context faulty even with no queued jobs;
+    // otherwise the next submission incorrectly reuses the failed context.
+    // Holding ctx_ids protects against erase/free; no context reference is kept.
+    xa_lock(&gJobs.dev.ctx_ids);
+    pvr_context *ctx = static_cast<pvr_context *>(xa_load(&gJobs.dev.ctx_ids, r.ctx_id));
+    if (ctx) atomic_set(&ctx->faulty, 1);
+    xa_unlock(&gJobs.dev.ctx_ids);
     Job *j;
     list_for_each_entry(j, &gJobs.jobs, dev_link) {
       if (j->ctx->ctx_id != r.ctx_id) continue;

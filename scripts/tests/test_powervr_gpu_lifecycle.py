@@ -140,6 +140,42 @@ int main(){
         self.assertLess(submit.index('native_powervr_hosts_sync'), submit.index('file->nextFence++'))
         self.assertLess(submit.index('native_powervr_hosts_sync'), submit.index('run_job(j,'))
 
+    def test_late_reset_marks_idle_context(self):
+        harness = r'''
+#include <cassert>
+#include <cstdint>
+#include <vector>
+struct pvr_context {uint32_t ctx_id;int faulty=0;};
+struct xarray {bool held=false;pvr_context *contexts[8]{};};
+void xa_lock(xarray *x){assert(!x->held);x->held=true;}
+void xa_unlock(xarray *x){assert(x->held);x->held=false;}
+void *xa_load(xarray *x,uint32_t id){assert(x->held);return id<8?x->contexts[id]:nullptr;}
+void atomic_set(int *p,int v){*p=v;}
+struct Job {pvr_context *ctx;uint32_t id;bool failed=false;};
+struct list_head {std::vector<Job *> items;};
+struct {struct {xarray ctx_ids;} dev;list_head jobs;} gJobs;
+#define list_for_each_entry(j,h,m) for(auto *cursor:(h)->items) if((j=cursor))
+struct ResetNote {uint32_t ctx_id,job_ref,reason,flags;};
+constexpr uint32_t ROGUE_CONTEXT_RESET_REASON_GUILTY_LOCKUP=1,
+ ROGUE_CONTEXT_RESET_REASON_GUILTY_OVERRUNING=2,
+ ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_PF=1,
+ ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_ALL_CTXS=2;
+''' + function(JOBS, 'void applyResets(') + r'''
+int main(){
+ pvr_context idle{1},other{2};gJobs.dev.ctx_ids.contexts[1]=&idle;gJobs.dev.ctx_ids.contexts[2]=&other;
+ ResetNote late{1,99,ROGUE_CONTEXT_RESET_REASON_GUILTY_LOCKUP,0};
+ applyResets(&late,1);assert(idle.faulty&&!other.faulty&&!gJobs.dev.ctx_ids.held);
+ idle.faulty=0;ResetNote innocent{1,99,3,0};applyResets(&innocent,1);assert(!idle.faulty);
+ ResetNote pageFault{1,99,3,ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_PF};
+ applyResets(&pageFault,1);assert(idle.faulty);idle.faulty=0;
+ Job failed{&idle,99},following{&idle,100},unrelated{&other,99};
+ gJobs.jobs.items={&failed,&following,&unrelated};applyResets(&late,1);
+ assert(idle.faulty&&failed.failed&&!following.failed&&!unrelated.failed&&!other.faulty);
+ ResetNote missing{7,99,1,0};applyResets(&missing,1);assert(!other.faulty&&!gJobs.dev.ctx_ids.held);
+}
+'''
+        run_cpp(harness)
+
     def test_readonly_import_refused(self):
         source = function(GPU, 'int boImportHost(')
         # Execute the actual prepare/error path; the rest of import is compiled against descriptor mocks.
