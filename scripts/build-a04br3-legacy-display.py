@@ -310,7 +310,9 @@ def symbols(path):
     defined,weak,undefined,weak_imports=set(),set(),set(),set()
     for line in run([llvm/'llvm-nm','-m',path],text=True).splitlines():
         if 'non-external' in line:continue
-        m=re.search(r'\(([^)]*)\) (?:\(alignment [^)]*\) )?(weak )?(?:private )?external (\S+)',line)
+        # New LLVM prints attributes such as [no dead strip] before the name.
+        # They describe the symbol; they are not duplicate definitions named "[no".
+        m=re.search(r'\(([^)]*)\) (?:\(alignment [^)]*\) )?(weak )?(?:private )?external (?:\[[^]]*\]\s+)*(\S+)',line)
         if not m:continue
         kind,is_weak,name=m.groups()
         if kind=='undefined':(weak_imports if is_weak else undefined).add(name)
