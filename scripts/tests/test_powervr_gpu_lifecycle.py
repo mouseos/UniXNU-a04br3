@@ -63,10 +63,13 @@ extern void disable_preemption();extern void enable_preemption();
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
+#include <string>
 using vm_offset_t=uintptr_t;
 struct IOLock {bool held=false;};
 void IOLockLock(IOLock *p){assert(!p->held);p->held=true;}
 void IOLockUnlock(IOLock *p){assert(p->held);p->held=false;}
+bool syncAll=false;
+bool PE_parse_boot_argn(const char *name,uint32_t *value,size_t size){assert(std::string(name)=="a04br3-gpu-bo-sync"&&size==sizeof(*value));*value=syncAll?1:0;return syncAll;}
 int allocations=0,failAllocation=0;
 void *kzallocBytes(size_t n){if(++allocations==failAllocation)return nullptr;return calloc(1,n);}
 void kfreeBytes(void *p,size_t){free(p);}
@@ -132,6 +135,11 @@ int main(){
  job.hosts=held;job.hosts_completed=false;job.failed=false;ctrValue=11ULL<<16;
  assert(native_powervr_fence_wait(&file,1,0)==-EIO&&job.failed&&!preemptDisabled);
  native_powervr_hosts_put(held);assert(host.refs==1);
+ syncAll=true;held=nullptr;ctrValue=4ULL<<16;plain.sg=spans;plain.nents=1;
+ assert(native_powervr_vm_hosts_snapshot(&vm,&held)==0&&held&&held->count==2);
+ assert(host.refs==2&&plain.refs==2);before=cacheOps;
+ assert(native_powervr_hosts_sync(held)==0&&cacheOps==before+(65+65)*4096/64);
+ native_powervr_hosts_put(held);assert(host.refs==1&&plain.refs==1&&!lock.held);
 }
 '''
         run_cpp(harness)
@@ -146,6 +154,7 @@ int main(){
 #include <cassert>
 #include <cstdint>
 #include <vector>
+#include <string>
 struct pvr_context {uint32_t ctx_id;int faulty=0;};
 struct xarray {bool held=false;pvr_context *contexts[8]{};};
 void xa_lock(xarray *x){assert(!x->held);x->held=true;}

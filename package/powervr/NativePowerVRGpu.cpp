@@ -1060,8 +1060,13 @@ extern "C" int native_powervr_vm_hosts_snapshot(struct native_powervr_vm_context
 {
   *out = nullptr;
   IOLockLock(vm->lock);
+  // Diagnostic only: actual user PTEs may remain WB even with explicit WC
+  // map options. Reuse the retained SG handoff protocol to isolate visibility
+  // from command encoding, without changing pmap attributes or reading bytes.
+  uint32_t requested = 0;
+  const bool allBos = PE_parse_boot_argn("a04br3-gpu-bo-sync", &requested, sizeof(requested)) && requested == 1;
   uint32_t capacity = 0;
-  for (uint32_t i = 0; i < vm->count; i++) if (vm->maps[i].bo->host) capacity++;
+  for (uint32_t i = 0; i < vm->count; i++) if (allBos || vm->maps[i].bo->host) capacity++;
   if (!capacity) { IOLockUnlock(vm->lock); return 0; }
   auto *hosts = static_cast<native_powervr_host_sync *>(kzallocBytes(sizeof(native_powervr_host_sync)));
   if (hosts) {
@@ -1075,7 +1080,7 @@ extern "C" int native_powervr_vm_hosts_snapshot(struct native_powervr_vm_context
   }
   for (uint32_t i = 0; i < vm->count; i++) {
     native_powervr_bo *bo = vm->maps[i].bo;
-    if (!bo->host) continue;
+    if (!allBos && !bo->host) continue;
     uint32_t n = 0;
     while (n < hosts->count && hosts->bos[n] != bo) n++;
     if (n == hosts->count) hosts->bos[hosts->count++] = native_powervr_bo_get(bo);
