@@ -81,7 +81,7 @@ static inline void pvr_darwin_sipf1_log(const char *text) {(void)text;}
 #define PVR_MEMLAYOUT_3DTWIDDLED 3
 #define PVR_HAS_FEATURE(d,f) ((d)->f)
 #define PVR_GET_FEATURE_VALUE(d,f,z) ((d)->f)
-#define PVR_HAS_ENHANCEMENT(d,n) false
+#define PVR_HAS_ENHANCEMENT(d,n) ((d)->ern42307)
 typedef struct {uint64_t addr;} pvr_dev_addr_t;
 #define PVR_DEV_ADDR(x) ((pvr_dev_addr_t){(x)})
 #define __pvr_address_type pvr_dev_addr_t
@@ -91,7 +91,7 @@ typedef struct {uint64_t addr;} pvr_dev_addr_t;
 #include "ipf.h"
 #include "cr.h"
 #include "vulkan/pvr_darwin_sipf1.h"
-struct pvr_device_info {struct {unsigned b,v,n,c;} ident;bool tile_size_16x16,simple_internal_parameter_format,simple_internal_parameter_format_v2,ipf_creq_pf;unsigned simple_parameter_format_version;};
+struct pvr_device_info {struct {unsigned b,v,n,c;} ident;bool tile_size_16x16,simple_internal_parameter_format,simple_internal_parameter_format_v2,ipf_creq_pf,ern42307;unsigned simple_parameter_format_version;};
 struct pvr_transfer_ctx {void *device;};
 struct pvr_transfer_3d_state {uint32_t pds_shader_task_offset,uni_tex_code_offset,uniform_data_size,tex_state_data_size,coeff_data_size,usc_coeff_regs,pds_temps,pds_coeff_task_offset,tex_state_data_offset,common_ptr;};
 struct pvr_transfer_cmd_source {struct {unsigned mem_layout;} surface;};
@@ -195,6 +195,37 @@ int main(void) {
 #else
  assert(!pvr_darwin_tq_sipf1(&d));
 #endif
+
+ /* Actual generated seven-DW packing: vendor bit14 parity and unchanged
+  * ERN42307 policy outside the exact opt-in core. Shared-size bits survive. */
+ for(unsigned ern=0;ern<2;ern++)for(unsigned core=0;core<2;core++)for(unsigned gate=0;gate<2;gate++){
+  struct pvr_device_info policy=d;policy.ern42307=ern;policy.ident.c+=!core;
+  assert(setenv("PVR_DARWIN_TQ_CLIP",gate?"1":"0",1)==0);
+  struct pvr_transfer_3d_state state={.common_ptr=17};uint32_t words[8];
+  for(unsigned i=0;i<8;i++)words[i]=0xbadface;
+  uint32_t *cur=words;pvr_isp_prim_block_pds_state(&policy,NULL,&state,&cur);
+  bool disable=!ern;
+#ifdef PVR_WINSYS_DARWIN
+  disable|=core&&gate;
+#endif
+  assert(words[6]==((2u<<23)|(disable?0x4000u:0u)));
+  assert(words[0]==0&&words[1]==0&&words[2]==0&&words[3]==0&&words[4]==0&&words[5]==0);
+  assert(cur==words+8&&words[7]==0xbadface);
+ }
+ assert(setenv("PVR_DARWIN_TQ_CLIP","1",1)==0);
+
+ {
+  struct pvr_device_info policy=d;policy.ern42307=true;
+  struct pvr_transfer_3d_state state={.pds_shader_task_offset=0x1000,.pds_temps=4};
+  uint32_t words[8]={0};uint32_t *cur=words;pvr_isp_prim_block_pds_state(&policy,NULL,&state,&cur);
+  assert(words[0]==0x1000&&words[1]==0&&words[2]==1&&words[3]==0&&words[4]==0&&words[5]==0);
+#ifdef PVR_WINSYS_DARWIN
+  assert(words[6]==0x4000); /* Captured fill vector: only DW6 bit14 changes. */
+#else
+  assert(words[6]==0);
+#endif
+ }
+ puts("actual PDS bit14: 8 ERN/core/opt-in cases passed; shared size and other DWs unchanged");
  unsigned fixtures=0;
 #ifdef PVR_WINSYS_DARWIN
  for(unsigned kind=0;kind<3;kind++) {
