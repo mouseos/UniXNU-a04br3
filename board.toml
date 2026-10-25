@@ -158,7 +158,7 @@ A04BR3_TEST_CYCLE = "1"
 # trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
 [payload]
 volume = "A04BR3ESP"
-size_mib = 96
+size_mib = 112  # GPU addon plus kernel; the complete boot.img still fits the 128 MiB boot partition.
 loader = "firmware"
 title = "Boot"
 dram_size = "0x80000000"             # 2 GiB at 0x40000000 (MT8167 EMI, LK memory node)
