@@ -52,8 +52,9 @@ def main():
                '--driver-name', LIB_NAME, '--driver-identifier', LIB_IDENTIFIER, '--identifier', 'org.unixnu.a04br3.' + NAME,
                '--board-source', str(board), '--out', str(args.out.resolve()), '--portable-sha2']
     if args.sipf1_dump:
-        args.out.mkdir(parents=True, exist_ok=True)
-        diagnostic = args.out.resolve() / 'sipf1-dump-enable.mm'
+        # The generic builder recreates OUT; generated input must be its sibling.
+        args.out.resolve().parent.mkdir(parents=True, exist_ok=True)
+        diagnostic = args.out.resolve().with_name(args.out.name + '.sipf1-dump-enable.mm')
         diagnostic.write_text(
             '#include <stdlib.h>\n'
             '__attribute__((constructor)) static void a04br3_sipf1_dump_enable(void) {\n'
