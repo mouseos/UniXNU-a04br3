@@ -187,6 +187,9 @@ PowerVR driver (`scripts/build-pvr-darwin.py`), clears an image on the GPU and r
 - Incremental builds: `build-a04br3-powervr-probe.py --trust-base TRUSTCACHE --trust-out OWNER --addon ADDON`, then
   `unixnu build payload --owner-trust-cache OWNER --gpu-addon ADDON` with the kernel argument `sheng-gpu-addon=1`.
 - Host check: `python3 scripts/build-a04br3-powervr-probe.py --check`.
+- Terminal PPP packing regression: after building Mesa, run `python3 scripts/check-pvr-terminate-units.py`
+  (or pass `--mesa PATH --ppp-header PATH` for other build directories). This runs the actual function and generated
+  packers with ASan/UBSan on the host, without GPU access.
 
 The Vulkan stage first checks a fresh linear render-pass clear without a draw, then a linear triangle with CPU direct
 readback, then separately fenced transfer clear and copy, and finally the required optimal-image triangle/readback.
