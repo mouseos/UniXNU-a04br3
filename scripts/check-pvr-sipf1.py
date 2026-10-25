@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix='pvr-sipf1-') as tmp:
         '--include=src/imagination/vulkan/pvr_darwin_sipf1.h',
         str(ROOT / 'patches/mesa/pvr-darwin-winsys.patch')], cwd=out, check=True)
     img = out / 'src/imagination'
-    for kind in ('ppp', 'ipf'):
+    for kind in ('ppp', 'ipf', 'cr'):
         with (out / (kind + '.h')).open('w') as f:
             subprocess.run([sys.executable, str(img / 'csbgen/gen_pack_header.py'),
                 str(img / ('csbgen/rogue/' + kind + '.xml'))], stdout=f, check=True)
@@ -71,6 +71,7 @@ with tempfile.TemporaryDirectory(prefix='pvr-sipf1-') as tmp:
 #define STATIC_ASSERT(x) _Static_assert(x,#x)
 #define UNUSED __attribute__((unused))
 #define ALIGN_POT(x,a) (((x)+(a)-1)&~((a)-1))
+#define MIN2(x,y) ((x)<(y)?(x):(y))
 #define DIV_ROUND_UP(n,d) (((n)+(d)-1)/(d))
 #define PVR_DW_TO_BYTES(x) ((x)*4)
 #define PVR_TRANSFER_NUM_LAYERS 1
@@ -85,6 +86,7 @@ typedef struct {uint64_t addr;} pvr_dev_addr_t;
 #define __pvr_make_address(x) PVR_DEV_ADDR(x)
 #include "ppp.h"
 #include "ipf.h"
+#include "cr.h"
 #include "vulkan/pvr_darwin_sipf1.h"
 struct pvr_device_info {struct {unsigned b,v,n,c;} ident;bool tile_size_16x16,simple_internal_parameter_format,simple_internal_parameter_format_v2,ipf_creq_pf;unsigned simple_parameter_format_version;};
 struct pvr_transfer_ctx {void *device;};
@@ -120,6 +122,15 @@ static int region_fixture(const struct pvr_device_info *dev_info,unsigned blocks
  unsigned sipf1_region_index=0,free_ctrl_stream_words=32;
  bool was_linked=false;
 '''
+    rgn_start = ctrl.index('if (sipf1 && PVR_HAS_FEATURE(dev_info, ipf_creq_pf))')
+    rgn_end = ctrl.index('\n\n   return VK_SUCCESS;', rgn_start)
+    rgn_block = ctrl[rgn_start:rgn_end]
+    h += '\nstatic uint32_t rgn_fixture(const struct pvr_device_info *dev_info,bool sipf1,unsigned num_prim_blks,unsigned sipf1_region_index,bool was_linked) {\nstruct {uint32_t isp_rgn;} storage={0},*regs=&storage;\n'
+    h += rgn_block + '\nreturn regs->isp_rgn; }\n'
+    # region_fixture's declaration was already emitted; move this definition before it.
+    mark=h.index('/* Actual link/cursor/termination source blocks;')
+    split=h.index('static uint32_t rgn_fixture(',mark)
+    h=h[:mark]+h[split:]+h[mark:split]
     # Keep the error return in the extracted block, but free the fixture's allocation.
     h += 'for(unsigned n=0;n<blocks;n++) {\n' + min_free + '\n'
     h += link_branch.replace('return vk_error(ctx->device, VK_ERROR_FORMAT_NOT_SUPPORTED);',
@@ -133,6 +144,8 @@ static int region_fixture(const struct pvr_device_info *dev_info,unsigned blocks
     h += final_assert + '\n' + end_record
     h += r'''
  assert(num_region_arrays==reserved);
+ uint32_t rgn=rgn_fixture(dev_info,true,blocks,sipf1_region_index,was_linked);
+ assert(rgn==(dev_info->ipf_creq_pf?((blocks>15?31u:blocks)<<24):0));
  assert(sipf1_region_index==(blocks-1)/15);
  for(unsigned r=0;r<reserved;r++) {
   unsigned first=r*15,records=blocks-first;if(records>15)records=15;
@@ -210,6 +223,16 @@ int main(void) {
   for(unsigned i=0;i<sizeof(blocks)/sizeof(blocks[0]);i++)assert(region_fixture(&d,blocks[i],0)==0);
   assert(region_fixture(&d,16,1)==VK_ERROR_FORMAT_NOT_SUPPORTED);
  }
+ for(unsigned n=1;n<=40;n++){
+  assert(rgn_fixture(&d,true,n,0,false)==((n<31?n:31u)<<24));
+  assert(rgn_fixture(&d,true,n,1,true)==0x1f000000);
+ }
+ assert(rgn_fixture(&d,false,1,0,false)==0); /* legacy */
+ d.simple_internal_parameter_format_v2=true;
+ assert(rgn_fixture(&d,false,1,0,false)==0);
+ assert(rgn_fixture(&d,false,16,0,true)==0x01000000); /* existing v2 link bit */
+ d.simple_internal_parameter_format_v2=false;
+ puts("actual RGN block: 80 count/saturation/link cases + legacy/v2 controls passed");
  puts("actual link/cursor/end blocks: 20 boundary cases + 2 allocation-limit rejections passed");
  printf("actual ISP/PDS/size fixtures=%u; v1 region capacity=%u\n",fixtures,capacity);
 #else
