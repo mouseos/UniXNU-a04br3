@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // powervrprobed, the Mesa stage (built with POWERVRPROBED_VULKAN=1 by scripts/build-a04br3-powervr-probe.py --vulkan):
 // the PowerVR Vulkan driver of scripts/build-pvr-darwin.py (libvulkan_powervr_mesa.dylib with the darwin winsys of
-// patches/mesa/pvr-darwin-winsys.patch) clears an image, then draws a triangle and reads both back.
+// patches/mesa/pvr-darwin-winsys.patch) first tests direct linear rendering when supported,
+// then requires a transfer clear/readback and an optimal-image triangle/readback.
 //
 //   dlopen(library) -> vkGetInstanceProcAddr (the darwin patch exports it, pvr_instance.c; there is no Khronos loader)
 //   vkCreateInstance -> vkEnumeratePhysicalDevices (the darwin winsys opens NativePowerVRGpu) -> vkCreateDevice (one queue)
@@ -121,8 +122,8 @@ static void triangleCoverageGrid(const volatile uint8_t *pixels, const uint8_t f
   }
 }
 
-// Vertex + fragment execution, separate from transfer-only clear/copy. Call only after
-// the first submission has completed. Geometry has no vertex buffers or descriptors.
+// Vertex + fragment execution, separate from transfer-only clear/copy.
+// Geometry has no vertex buffers or descriptors; direct readback does not use TQ.
 struct TriangleDirectReadback { VkDeviceSize offset, rowPitch; };
 
 static int triangleProbeReadback(VkDevice device, VkQueue queue, VkCommandPool pool, VkImage image, VkBuffer buffer,
@@ -511,6 +512,10 @@ int probe_vulkan(const char *library)
   const VkCommandBufferAllocateInfo cmdInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandBufferCount = 1,
                                                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY};
   if (!vkStep("vkCreateCommandPool", p_vkCreateCommandPool(device, &poolInfo, NULL, &pool), NULL)) goto out_objects;
+  // Run the TQ-independent comparison before any transfer submission: a transfer
+  // context lockup must not prevent observation of the render path. All required
+  // transfer and optimal-copy checks below still determine the final result.
+  const int linearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures);
   VkCommandBufferAllocateInfo cmdAlloc = cmdInfo;
   cmdAlloc.commandPool = pool;
   const VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -563,7 +568,6 @@ int probe_vulkan(const char *library)
              kWidth * kHeight, first, pixels[first * 4], pixels[first * 4 + 1], pixels[first * 4 + 2], pixels[first * 4 + 3],
              kClear[0], kClear[1], kClear[2], kClear[3]);
   const int clearOK = vkCheck("clear readback", match == kWidth * kHeight, detail);
-  const int linearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures);
   const int triangleOK = triangleProbe(device, queue, pool, image, buffer, bufferMemory, mapped, coherent);
   if (clearOK && triangleOK && linearOK != 0) result = 0;
 

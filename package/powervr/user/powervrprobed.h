@@ -13,8 +13,8 @@ void probe_line(const char *format, ...) __attribute__((format(printf, 1, 2)));
 void probe_pass(void);
 void probe_fail(void);
 
-/* The Mesa stage: vkCreateInstance .. vkCreateDevice, a cleared image read back through a buffer. Returns 0 when the read
- * back matches, a negative number otherwise. Built only with POWERVRPROBED_VULKAN=1 (powervrprobed_vulkan.c). */
+/* The Mesa stage: direct linear rendering when supported, then required clear/readback and optimal triangle/readback.
+ * Returns 0 only when all required checks and any supported direct-render check match, a negative number otherwise. Built only with POWERVRPROBED_VULKAN=1 (powervrprobed_vulkan.c). */
 int probe_vulkan(const char *library);
 
 #endif
