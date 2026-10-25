@@ -406,6 +406,8 @@ int probe_vulkan(const char *library)
 {
   // Owner probe only: the Darwin winsys bounds its opt-in geometry trace to 32 lines.
   if (setenv("PVR_DARWIN_DEBUG_GEOMETRY", "1", 1) != 0) return -1;
+  // Owner probe only: compare the vendor ISP overlap policy; apps keep the default off.
+  if (setenv("PVR_DARWIN_VENDOR_ISP_OVERLAP", "1", 1) != 0) return -1;
   char detail[256];
   setenv("PVR_I_WANT_A_BROKEN_VULKAN_DRIVER", "1", 1);
   void *driver = dlopen(library, RTLD_NOW | RTLD_LOCAL);

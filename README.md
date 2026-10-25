@@ -188,6 +188,13 @@ PowerVR driver (`scripts/build-pvr-darwin.py`), clears an image on the GPU and r
   `unixnu build payload --owner-trust-cache OWNER --gpu-addon ADDON` with the kernel argument `sheng-gpu-addon=1`.
 - Host check: `python3 scripts/build-a04br3-powervr-probe.py --check`.
 
+The Vulkan stage first checks a fresh linear render-pass clear without a draw, then a linear triangle with CPU direct
+readback, then separately fenced transfer clear and copy, and finally the required optimal-image triangle/readback.
+Supported direct-render tests must pass their complete pixel checks; unsupported linear attachments are explicitly skipped.
+The owner probe enables `PVR_DARWIN_VENDOR_ISP_OVERLAP=1` for a diagnostic comparison with the MT8167 vendor driver's
+ISP_CTL bit 19 policy (REA `libsrv_um.so` `FUN_0012877c`). The Mesa change is compiled only for the Darwin winsys,
+defaults off in applications, and matches only BVNC 22.40.54.30. This comparison is not a verified rendering fix.
+
 ## GPU compositing (PowerVR Metal plugin)
 
 QuartzCore renders through the native Metal frontend of UniXNU on the GE8300: Metal, metal2vulkan, Mesa's PowerVR Vulkan

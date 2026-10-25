@@ -220,20 +220,22 @@ index f420deb..c650d83 100644
  
  /* TODO: Split this into smaller functions to make it easier to follow. When
 diff --git a/src/imagination/vulkan/pvr_arch_job_render.c b/src/imagination/vulkan/pvr_arch_job_render.c
-index f1cc515..b860cf3 100644
+index f1cc515..bb5ab41 100644
 --- a/src/imagination/vulkan/pvr_arch_job_render.c
 +++ b/src/imagination/vulkan/pvr_arch_job_render.c
-@@ -28,6 +28,9 @@
+@@ -28,6 +28,11 @@
  
  #include "hwdef/rogue_hw_defs.h"
  #include "hwdef/rogue_hw_utils.h"
 +#ifdef PVR_WINSYS_DARWIN
++#include <stdlib.h>
++#include <string.h>
 +#include "winsys/darwin/pvr_darwin.h"
 +#endif
  #include "pvr_bo.h"
  #include "pvr_border.h"
  #include "pvr_cmd_buffer.h"
-@@ -126,7 +129,20 @@ void pvr_arch_rt_mtile_info_init(const struct pvr_device_info *dev_info,
+@@ -126,7 +131,20 @@ void pvr_arch_rt_mtile_info_init(const struct pvr_device_info *dev_info,
  
     rogue_get_num_macrotiles_xy(dev_info, &info->mtiles_x, &info->mtiles_y);
  
@@ -255,7 +257,7 @@ index f1cc515..b860cf3 100644
        assert(PVR_GET_FEATURE_VALUE(dev_info,
                                     simple_parameter_format_version,
                                     0) == 2);
-@@ -155,6 +171,12 @@ void pvr_arch_rt_mtile_info_init(const struct pvr_device_info *dev_info,
+@@ -155,6 +173,12 @@ void pvr_arch_rt_mtile_info_init(const struct pvr_device_info *dev_info,
  
     info->tiles_per_mtile_x = info->mtile_x1 * samples_in_x;
     info->tiles_per_mtile_y = info->mtile_y1 * samples_in_y;
@@ -268,6 +270,27 @@ index f1cc515..b860cf3 100644
  }
  
  /* Note that the unit of the return value depends on the GPU. For cores with the
+@@ -1143,6 +1167,20 @@ static void pvr_frag_state_stream_init(struct pvr_render_ctx *ctx,
+    pvr_csb_pack (stream_ptr, CR_ISP_CTL, value) {
+       value.sample_pos = true;
+       value.process_empty_tiles = job->process_empty_tiles;
++#ifdef PVR_WINSYS_DARWIN
++      /* MT8167's vendor DDK sets ISP_CTL bit 19 for every fragment render
++       * (libsrv_um.so FUN_0012877c). Keep this comparison opt-in and local to
++       * the observed 22.40.54.30 core; it is not a verified rendering fix.
++       */
++      const char *vendor_overlap = getenv("PVR_DARWIN_VENDOR_ISP_OVERLAP");
++      if (dev_info->ident.b == 22 && dev_info->ident.v == 40 &&
++          dev_info->ident.n == 54 && dev_info->ident.c == 30 &&
++          vendor_overlap && strcmp(vendor_overlap, "1") == 0) {
++         value.overlap_check_mode = true;
++         pvr_darwin_debug("vendor ISP overlap bit19 enabled on 22.40.54.30");
++      }
++#endif
++
+ 
+       /* For integer depth formats we'll convert the specified floating point
+        * depth bias values and specify them as integers. In this mode a depth
 diff --git a/src/imagination/vulkan/pvr_device.c b/src/imagination/vulkan/pvr_device.c
 index 7ba4fb8..654f737 100644
 --- a/src/imagination/vulkan/pvr_device.c
