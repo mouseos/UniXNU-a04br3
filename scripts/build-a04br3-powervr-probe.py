@@ -159,6 +159,17 @@ def sipf1_dump_probe_source():
         'PVR_PROBE_TQ_FIRST', 'PVR_DARWIN_SIPF1_DUMP').replace('TQ-first comparison', 'SIPF1 dump comparison')
 
 
+def roa_color_probe_source():
+    """Select the owner overlap test and the separate qualified Mesa prototype."""
+    return tq_first_probe_source().replace('enable_tq_first_comparison', 'enable_roa_color_comparison').replace(
+        'PVR_PROBE_TQ_FIRST', 'PVR_PROBE_ROA_COLOR').replace('TQ-first comparison', 'COLOR ROA comparison') + r'''
+__attribute__((constructor)) static void enable_roa_color_driver(void)
+{
+    if (setenv("PVR_DARWIN_ROA_COLOR", "1", 1) != 0) _Exit(1);
+}
+'''
+
+
 def job_plist():
     return plistlib.dumps(dict(Label=LABEL, ProgramArguments=[DEVICE_BIN], RunAtLoad=True, KeepAlive=False, UserName='root',
                                StandardErrorPath='/dev/null'), fmt=plistlib.FMT_XML)
@@ -347,6 +358,10 @@ def build(args, powervr):
         comparison = out / 'powervrprobed-sipf1-dump.c'
         comparison.write_text(sipf1_dump_probe_source())
         sources.append(str(comparison))
+    if args.roa_color:
+        comparison = out / 'powervrprobed-roa-color.c'
+        comparison.write_text(roa_color_probe_source())
+        sources.append(str(comparison))
     daemon = out / 'powervrprobed'
     subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O2', '-g',
                     '-fstack-protector-strong', *cflags, *sources, '-o', str(daemon)], check=True)
@@ -466,6 +481,7 @@ def main():
     parser.add_argument('--serial-transfer', action='store_true', help='wait transfer fences synchronously for overlap comparison')
     parser.add_argument('--sipf1-encoding', action='store_true', help='enable SIPF1 encoding without forcing TQ Clip routing')
     parser.add_argument('--sipf1-dump', action='store_true', help='enable existing bounded SIPF1 snapshots in this owner probe')
+    parser.add_argument('--roa-color', action='store_true', help='experimental GE8300 COLOR ROA driver and same-draw 128-instance overlap probe')
     parser.add_argument('--ui-batch', action='store_true', help='four-mip UI-shaped clear/copy batch; skips original tests')
     parser.add_argument('--ui-fill', action='store_true', help='388x12 optimal BGRA clear/copy comparison; skips original tests')
     args = parser.parse_args()
@@ -491,6 +507,10 @@ def main():
         parser.error('--sipf1-encoding requires --vulkan')
     if args.sipf1_dump and args.vulkan is None:
         parser.error('--sipf1-dump requires --vulkan')
+    if args.roa_color and args.vulkan is None:
+        parser.error('--roa-color requires --vulkan')
+    if args.roa_color and (args.ui_fill or args.ui_batch or args.tq_first or args.tq_clip):
+        parser.error('--roa-color must run independently of UI/TQ comparisons')
     if args.ui_fill and args.vulkan is None:
         parser.error('--ui-fill requires --vulkan')
     if args.tq_first and args.vulkan is None:

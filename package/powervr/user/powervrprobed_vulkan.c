@@ -35,7 +35,7 @@ static const uint8_t kClear[4] = {0x11, 0x5a, 0xa5, 0xee};
   X(vkDestroyInstance) X(vkEnumeratePhysicalDevices) X(vkGetPhysicalDeviceProperties) X(vkGetPhysicalDeviceProperties2)    \
   X(vkGetPhysicalDeviceQueueFamilyProperties) X(vkGetPhysicalDeviceMemoryProperties) X(vkGetPhysicalDeviceFormatProperties) \
   X(vkEnumerateDeviceExtensionProperties) X(vkGetPhysicalDeviceExternalBufferProperties)                              \
-  X(vkCreateDevice) X(vkGetDeviceProcAddr)
+  X(vkCreateDevice) X(vkGetDeviceProcAddr) X(vkGetPhysicalDeviceFeatures2)
 #define VK_DEVICE_FUNCTIONS(X)                                                                                                \
   X(vkDestroyDevice) X(vkGetDeviceQueue) X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements)                  \
   X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) X(vkAllocateMemory) X(vkFreeMemory)                 \
@@ -47,6 +47,8 @@ static const uint8_t kClear[4] = {0x11, 0x5a, 0xa5, 0xee};
   X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateRenderPass) X(vkDestroyRenderPass)                                   \
   X(vkCreateFramebuffer) X(vkDestroyFramebuffer) X(vkCreateShaderModule) X(vkDestroyShaderModule)                           \
   X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) X(vkCreateGraphicsPipelines) X(vkDestroyPipeline)                    \
+  X(vkCreateDescriptorSetLayout) X(vkDestroyDescriptorSetLayout) X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) \
+  X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) X(vkCmdBindDescriptorSets) \
   X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) X(vkCmdDraw)
 
 #define DECLARE(name) static PFN_##name p_##name;
@@ -614,6 +616,8 @@ cleanup:
   return ok;
 }
 
+#include "powervrprobed_roa.h"
+
 int probe_vulkan(const char *library)
 {
   // Owner probe only: the Darwin winsys bounds its opt-in geometry trace to 32 lines.
@@ -622,10 +626,13 @@ int probe_vulkan(const char *library)
   if (unsetenv("PVR_DARWIN_VENDOR_ISP_OVERLAP") != 0) return -1;
   if (setenv("PVR_DARWIN_TERMINATE_TILE_UNITS", "1", 1) != 0) return -1;
   if (setenv("PVR_DARWIN_BUFFER_GUARD", "1", 1) != 0) return -1;
+  const char *roaFlag=getenv("PVR_PROBE_ROA_COLOR");
+  const int roa=roaFlag && strcmp(roaFlag,"1")==0;
   const char *uiBatchFlag = getenv("PVR_PROBE_UI_BATCH");
   const int uiBatch = uiBatchFlag && strcmp(uiBatchFlag, "1") == 0;
   const char *uiFillFlag = getenv("PVR_PROBE_UI_FILL");
   const int uiFill = uiBatch || (uiFillFlag && strcmp(uiFillFlag, "1") == 0);
+  if(roa && uiFill){vkCheck("ROA exclusive mode",0,"unset UI_FILL/UI_BATCH for the independent overlap test");return -1;}
   const uint32_t width = uiFill ? 388U : kWidth, height = uiFill ? 12U : kHeight;
   const uint32_t mipLevels = uiBatch ? 4U : 1U;
   uint32_t pixelCount = 0;
@@ -634,7 +641,7 @@ int probe_vulkan(const char *library)
     const uint32_t h = (height >> level) ? height >> level : 1U;
     pixelCount += w * h;
   }
-  const VkFormat imageFormat = uiFill ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
+  const VkFormat imageFormat = roa ? VK_FORMAT_R32_UINT : uiFill ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
   const uint8_t expected[4] = {uiFill ? kClear[2] : kClear[0], kClear[1], uiFill ? kClear[0] : kClear[2], kClear[3]};
   if (uiBatch) {
     probe_line("vk UI-batch comparison: optimal B8G8R8A8_UNORM mips 388x12/194x6/97x3/48x1, 6159 pixels; exact UI format not established");
@@ -693,7 +700,7 @@ int probe_vulkan(const char *library)
              (unsigned)driverProperties.conformanceVersion.major, (unsigned)driverProperties.conformanceVersion.minor,
              (unsigned)driverProperties.conformanceVersion.subminor, (unsigned)driverProperties.conformanceVersion.patch);
   probe_line("vk driverInfo: '%.*s'", (int)sizeof(driverProperties.driverInfo), driverProperties.driverInfo);
-  const int hostImport = uiFill ? 0 : hostImportSupported(physical);
+  const int hostImport = (uiFill || roa) ? 0 : hostImportSupported(physical);
   VkPhysicalDeviceExternalMemoryHostPropertiesEXT hostProperties = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
   if (hostImport == 1) {
@@ -713,19 +720,24 @@ int probe_vulkan(const char *library)
   VkFormatProperties format;
   p_vkGetPhysicalDeviceFormatProperties(physical, imageFormat, &format);
   snprintf(detail, sizeof detail, "optimal features 0x%x", format.optimalTilingFeatures);
-  vkCheck(uiFill ? "UI-fill B8G8R8A8_UNORM transfer" : "R8G8B8A8_UNORM transfer", (format.optimalTilingFeatures & (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+  vkCheck(roa ? "ROA R32_UINT transfer" : uiFill ? "UI-fill B8G8R8A8_UNORM transfer" : "R8G8B8A8_UNORM transfer", (format.optimalTilingFeatures & (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                                       VK_FORMAT_FEATURE_TRANSFER_DST_BIT)) == (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                                       VK_FORMAT_FEATURE_TRANSFER_DST_BIT), detail);
 
-  if (!vkCheck(uiFill ? "UI-fill B8G8R8A8_UNORM color attachment" : "R8G8B8A8_UNORM color attachment",
+  if (!vkCheck(roa ? "ROA R32_UINT color attachment" : uiFill ? "UI-fill B8G8R8A8_UNORM color attachment" : "R8G8B8A8_UNORM color attachment",
                (format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0, detail)) goto out_instance;
 
   const float priority = 1.0f;
   const VkDeviceQueueCreateInfo queueInfo = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = family,
                                              .queueCount = 1, .pQueuePriorities = &priority};
+  if(roa && !roaSupported(physical))goto out_instance;
+  VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT roaEnable={
+      .sType=VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT,
+      .rasterizationOrderColorAttachmentAccess=VK_TRUE};
+  const char *extensions[]={roa?VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME:VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME};
   const VkDeviceCreateInfo deviceInfo = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = 1,
-      .pQueueCreateInfos = &queueInfo, .enabledExtensionCount = hostImport == 1 ? 1u : 0u,
-      .ppEnabledExtensionNames = (const char *const[]){VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME}};
+      .pNext=roa?&roaEnable:NULL,.pQueueCreateInfos = &queueInfo, .enabledExtensionCount = roa || hostImport == 1 ? 1u : 0u,
+      .ppEnabledExtensionNames = extensions};
   if (!vkStep("vkCreateDevice", p_vkCreateDevice(physical, &deviceInfo, NULL, &device), NULL)) goto out_instance;
 #define LOAD(name) p_##name = (PFN_##name)p_vkGetDeviceProcAddr(device, #name);
   VK_DEVICE_FUNCTIONS(LOAD)
@@ -750,7 +762,7 @@ int probe_vulkan(const char *library)
   const VkImageCreateInfo imageInfo = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = imageFormat,
       .extent = {width, height, 1}, .mipLevels = mipLevels, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
-      .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+      .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (roa ? VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT : 0),
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
   if (!vkStep("vkCreateImage", p_vkCreateImage(device, &imageInfo, NULL, &image), NULL)) goto out_device;
   VkMemoryRequirements need;
@@ -788,6 +800,11 @@ int probe_vulkan(const char *library)
   const VkCommandBufferAllocateInfo cmdInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandBufferCount = 1,
                                                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY};
   if (!vkStep("vkCreateCommandPool", p_vkCreateCommandPool(device, &poolInfo, NULL, &pool), NULL)) goto out_objects;
+  if(roa){
+    probe_line("ROA prototype: R32_UINT same attachment input/color; 128 instances in ONE draw; no SG setting changes");
+    result=roaProbe(device,queue,pool,image,buffer,bufferMemory,mapped,coherent)?0:-1;
+    goto out_objects;
+  }
   // Default order preserves the independent render evidence before TQ. The
   // owner-only comparison defers these same checks until TQ readback succeeds.
   int linearClearOK = 0, linearOK = 0;
