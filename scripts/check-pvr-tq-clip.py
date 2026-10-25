@@ -32,7 +32,7 @@ reroute = function('static VkResult pvr_reroute_to_clip(')
 policy = function('static bool pvr_darwin_tq_clip_enabled(')
 # Full custom-mapping branch returns before the opt-in. Clip's background setup
 # goes directly to core; it cannot recursively enter the instrumented wrapper.
-assert wrapper.index('return result;') < wrapper.index('pvr_darwin_tq_clip_enabled(')
+assert wrapper.index('return result;') < wrapper.index('if (pvr_darwin_tq_clip_enabled(')
 clip = function('static VkResult pvr_3d_clip_blit(')
 assert 'pvr_3d_copy_blit_core(ctx, &bg_cmd' in clip and 'pvr_3d_copy_blit(' not in clip
 ctrl = function('static VkResult pvr_isp_ctrl_stream(')
@@ -64,13 +64,14 @@ struct pvr_device {struct pvr_physical_device *pdevice;};
 struct pvr_transfer_ctx {struct pvr_device *device;};
 typedef struct VkRect2D {struct{int x,y;}offset;struct{unsigned width,height;}extent;} VkRect2D;
 struct pvr_rect_mapping {VkRect2D src_rect,dst_rect;};
-struct surface {int vk_format;unsigned sample_count;};
+struct surface {unsigned vk_format,sample_count,mem_layout,width,height,stride;};
 struct pvr_transfer_cmd_source {struct surface surface;struct pvr_rect_mapping mappings[4];};
 struct pvr_transfer_cmd {unsigned flags,source_count;struct surface dst;struct pvr_transfer_cmd_source sources[3];VkRect2D scissor;unsigned clear[4];};
 struct pvr_transfer_pass {struct{unsigned mapping_count;struct pvr_rect_mapping mappings[4];}sources[3];unsigned source_count;};
 struct mapping {unsigned pass_count,texel_extend_src,texel_extend_dst;bool double_stride;struct pvr_transfer_pass passes[4];};
 struct pvr_transfer_3d_state {bool dont_force_pbe,custom_filter;unsigned pass_idx;int filter[3];struct mapping custom_mapping;};
 struct pvr_transfer_prep_data {struct pvr_transfer_3d_state state;};
+static void pvr_darwin_sipf1_log(const char *s){(void)s;}
 static struct mapping prepared;
 static struct pvr_transfer_cmd last;
 static unsigned coreCalls,clipCalls,modified,fixtures;
@@ -99,7 +100,12 @@ static void check(struct pvr_transfer_ctx *ctx,struct pvr_transfer_cmd *cmd,bool
 int main(void){
  struct pvr_physical_device pd={.dev_info={.ident={22,40,54,30},.tile_size_16x16=true,.simple_parameter_format_version=1}};
  struct pvr_device dev={&pd};struct pvr_transfer_ctx ctx={&dev};
- struct pvr_transfer_cmd cmd={.flags=PVR_TRANSFER_CMD_FLAGS_FILL,.source_count=0,.dst={1000,1},.scissor={{3,5},{388,12}},.clear={0xaabbccdd,2,3,4}};
+ struct pvr_transfer_cmd cmd={.flags=PVR_TRANSFER_CMD_FLAGS_FILL,.source_count=0,.dst={.vk_format=1000,.sample_count=1},.scissor={{3,5},{388,12}},.clear={0xaabbccdd,2,3,4}};
+ assert(!unsetenv("PVR_DARWIN_SIPF1_DUMP"));
+ assert(!unsetenv("PVR_DARWIN_TQ_CLIP"));
+ assert(!setenv("PVR_DARWIN_SIPF1","1",1));
+ check(&ctx,&cmd,false); /* Encoding alone never forces the wrapper to Clip. */
+ assert(!unsetenv("PVR_DARWIN_SIPF1"));
  const char *values[]={NULL,"","0","true","01","1x","1"};
  for(unsigned i=0;i<sizeof(values)/sizeof(*values);++i){if(values[i])assert(!setenv("PVR_DARWIN_TQ_CLIP",values[i],1));else assert(!unsetenv("PVR_DARWIN_TQ_CLIP"));
 #ifdef PVR_WINSYS_DARWIN

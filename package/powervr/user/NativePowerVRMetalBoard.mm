@@ -93,9 +93,9 @@ extern "C" void native_metal_board_prepare(unsigned port) {
     setenv("PVR_DARWIN_TERMINATE_TILE_UNITS", "1", 1);
     // Preserve exact caller host ranges; Mesa backs overfetch in separate GPU VA.
     setenv("PVR_DARWIN_BUFFER_GUARD", "1", 1);
-    // The standalone clip comparison passes the original render/TQ readbacks.
-    // UI and host-import completion remain separate real-device checks.
-    setenv("PVR_DARWIN_TQ_CLIP", "1", 1);
+    // Use vendor-parity v1 records when Clip is naturally selected. Routing
+    // remains upstream's choice unless an external TQ_CLIP experiment is set.
+    setenv("PVR_DARWIN_SIPF1", "1", 1);
     unsetenv("PVR_DARWIN_VENDOR_ISP_OVERLAP");
     // The metal2vulkan runtime keeps its own pipeline cache; Mesa's disk cache would write below a home the sandbox may refuse.
     setenv("MESA_SHADER_CACHE_DISABLE", "true", 0);

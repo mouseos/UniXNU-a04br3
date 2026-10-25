@@ -187,6 +187,7 @@ int main(void) {
  assert(!pvr_sipf1_primitive(0x80,2,true,&word));
  assert(!pvr_sipf1_vertex_header(0,0,&header));
  assert(!pvr_sipf1_vertex_header(4,512,&header));
+ assert(unsetenv("PVR_DARWIN_SIPF1")==0);
  assert(unsetenv("PVR_DARWIN_TQ_CLIP")==0);
  assert(!pvr_darwin_tq_sipf1(&d));
  assert(setenv("PVR_DARWIN_TQ_CLIP","1",1)==0);
@@ -196,6 +197,23 @@ int main(void) {
  assert(!pvr_darwin_tq_sipf1(&d));
 #endif
 
+ /* Naturally selected Clip can use v1 encoding without forced routing. */
+ assert(unsetenv("PVR_DARWIN_TQ_CLIP")==0);
+ assert(setenv("PVR_DARWIN_SIPF1","1",1)==0);
+ {
+  struct pvr_device_info policy=d;policy.ern42307=true;
+  struct pvr_transfer_3d_state state={0};uint32_t words[16]={0};uint32_t *cur=words;
+  pvr_isp_prim_block_pds_state(&policy,NULL,&state,&cur);
+#ifdef PVR_WINSYS_DARWIN
+  assert(words[6]==0x4000&&pvr_transfer_prim_blocks_per_alloc(&policy)==15);
+  cur=words;pvr_isp_prim_block_isp_state(&policy,0,0,4,false,&cur);
+  assert(cur==words+4&&words[0]==0x60&&words[2]==0x2e0000);
+#else
+  assert(words[6]==0&&pvr_transfer_prim_blocks_per_alloc(&policy)==8);
+#endif
+ }
+ assert(unsetenv("PVR_DARWIN_SIPF1")==0);
+ assert(setenv("PVR_DARWIN_TQ_CLIP","1",1)==0);
  /* Actual generated seven-DW packing: vendor bit14 parity and unchanged
   * ERN42307 policy outside the exact opt-in core. Shared-size bits survive. */
  for(unsigned ern=0;ern<2;ern++)for(unsigned core=0;core<2;core++)for(unsigned gate=0;gate<2;gate++){
