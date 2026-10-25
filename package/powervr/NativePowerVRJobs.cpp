@@ -240,7 +240,9 @@ struct PacketRecord {
   bool validSize;
   union { rogue_fwif_frag_regs frag; rogue_fwif_transfer_regs tq; } regs;
 };
-constexpr uint32_t kPacketRecords = 4;
+// Four UI mip clears are followed by four copies; retain both halves.
+// Still bounded and gated by the default-off a04br3-gpu-packet option.
+constexpr uint32_t kPacketRecords = 8;
 PacketRecord gPackets[kPacketRecords];
 uint32_t gPacketCount, gPacketPrinted; // gJobs.lock
 static_assert(sizeof(((rogue_fwif_frag_regs *)nullptr)->pbe_word) == 8 * 3 * sizeof(uint64_t), "FRAG PBE bounds");
