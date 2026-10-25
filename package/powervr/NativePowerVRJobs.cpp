@@ -58,6 +58,7 @@ extern "C" {
 }
 #include "native_powervr_internal.h"
 #include "native_powervr_jobs.h"
+#include "native_powervr_pte.h"
 #include "NativePowerVRABI.h"
 #undef min
 #undef max
@@ -230,7 +231,77 @@ struct Job {
   bool failed, timed_out;
   native_powervr_host_sync *hosts;
   bool hosts_completed;   // protected by gJobs.lock; success cannot precede the post-GPU cache maintenance
+  native_powervr_pte_snapshot *pte;
+  native_powervr_pte_record *pre_pte;
+  bool pte_requested;
 };
+
+// First two prepared transfers only; actual sequence/fence is attached at kick.
+// gJobs.lock protects the retained values and completion state.
+native_powervr_pte_record gPtes[2];
+uint32_t gPteCount;
+bool gPteDone[2], gPtePrinted;
+uint32_t gPtePrepared; // atomic, reserve at most two preparation/capture attempts globally
+uint64_t gPteSubmission; // atomic diagnostic submission number
+
+bool reservePte()
+{
+  uint32_t n = __atomic_load_n(&gPtePrepared, __ATOMIC_RELAXED);
+  while (n < 2)
+    if (__atomic_compare_exchange_n(&gPtePrepared, &n, n + 1, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return true;
+  return false;
+}
+
+void capturePte(Job *j)
+{
+  if (!j->pte_requested || gPteCount == 2) return;
+  auto &r = gPtes[gPteCount++];
+  r = j->pre_pte ? *j->pre_pte : native_powervr_pte_record{};
+  if (!j->pre_pte) for (auto &t : r.target) t.status = 5;
+  r.job = j->id; r.seqno = j->seqno; r.ctx = j->ctx->ctx_id; r.fence = j->fence;
+  // Values-only copy. Absolutely no VM/map/pmap operations under gJobs.lock.
+}
+
+void pteCompleted(const Job *j)
+{
+  for (uint32_t i = 0; i < gPteCount; ++i)
+    if (gPtes[i].ctx == j->ctx->ctx_id && gPtes[i].seqno == j->seqno && gPtes[i].fence == j->fence)
+      gPteDone[i] = true;
+}
+
+// Completion-thread only, after both sampled jobs complete or a failure is seen.
+// Snapshot values under the lock, then format/print outside every VM/pmap/jobs lock.
+void drainPtes(bool failed)
+{
+  if (!__atomic_load_n(&gPtePrepared, __ATOMIC_RELAXED)) return;
+  native_powervr_pte_record records[2];
+  IOLockLock(gJobs.lock);
+  const uint32_t count = gPteCount;
+  const bool ready = count == 2 && gPteDone[0] && gPteDone[1];
+  if (!count || gPtePrinted || (!ready && !failed)) { IOLockUnlock(gJobs.lock); return; }
+  memcpy(records, gPtes, count * sizeof(records[0]));
+  gPtePrinted = true;
+  IOLockUnlock(gJobs.lock);
+  for (uint32_t i = 0; i < count; ++i) {
+    const auto &r = records[i];
+    native_powervr_log("powervr: PTE pre-submit %llu index %u job %u ctx %u seq %u fence %llu fixed-NOP-probes (not decoded targets)\n",
+                       (unsigned long long)r.submission, r.index, r.job, r.ctx, r.seqno, (unsigned long long)r.fence);
+    for (unsigned n = 0; n < NATIVE_PVR_PTE_TARGETS; ++n) {
+      const auto &t = r.target[n];
+      native_powervr_log("powervr: PTE target %u gpu %llx status %u map %llx+%llx boOff %llx sgPA %llx options %x\n",
+        n, (unsigned long long)t.gpu, t.status, (unsigned long long)t.mapping_va,
+        (unsigned long long)t.mapping_size, (unsigned long long)t.bo_offset,
+        (unsigned long long)t.expected_pa, t.map_options);
+      const native_powervr_pte_alias *aliases[3] = {&t.user, &t.kernel, &t.physmap};
+      for (unsigned a = 0; a < 3; ++a) {
+        const auto &v = *aliases[a];
+        native_powervr_log("powervr: PTE alias %u va %llx pa %llx entry %llx root %llx MAIR %llx status %u level %u attr %u SH %u\n",
+          a, (unsigned long long)v.va, (unsigned long long)v.pa, (unsigned long long)v.entry,
+          (unsigned long long)v.root, (unsigned long long)v.mair, v.status, v.level, v.attr, v.sh);
+      }
+    }
+  }
+}
 
 // Values only: records remain valid after the job, queue, BO and context retire.
 struct PacketRecord {
@@ -1139,6 +1210,8 @@ u32 job_cmds_size(const Job *job, u32 ufo_wait_count)
 // pvr_job_release(); called without gJobs.lock (dropping the last context reference destroys the queues).
 void pvr_job_release(Job *job)
 {
+  native_powervr_pte_put(job->pte);
+  kfree(job->pre_pte);
   native_powervr_hosts_put(job->hosts);
   if (job->id) native_powervr_xa_erase(&gJobs.dev.job_ids, job->id);
   pvr_hwrt_data_put(job->hwrt);
@@ -1202,6 +1275,14 @@ int create_job(native_powervr_jobs_file *file, const native_powervr_job_submit *
   }
   err = native_powervr_vm_hosts_snapshot(nativeVm(job->ctx->vm_ctx), &job->hosts);
   if (err) goto err_put_job;
+  if (job->type == DRM_PVR_JOB_TYPE_TRANSFER_FRAG && job->cmd_len == sizeof(rogue_fwif_cmd_transfer)) {
+    job->pte_requested = native_powervr_pte_enabled() && reservePte();
+    if (job->pte_requested)
+      job->pte = native_powervr_pte_prepare(nativeVm(job->ctx->vm_ctx),
+                   static_cast<const rogue_fwif_cmd_transfer *>(job->cmd)->regs.isp_mtile_base);
+    if (job->pte_requested)
+      job->pre_pte = static_cast<native_powervr_pte_record *>(kzalloc(sizeof(native_powervr_pte_record), GFP_KERNEL));
+  }
   *out = job;
   return 0;
 
@@ -1342,6 +1423,7 @@ void run_job(Job *job, HwrtTrack *track)
   deps.n = 0;
   job->seqno = ++job->queue->seqno;
   hwrtDeps(job, track, deps);
+  capturePte(job);
   submit_job_to_cccb(job, deps);
   hwrtUpdate(job, track);
   const u32 ctx_fw_addr = pvr_context_get_fw_addr(job->ctx);
@@ -1381,6 +1463,7 @@ void complete_job_hosts(Job *job)
   if (job->hosts_completed) return;
   if (native_powervr_hosts_sync(job->hosts)) job->failed = true;
   job->hosts_completed = true;
+  pteCompleted(job);
   // gJobs.lock serializes worker/WaitFence; one snapshot per job, first four successful fragments globally.
   // Completion is observed before these reads, but later queued work can already have overwritten the live registers.
   static unsigned renderSnapshots;
@@ -1464,6 +1547,7 @@ void completionThread(void *, wait_result_t)
                                   notes[i].fault_address, notes[i].pc_address,
                                   notes[i].reason, notes[i].flags);
     drainPackets();
+    drainPtes(dump || nnotes != 0);
     list_for_each_entry_safe(j, n, &done, dev_link) {
       list_del(&j->dev_link);
       pvr_job_release(j);
@@ -1681,7 +1765,7 @@ extern "C" void native_powervr_hwrt_dataset_put(struct native_powervr_hwrt_datas
 
 // pvr_submit_jobs()
 extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file, const struct native_powervr_job_submit *jobs,
-                                          uint32_t count, uint64_t *fences)
+                                          uint32_t count, uint64_t *fences, native_powervr_pte_phase pte_phase, void *pte_cookie)
 {
   if (!file || !jobs || !fences || !count || count > NativePowerVRAbiMaxJobs) return -EINVAL;
   Job *js[NativePowerVRAbiMaxJobs] = {};
@@ -1691,6 +1775,26 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
   if (err) {
     for (uint32_t i = 0; i < count; i++)
       if (js[i]) pvr_job_release(js[i]);
+    return err;
+  }
+  // All referenced contexts/queues/HWRTs and BO/maps have been retained. The
+  // UserClient callback drops its connection lock for the pmap walks. No jobs
+  // lock has been acquired, no CCCB writes/kicks have occurred.
+  native_powervr_pte_snapshot *pte_snapshots[2];
+  native_powervr_pte_record *pte_records[2];
+  uint32_t pte_count = 0;
+  uint64_t pte_submission = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (!js[i]->pte_requested || !js[i]->pre_pte) continue;
+    if (!pte_submission) pte_submission = __atomic_add_fetch(&gPteSubmission, 1ULL, __ATOMIC_RELAXED);
+    js[i]->pre_pte->submission = pte_submission;
+    js[i]->pre_pte->index = i;
+    pte_snapshots[pte_count] = js[i]->pte;
+    pte_records[pte_count++] = js[i]->pre_pte;
+  }
+  if (pte_count && pte_phase) err = pte_phase(pte_cookie, pte_snapshots, pte_records, pte_count);
+  if (err) {
+    for (uint32_t i = 0; i < count; ++i) pvr_job_release(js[i]);
     return err;
   }
   // pvr_jobs_link_geom_frag()

@@ -107,6 +107,9 @@ for name in CXX_SOURCES:
 c_record = record('bsd/DEVELOPMENT/kern_exec.o.json')
 for name in C_SOURCES:
     objects.append(compile_one(c_record, KIT / name, C_FLAGS))
+# Isolate private pmap geometry/locking from Linux compat and IOKit C++ headers.
+objects.append(compile_one(c_record, KIT / 'powervr' / 'NativePowerVRPte.c',
+                           C_FLAGS + ['-I', str(ROOT / '.cache/xnu-work/osfmk')]))
 # NativePowerVR (package/powervr): the unchanged Linux drm/imagination headers through the Linux type shim, and the
 # upstream PowerVR firmware for the GE8300, downloaded from imagination/linux-firmware and checked against a pinned SHA-256
 # (redistributable, not stored in this repository), embedded with .incbin.

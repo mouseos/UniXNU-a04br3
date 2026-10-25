@@ -23,6 +23,7 @@
 #define NATIVE_POWERVR_JOBS_H
 #include <stdint.h>
 #include <stddef.h>
+#include "native_powervr_pte.h"
 #ifndef NATIVE_POWERVR_JOBS_API
 #define NATIVE_POWERVR_JOBS_API
 #endif
@@ -139,9 +140,13 @@ struct native_powervr_job_submit {
     struct native_powervr_hwrt_dataset *hwrt;       /* args->hwrt.set_handle, null when 0 */
     const void *cmd_stream;                         /* kernel copy, args->cmd_stream_len bytes */
 };
+/* Optional PTE pre-phase runs after jobs retain their objects and before
+ * gJobs.lock. The callback releases/reacquires the UserClient connection lock
+ * for pmap walks, returns with it held, and rejects a closing connection.
+ * Borrowed handle wrappers are not accessed after the callback. */
 NATIVE_POWERVR_JOBS_API int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
                                                        const struct native_powervr_job_submit *jobs, uint32_t count,
-                                                       uint64_t *fences);
+                                                       uint64_t *fences, native_powervr_pte_phase pte_phase, void *pte_cookie);
 /* NativePowerVRMethodWaitFence: 0 once the job of fence has completed (also for an earlier fence no longer tracked),
  * -ETIMEDOUT when it has not within timeout_ns (0 polls once), -EINVAL for a fence never issued on this file, any other
  * negative value when the job failed or its context was lost. */

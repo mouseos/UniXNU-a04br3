@@ -105,6 +105,7 @@ constexpr uint32_t DRM_PVR_JOB_TYPE_FRAGMENT=1;
 unsigned renderDumps=0;
 void native_powervr_log(const char *,...){}
 void native_powervr_dump_render_regs(){++renderDumps;}
+void pteCompleted(const Job *){} // PTE completion bookkeeping is tested by check_powervr_pte.py.
 ''' + function(JOBS, 'void complete_job_hosts(') + function(JOBS, 'extern "C" int native_powervr_fence_wait(') + r'''
 int main(){
  IOLock lock;native_powervr_sg spans[]={{gPhysBase,65*4096},{0xbe9c0000,4096}};

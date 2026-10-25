@@ -76,6 +76,7 @@
 #include "linux/pvr_rogue_fwif_client.h"
 #include "stub/devinfo/pvr_device.h"
 #include "native_powervr_internal.h"
+#include "native_powervr_pte.h"
 #define NATIVE_POWERVR_JOBS_API __attribute__((weak))
 #include "native_powervr_jobs.h"
 #undef min
@@ -941,6 +942,107 @@ extern "C" int native_powervr_vm_find_bo(struct native_powervr_vm_context *vm_ct
   return found ? 0 : -ENOENT;
 }
 
+// Default-off, independent of packet logging. Called only during job preparation.
+extern "C" int native_powervr_pte_enabled(void)
+{
+  unsigned value = 0;
+  return PE_parse_boot_argn("a04br3-gpu-pte", &value, sizeof(value)) && value == 1;
+}
+struct native_powervr_pte_snapshot {
+  native_powervr_vm_context *vm;
+  void *userMap, *kernelMap;
+  struct Target {
+    native_powervr_bo_mapping mapping;
+    IOMemoryMap *user;
+    uint64_t gpu, offset, expectedPa;
+    uint32_t status;
+  } targets[NATIVE_PVR_PTE_TARGETS];
+};
+extern "C" void native_powervr_pte_put(native_powervr_pte_snapshot *s)
+{
+  if (!s) return;
+  for (unsigned i = 0; i < NATIVE_PVR_PTE_TARGETS; ++i) {
+    if (s->targets[i].user) s->targets[i].user->release();
+    native_powervr_bo_put(s->targets[i].mapping.bo);
+  }
+  native_powervr_pte_map_put(s->userMap);
+  native_powervr_pte_map_put(s->kernelMap);
+  native_powervr_vm_context_put(s->vm);
+  kfreeBytes(s, sizeof(*s));
+}
+extern "C" native_powervr_pte_snapshot *native_powervr_pte_prepare(native_powervr_vm_context *vm, uint64_t sipf)
+{
+  if (!native_powervr_pte_enabled()) return nullptr;
+  auto *s = static_cast<native_powervr_pte_snapshot *>(kzallocBytes(sizeof(native_powervr_pte_snapshot)));
+  if (!s) return nullptr; // Diagnostic failure must not fail GPU submission.
+  s->vm = native_powervr_vm_context_get(vm);
+  s->userMap = native_powervr_pte_map_get(current_task());
+  s->kernelMap = native_powervr_pte_map_get(kernel_task);
+  const uint64_t probes[NATIVE_PVR_PTE_TARGETS] = {0xda00001000ULL, sipf, 0xe000001000ULL};
+  for (unsigned i = 0; i < NATIVE_PVR_PTE_TARGETS; ++i) {
+    auto &t = s->targets[i];
+    t.gpu = probes[i];
+    t.status = 1; // no exact GPU VA mapping
+    if (native_powervr_vm_find_bo(vm, t.gpu, &t.mapping)) continue;
+    native_powervr_bo *bo = t.mapping.bo;
+    t.offset = t.mapping.bo_offset + (t.gpu - t.mapping.va_addr);
+    t.status = 2; // host/nonordinary/invalid BO; do not inspect host memory
+    if (!bo->md || bo->host || !bo->view || !bo->cpu || t.offset >= bo->size) continue;
+    uint64_t offset = t.offset;
+    for (uint32_t n = 0; n < bo->nents; ++n) {
+      if (offset < bo->sg[n].size) { t.expectedPa = bo->sg[n].phys + offset; break; }
+      offset -= bo->sg[n].size;
+    }
+    if (!t.expectedPa) continue;
+    // Reference ONLY. Anywhere permits lookup of the actual existing base;
+    // DefaultCache accepts its existing cache attribute without changing it.
+    t.user = bo->view->createMappingInTask(current_task(), 0,
+                 kIOMapReference | kIOMapAnywhere | kIOMapDefaultCache, 0, bo->size);
+    t.status = t.user ? 0 : 3; // absent existing user map
+  }
+  return s;
+}
+extern "C" void native_powervr_pte_capture(native_powervr_pte_snapshot *s, native_powervr_pte_record *r)
+{
+  if (!s) { for (auto &t : r->target) t.status = 5; return; }
+  // UserClient pre-phase ONLY: connection/VM/jobs locks are all absent.
+  // Prepared BO/map/VM references keep metadata and page-table roots alive.
+  for (unsigned i = 0; i < NATIVE_PVR_PTE_TARGETS; ++i) {
+    const auto &t = s->targets[i];
+    auto &o = r->target[i];
+    o.user.status = o.kernel.status = o.physmap.status = 1;
+    o.gpu = t.gpu; o.status = t.status;
+    o.mapping_va = t.mapping.va_addr; o.mapping_size = t.mapping.va_range;
+    o.bo_offset = t.offset; o.expected_pa = t.expectedPa;
+    if (t.status != 0 && t.status != 3) continue;
+    if (t.user) {
+      o.map_options = t.user->getMapOptions();
+      native_powervr_pte_walk(s->userMap, t.user->getVirtualAddress() + t.offset, &o.user);
+    } else o.user.status = 1;
+    native_powervr_pte_walk(s->kernelMap, reinterpret_cast<uintptr_t>(t.mapping.bo->cpu) + t.offset, &o.kernel);
+    if (t.expectedPa >= gPhysBase && t.expectedPa - gPhysBase < gPhysSize)
+      native_powervr_pte_walk(s->kernelMap, phystokv(t.expectedPa), &o.physmap);
+    else o.physmap.status = 1;
+  }
+}
+extern "C" void native_powervr_pte_validate(native_powervr_pte_snapshot *s, native_powervr_pte_record *r)
+{
+  if (!s) return;
+  // Separate from every pmap walk. Called after re-acquiring the connection
+  // lock, before submitting; a changed GPU mapping invalidates attribution.
+  IOLockLock(s->vm->lock);
+  for (unsigned i = 0; i < NATIVE_PVR_PTE_TARGETS; ++i) {
+    const auto &t = s->targets[i];
+    if (!t.mapping.bo) continue;
+    const uint32_t n = vmFirstEndingAfter(s->vm, t.gpu);
+    if (n >= s->vm->count || s->vm->maps[n].addr > t.gpu ||
+        s->vm->maps[n].bo != t.mapping.bo ||
+        s->vm->maps[n].offset + t.gpu - s->vm->maps[n].addr != t.offset)
+      r->target[i].status = 4;
+  }
+  IOLockUnlock(s->vm->lock);
+}
+
 // A job holds the exact imported pages it may access even if handles/mappings subsequently go away. The command streams do
 // not enumerate shader resources, so conservatively cover every host BO mapped in the job's VM (including buffer aliases).
 struct native_powervr_host_sync {
@@ -1048,6 +1150,7 @@ class NativePowerVRUserClient : public IOUserClient {
   int createHwrtDataset(drm_pvr_ioctl_create_hwrt_dataset_args *args);
   int destroyHwrtDataset(const drm_pvr_ioctl_destroy_hwrt_dataset_args *args);
   int submitJobs(const drm_pvr_ioctl_submit_jobs_args *args, NativePowerVRAbiSubmitReply *reply);
+  static int ptePrephase(void *, native_powervr_pte_snapshot **, native_powervr_pte_record **, uint32_t);
   void teardown();
 public:
   using IOUserClient::clientMemoryForType;
@@ -1720,6 +1823,22 @@ int NativePowerVRUserClient::destroyHwrtDataset(const drm_pvr_ioctl_destroy_hwrt
 
 // pvr_ioctl_submit_jobs() -> pvr_submit_jobs(), the parts before the job layer: the job array (PVR_UOBJ_GET_ARRAY()), the
 // ABI rules of version 1, create_job()'s first checks and lookups, and the command streams.
+int NativePowerVRUserClient::ptePrephase(void *cookie, native_powervr_pte_snapshot **snapshots,
+                                       native_powervr_pte_record **records, uint32_t count)
+{
+  auto *self = static_cast<NativePowerVRUserClient *>(cookie);
+  // The external-method reference prevents teardown/free. Jobs already own
+  // context/HWRT refs; snapshots own BO/map/VM refs. Never use handle wrappers
+  // while unlocked. Concurrent destruction is checked by the normal queue-killed
+  // test, and clientClose is checked below before any job can be kicked.
+  IOLockUnlock(self->lock_);
+  for (uint32_t i = 0; i < count; ++i) native_powervr_pte_capture(snapshots[i], records[i]);
+  IOLockLock(self->lock_);
+  if (self->closing_) return -ENODEV;
+  for (uint32_t i = 0; i < count; ++i) native_powervr_pte_validate(snapshots[i], records[i]);
+  return 0;
+}
+
 int NativePowerVRUserClient::submitJobs(const drm_pvr_ioctl_submit_jobs_args *args, NativePowerVRAbiSubmitReply *reply)
 {
   if (!jobs_ || !native_powervr_submit_jobs) return -ENOTTY;
@@ -1748,7 +1867,7 @@ int NativePowerVRUserClient::submitJobs(const drm_pvr_ioctl_submit_jobs_args *ar
     jobs[i].cmd_stream = streams[i];
   }
   uint64_t fences[NativePowerVRAbiMaxJobs] = {};
-  if (!err) err = native_powervr_submit_jobs(jobs_, jobs, count, fences);
+  if (!err) err = native_powervr_submit_jobs(jobs_, jobs, count, fences, ptePrephase, this);
   for (uint32_t i = 0; i < count; i++) kfreeBytes(streams[i], job_args[i].cmd_stream_len);
   if (err) return err;
   for (uint32_t i = 0; i < count; i++) reply->fence[i] = fences[i];

@@ -89,6 +89,7 @@ void pvr_cccb_send_kccb_combined_kick(int *,pvr_cccb *,pvr_cccb *,uint32_t,uint3
 void pvr_cccb_send_kccb_kick(int *,pvr_cccb *,uint32_t,pvr_hwrt_data *){assert(jobsLock.held);++kicks;}
 '''
 h += function(JOBS, 'void submit_job_to_cccb(') + '\n'
+h += 'void capturePte(Job *) {} // Separate PTE fixture covers this values-only hook.\n'
 h += function(JOBS, 'void run_job(') + '\n'
 h += r'''
 static_assert(offsetof(rogue_fwif_cmd_frag,regs)==16,"actual FRAG ABI");
@@ -162,10 +163,12 @@ int main(int argc,char **argv){
  // Invalid size never dereferences the deliberately invalid pointer.
  c.id=14;c.cmd_len=UINT32_MAX;c.cmd=(void*)1;
  IOLockLock(&jobsLock);capturePacket(&c);IOLockUnlock(&jobsLock);assert(!gPackets[3].validSize);
- c.id=15;IOLockLock(&jobsLock);capturePacket(&c);IOLockUnlock(&jobsLock);assert(gPacketCount==4);
+ // Fill the configured bound (the controlled four-clear/four-copy capture uses eight).
+ for(unsigned i=4;i<kPacketRecords+1;++i){c.id=15+i;IOLockLock(&jobsLock);capturePacket(&c);IOLockUnlock(&jobsLock);}
+ assert(gPacketCount==kPacketRecords);
  // Simulated retirement destroys every source field. Diagnostic contains no pointers.
  memset(&frag,0,sizeof(frag));memset(&tq,0,sizeof(tq));memset(&ctx,0,sizeof(ctx));a={};b={};c={};
- drainPackets();assert(gPacketPrinted==4&&output.find("abcdef")!=std::string::npos&&output.find("987654")!=std::string::npos);
+ drainPackets();assert(gPacketPrinted==kPacketRecords&&output.find("abcdef")!=std::string::npos&&output.find("987654")!=std::string::npos);
  assert(output.find("41000")!=std::string::npos&&output.find("paired 11")!=std::string::npos);
  unsigned old=logs;drainPackets();assert(logs==old);
  // Exact length/null/unknown-type gates are exercised independently of the cap.
