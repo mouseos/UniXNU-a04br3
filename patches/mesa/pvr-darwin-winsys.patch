@@ -362,7 +362,7 @@ index f1cc515..bb5ab41 100644
        /* For integer depth formats we'll convert the specified floating point
         * depth bias values and specify them as integers. In this mode a depth
 diff --git a/src/imagination/vulkan/pvr_arch_job_transfer.c b/src/imagination/vulkan/pvr_arch_job_transfer.c
-index df05efe..296e0a6 100644
+index df05efe..66ed0b0 100644
 --- a/src/imagination/vulkan/pvr_arch_job_transfer.c
 +++ b/src/imagination/vulkan/pvr_arch_job_transfer.c
 @@ -26,6 +26,9 @@
@@ -558,7 +558,21 @@ index df05efe..296e0a6 100644
        uint8_t *cs_byte_ptr = (uint8_t *)cs_ptr;
        uint32_t tmp;
  
-@@ -4564,8 +4643,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+@@ -4555,7 +4634,12 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
+    }
+ 
+    pvr_csb_pack (&regs->isp_mtile_base, CR_ISP_MTILE_BASE, reg) {
+-      reg.addr =
++      /* Compare the full 40-bit stream address on v1; observed IPF faults
++       * otherwise contain only the stream offset. Primitive/link records stay
++       * heap-relative. Vendor clip supplies heap high bits separately; this is
++       * not evidence about the native firmware's internal register writes.
++       */
++      reg.addr = sipf1 ? pvr_cs_bo->dev_addr :
+          PVR_DEV_ADDR(pvr_cs_bo->dev_addr.addr -
+                       ctx->device->heaps.transfer_frag_heap->base_addr.addr);
+    }
+@@ -4564,8 +4648,16 @@ static VkResult pvr_isp_ctrl_stream(const struct pvr_device_info *dev_info,
        reg.mode_type = ROGUE_CR_ISP_RENDER_MODE_TYPE_FAST_2D;
     }
  
@@ -577,7 +591,7 @@ index df05efe..296e0a6 100644
        pvr_csb_pack (&regs->isp_rgn, CR_ISP_RGN_SIPF, isp_rgn) {
           /* Bit 0 in CR_ISP_RGN.cs_size_ipf_creq_pf is used to indicate the
            * presence of a link.
-@@ -5596,6 +5683,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
+@@ -5596,6 +5688,24 @@ static VkResult pvr_reroute_to_clip(struct pvr_transfer_ctx *ctx,
     return vk_error(ctx->device, VK_ERROR_FORMAT_NOT_SUPPORTED);
  }
  
@@ -602,7 +616,7 @@ index df05efe..296e0a6 100644
  static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
                                   struct pvr_transfer_cmd *transfer_cmd,
                                   struct pvr_transfer_prep_data *prep_data,
-@@ -5736,6 +5841,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
+@@ -5736,6 +5846,21 @@ static VkResult pvr_3d_copy_blit(struct pvr_transfer_ctx *ctx,
        }
     }
  
