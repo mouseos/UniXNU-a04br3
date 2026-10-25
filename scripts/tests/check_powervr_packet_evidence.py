@@ -184,6 +184,7 @@ int main(int argc,char **argv){
  for(unsigned i=0;i<16;++i){auto &r=hwBuffer.hwr_info[i];r.hwr_number=i+1;r.cr_timer=i+100;r.dm=3;
  r.hwr_type=ROGUE_HWRTYPE_BIF0FAULT;r.hwr_data.bif_info.bif_req_status=0xdead0000+i;}
  auto &r=hwBuffer.hwr_info[15];r.hwr_number=20;r.hwr_type=ROGUE_HWRTYPE_MMUFAULT;r.hwr_data.mmu_info.mmu_status[1]=0xbeef;
+ if(which=="firstzero"){hwBuffer={};hwBuffer.write_index=1;auto &z=hwBuffer.hwr_info[0];z.cr_timer=123;z.hwr_type=ROGUE_HWRTYPE_BIF0FAULT;z.hwr_data.bif_info.bif_req_status=0x1234;}
  if(which=="racing")racing=true;
  if(which=="wrap"){hwBuffer.hwr_counter=1;for(unsigned i=0;i<16;++i)hwBuffer.hwr_info[i].hwr_number=uint32_t(1-i);}
  }
@@ -192,7 +193,8 @@ int main(int argc,char **argv){
  if(which=="missing")assert(output.find("unavailable")!=std::string::npos&&!cleans);
  else if(which=="empty"||which=="racing")assert(output.find("HWR slot")==std::string::npos);
  else {assert(output.find("HWR slot")!=std::string::npos);size_t count=0,pos=0;
- while((pos=output.find("HWR slot",pos))!=std::string::npos){++count;++pos;}assert(count==4);
+ while((pos=output.find("HWR slot",pos))!=std::string::npos){++count;++pos;}assert(count==(which=="firstzero"?1u:4u));
+ if(which=="firstzero")assert(output.find("num 0")!=std::string::npos&&output.find("1234")!=std::string::npos);
  if(which=="normal")assert(output.find("num 20")<output.find("num 15")&&output.find("beef")!=std::string::npos);}
  unsigned old=logs;native_powervr_packet_hwr(2,99,3,1,2);assert(logs==old);
  puts(("PASS HWR "+which+" first-PF cap/owned-buffer/unlocked logs").c_str());
@@ -225,6 +227,6 @@ with tempfile.TemporaryDirectory(prefix='powervr-packet-') as tmp:
     subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
                     '-Wno-unused-parameter', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-g',
                     '-I'+str(tmp), '-I'+str(PVR), str(source), '-o', str(binary)], check=True)
-    for case in ('off', 'packets', 'normal', 'missing', 'empty', 'racing', 'wrap'):
+    for case in ('off', 'packets', 'normal', 'missing', 'empty', 'racing', 'wrap', 'firstzero'):
         subprocess.run([str(binary), case], check=True, timeout=30)
-print('PASS 7 actual-function ASan/UBSan scenarios + ABI/integration assertions; no device access')
+print('PASS 8 actual-function ASan/UBSan scenarios + ABI/integration assertions; no device access')

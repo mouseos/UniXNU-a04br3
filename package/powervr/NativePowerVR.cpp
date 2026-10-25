@@ -981,7 +981,7 @@ extern "C" void native_powervr_packet_hwr(uint32_t ctx_id, uint32_t job_ref, uin
                       indexBefore == READ_ONCE_A04(gHwrInfo->write_index);
   IOLog("powervr: packet HWR counter %u index %u stable %u; records are not job-id matched\n",
         snapshot.hwr_counter, snapshot.write_index, unsigned(stable));
-  if (!stable || !snapshot.hwr_counter) return; // no synthetic fault data
+  if (!stable) return; // counter zero can still contain the first valid record
   // Latest four by modular distance from the copied counter, including first-log
   // and wrapping slots; a fixed slot order would print stale first-log entries.
   uint32_t order[ROGUE_FWIF_HWINFO_MAX], count = 0;
