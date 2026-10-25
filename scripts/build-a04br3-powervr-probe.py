@@ -16,7 +16,7 @@ make-gpu-addon.py:
   --trust-out FILE                    trust bundle: one owner module with those CDHashes, then the modules of --trust-base (the
                                       original bundle of build-a04br3-trust-cache.py, checked against board.toml
                                       [payload] trust_cache_sha256) byte for byte; for "unixnu build payload --owner-trust-cache"
-  --addon FILE                        GPU addon (format NGPUADD2 of make-gpu-addon.py) with bin/powervrprobed (and lib/...); for
+  --addon FILE                        GPU addon (format NGPUADD2 of make-gpu-addon.py) with bin/powervrprobed (and identical lib/... + addons/NativePowerVRVulkan.bundle/...); for
                                       "unixnu build payload --gpu-addon" with the kernel argument sheng-gpu-addon=1
 
 Vulkan. Without --vulkan the daemon is built without its Mesa stage (powervrprobed_vulkan.c is not compiled). With --vulkan it is
@@ -214,7 +214,11 @@ def unpack_addon(blob):
 def addon_files(out, with_job):
     files = [('bin/powervrprobed', 0o755, (out / 'powervrprobed').read_bytes())]
     if (out / 'lib' / LIB_NAME).is_file():
-        files.append(('lib/' + LIB_NAME, 0o755, (out / 'lib' / LIB_NAME).read_bytes()))
+        # Read the final signed file once: seed-compatible runtime path and
+        # legacy lib path must carry exactly the same bytes/CDHash.
+        signed_library = (out / 'lib' / LIB_NAME).read_bytes()
+        files.append(('lib/' + LIB_NAME, 0o755, signed_library))
+        files.append(('addons/NativePowerVRVulkan.bundle/' + LIB_NAME, 0o755, signed_library))
     if with_job:
         files.append(('daemons/%s.plist' % LABEL, 0o644, (out / ('%s.plist' % LABEL)).read_bytes()))
     return files
@@ -354,6 +358,17 @@ def check(powervr):
     print('PASS: owner trust bundle logic (loader checks, originals byte for byte)')
     files = [('bin/powervrprobed', 0o755, b'\xcf\xfa\xed\xfe' + os.urandom(3000)), ('daemons/%s.plist' % LABEL, 0o644, job_plist())]
     assert unpack_addon(pack_addon(files)) == files
+    with tempfile.TemporaryDirectory(prefix='powervr-addon-path-') as temp:
+        staged = Path(temp)
+        (staged / 'lib').mkdir()
+        (staged / 'powervrprobed').write_bytes(b'probe')
+        signed_library = b'final signed library bytes'
+        (staged / 'lib' / LIB_NAME).write_bytes(signed_library)
+        entries = unpack_addon(pack_addon(addon_files(staged, False)))
+        assert len(entries) == 3
+        entries = {name: (mode, data) for name, mode, data in entries}
+        assert entries['lib/' + LIB_NAME] == (0o755, signed_library)
+        assert entries['addons/NativePowerVRVulkan.bundle/' + LIB_NAME] == (0o755, signed_library)
     print('PASS: GPU addon logic (NGPUADD2, the kernel\'s checks)')
 
 
