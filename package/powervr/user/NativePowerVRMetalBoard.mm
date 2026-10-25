@@ -91,6 +91,8 @@ extern "C" void native_metal_board_prepare(unsigned port) {
     // MT8167's terminal PPP clip uses 16-pixel tiles, as the vendor GLES does.
     // Full clear/linear/optimal readback verified by the standalone owner probe.
     setenv("PVR_DARWIN_TERMINATE_TILE_UNITS", "1", 1);
+    // Preserve exact caller host ranges; Mesa backs overfetch in separate GPU VA.
+    setenv("PVR_DARWIN_BUFFER_GUARD", "1", 1);
     unsetenv("PVR_DARWIN_VENDOR_ISP_OVERLAP");
     // The metal2vulkan runtime keeps its own pipeline cache; Mesa's disk cache would write below a home the sandbox may refuse.
     setenv("MESA_SHADER_CACHE_DISABLE", "true", 0);

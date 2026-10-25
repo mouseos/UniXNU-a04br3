@@ -202,6 +202,19 @@ The terminal clip matches the vendor GLES path and has passed full-image clear, 
 triangle readback on the device (130 steps, zero failures). Other devices keep the default path. GPU-composited UI and
 performance still need separate validation; the overlap comparison has not been exercised on hardware.
 
+## Optional GPU buffer guard
+
+The Darwin winsys supports a default-off `PVR_DARWIN_BUFFER_GUARD=1` path on BVNC 22.40.54.30 with 4 KiB pages and
+host import. It keeps imported CPU pointer ranges unchanged. An affected buffer gets an additional GPU virtual page backed
+by a separate private BO, with independent map/unmap references and rollback. Buffer requirements can then omit the old
+extra physical padding page, allowing exact-size caller allocations such as the GOP framebuffer. Image bindings and other
+winsys implementations keep their existing behavior. This does not implement general robust buffer access.
+
+The owner probe and a04br3 Metal board hook opt in. Run `python3 scripts/check-pvr-buffer-guard.py` after applying the
+pinned Mesa patch to exercise the actual requirements/binding/map functions with ASan/UBSan (228 fixtures plus the actual
+CreateBuffer alignment check). Host tests and Mesa compilation passed; real host import and accelerated presentation
+still require device validation. The existing void unmap API retains its existing error behavior.
+
 ## Optional existing GPU clock source
 
 The default GPU clock remains the 26 MHz crystal. The boot argument `a04br3-gpu-clock=380` opts into the existing

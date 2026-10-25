@@ -600,6 +600,7 @@ int probe_vulkan(const char *library)
   // Isolate terminal PPP clipping; do not combine this with the overlap comparison.
   if (unsetenv("PVR_DARWIN_VENDOR_ISP_OVERLAP") != 0) return -1;
   if (setenv("PVR_DARWIN_TERMINATE_TILE_UNITS", "1", 1) != 0) return -1;
+  if (setenv("PVR_DARWIN_BUFFER_GUARD", "1", 1) != 0) return -1;
   char detail[256];
   setenv("PVR_I_WANT_A_BROKEN_VULKAN_DRIVER", "1", 1);
   void *driver = dlopen(library, RTLD_NOW | RTLD_LOCAL);

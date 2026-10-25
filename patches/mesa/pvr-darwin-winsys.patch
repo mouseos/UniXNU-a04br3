@@ -361,8 +361,26 @@ index f1cc515..bb5ab41 100644
  
        /* For integer depth formats we'll convert the specified floating point
         * depth bias values and specify them as integers. In this mode a depth
+diff --git a/src/imagination/vulkan/pvr_buffer.h b/src/imagination/vulkan/pvr_buffer.h
+index 2315235..f43124d 100644
+--- a/src/imagination/vulkan/pvr_buffer.h
++++ b/src/imagination/vulkan/pvr_buffer.h
+@@ -24,6 +24,13 @@
+  */
+ #define PVR_BUFFER_MEMORY_PADDING_SIZE 4
+ 
++static inline bool pvr_buffer_needs_guard(uint64_t size, uint64_t page_size)
++{
++   const uint64_t tail = size % page_size;
++
++   return tail == 0 || tail > page_size - PVR_BUFFER_MEMORY_PADDING_SIZE;
++}
++
+ struct pvr_buffer {
+    struct vk_buffer vk;
+ 
 diff --git a/src/imagination/vulkan/pvr_device.c b/src/imagination/vulkan/pvr_device.c
-index 7ba4fb8..654f737 100644
+index 7ba4fb8..ecf4d86 100644
 --- a/src/imagination/vulkan/pvr_device.c
 +++ b/src/imagination/vulkan/pvr_device.c
 @@ -191,6 +191,7 @@ VkResult pvr_AllocateMemory(VkDevice _device,
@@ -437,7 +455,113 @@ index 7ba4fb8..654f737 100644
  VkResult
  pvr_GetMemoryFdPropertiesKHR(VkDevice _device,
                               VkExternalMemoryHandleTypeFlagBits handleType,
-@@ -1118,7 +1160,13 @@ void pvr_GetImageMemoryRequirements2(VkDevice _device,
+@@ -510,16 +552,18 @@ void pvr_GetDeviceMemoryCommitment(VkDevice device,
+    *pCommittedMemoryInBytes = 0;
+ }
+ 
+-VkResult pvr_bind_memory(struct pvr_device *device,
++static VkResult pvr_bind_memory_internal(struct pvr_device *device,
+                          struct pvr_device_memory *mem,
+                          VkDeviceSize offset,
+                          VkDeviceSize size,
+                          VkDeviceSize alignment,
+                          struct pvr_winsys_vma **const vma_out,
+-                         pvr_dev_addr_t *const dev_addr_out)
++                         pvr_dev_addr_t *const dev_addr_out,
++                         bool guarded)
+ {
+-   VkDeviceSize virt_size =
+-      size + (offset & (device->heaps.general_heap->page_size - 1));
++   const VkDeviceSize virt_offset =
++      offset & (device->heaps.general_heap->page_size - 1);
++   VkDeviceSize virt_size;
+    struct pvr_winsys_vma *vma;
+    pvr_dev_addr_t dev_addr;
+    VkResult result;
+@@ -537,6 +581,19 @@ VkResult pvr_bind_memory(struct pvr_device *device,
+    assert(offset % alignment == 0);
+    assert(offset < mem->bo->size);
+ 
++   if (size > UINT64_MAX - virt_offset)
++      return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
++   virt_size = size + virt_offset;
++
++   if (guarded) {
++      const uint64_t page = device->heaps.general_heap->page_size;
++
++      if (virt_size > UINT64_MAX - (page - 1) ||
++          align64(virt_size, page) > UINT64_MAX - page)
++         return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
++      virt_size = align64(virt_size, page) + page;
++   }
++
+    result = device->ws->ops->heap_alloc(device->heaps.general_heap,
+                                         virt_size,
+                                         alignment,
+@@ -544,7 +601,11 @@ VkResult pvr_bind_memory(struct pvr_device *device,
+    if (result != VK_SUCCESS)
+       goto err_out;
+ 
+-   result = device->ws->ops->vma_map(vma, mem->bo, offset, size, &dev_addr);
++   if (guarded)
++      result = device->ws->ops->vma_map_guarded(vma, mem->bo, offset, size,
++                                               &dev_addr);
++   else
++      result = device->ws->ops->vma_map(vma, mem->bo, offset, size, &dev_addr);
+    if (result != VK_SUCCESS)
+       goto err_free_vma;
+ 
+@@ -560,6 +621,18 @@ err_out:
+    return result;
+ }
+ 
++VkResult pvr_bind_memory(struct pvr_device *device,
++                         struct pvr_device_memory *mem,
++                         VkDeviceSize offset,
++                         VkDeviceSize size,
++                         VkDeviceSize alignment,
++                         struct pvr_winsys_vma **const vma_out,
++                         pvr_dev_addr_t *const dev_addr_out)
++{
++   return pvr_bind_memory_internal(device, mem, offset, size, alignment,
++                                    vma_out, dev_addr_out, false);
++}
++
+ void pvr_unbind_memory(struct pvr_device *device, struct pvr_winsys_vma *vma)
+ {
+    device->ws->ops->vma_unmap(vma);
+@@ -577,13 +650,16 @@ VkResult pvr_BindBufferMemory2(VkDevice _device,
+       VK_FROM_HANDLE(pvr_device_memory, mem, pBindInfos[i].memory);
+       VK_FROM_HANDLE(pvr_buffer, buffer, pBindInfos[i].buffer);
+ 
+-      VkResult result = pvr_bind_memory(device,
++      const bool guarded = device->ws->features.buffer_guard &&
++         pvr_buffer_needs_guard(buffer->vk.size, device->ws->page_size);
++      VkResult result = pvr_bind_memory_internal(device,
+                                         mem,
+                                         pBindInfos[i].memoryOffset,
+                                         buffer->vk.size,
+                                         buffer->alignment,
+                                         &buffer->vma,
+-                                        &buffer->dev_addr);
++                                        &buffer->dev_addr,
++                                        guarded);
+       if (result != VK_SUCCESS) {
+          while (i--) {
+             VK_FROM_HANDLE(pvr_buffer, buffer, pBindInfos[i].buffer);
+@@ -994,9 +1070,8 @@ void pvr_GetBufferMemoryRequirements2(
+ 
+    size = buffer->vk.size;
+ 
+-   if (size % device->ws->page_size == 0 ||
+-       size % device->ws->page_size >
+-          device->ws->page_size - PVR_BUFFER_MEMORY_PADDING_SIZE) {
++   if (!device->ws->features.buffer_guard &&
++       pvr_buffer_needs_guard(size, device->ws->page_size)) {
+       /* TODO: We can save memory by having one extra virtual page mapped
+        * in and having the first and last virtual page mapped to the first
+        * physical address.
+@@ -1118,7 +1193,13 @@ void pvr_GetImageMemoryRequirements2(VkDevice _device,
     vk_foreach_struct (sType, ext, pMemoryRequirements->pNext) {
        switch (sType) {
        case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS: {
@@ -1847,12 +1971,15 @@ index 0000000..ee24eb1
 +
 +#endif /* PVR_DARWIN_H */
 diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm.c b/src/imagination/vulkan/winsys/powervr/pvr_drm.c
-index c45a538..8578c90 100644
+index c45a538..a1cb728 100644
 --- a/src/imagination/vulkan/winsys/powervr/pvr_drm.c
 +++ b/src/imagination/vulkan/winsys/powervr/pvr_drm.c
-@@ -25,7 +25,11 @@
+@@ -24,8 +24,14 @@
+ #include <assert.h>
  #include <stdbool.h>
  #include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
  #include <vulkan/vulkan.h>
 +#ifdef PVR_WINSYS_DARWIN
 +#include "drm-uapi/drm.h"
@@ -1862,7 +1989,7 @@ index c45a538..8578c90 100644
  
  #include "drm-uapi/pvr_drm.h"
  #include "pvr_device_info.h"
-@@ -40,7 +44,11 @@
+@@ -40,9 +46,32 @@
  #include "pvr_winsys.h"
  #include "pvr_winsys_helper.h"
  #include "vk_alloc.h"
@@ -1873,8 +2000,29 @@ index c45a538..8578c90 100644
 +#endif
  #include "vk_log.h"
  
++/* Keep experimental policy out of the generic buffer requirements path. */
++static bool pvr_drm_buffer_guard_enabled(uint64_t bvnc,
++                                         bool host_import,
++                                         uint64_t page_size)
++{
++#ifdef PVR_WINSYS_DARWIN
++   const char *opt = getenv("PVR_DARWIN_BUFFER_GUARD");
++
++   return host_import && page_size == 4096 &&
++          bvnc == PVR_BVNC_PACK(22, 40, 54, 30) &&
++          opt && strcmp(opt, "1") == 0;
++#else
++   (void)bvnc;
++   (void)host_import;
++   (void)page_size;
++   return false;
++#endif
++}
++
  static void pvr_drm_finish_heaps(struct pvr_drm_winsys *const drm_ws)
-@@ -395,6 +403,7 @@ static const struct pvr_winsys_ops drm_winsys_ops = {
+ {
+    if (!pvr_winsys_helper_winsys_heap_finish(
+@@ -395,6 +424,7 @@ static const struct pvr_winsys_ops drm_winsys_ops = {
     .get_heaps_info = pvr_drm_winsys_get_heaps_info,
     .buffer_create = pvr_drm_winsys_buffer_create,
     .buffer_create_from_fd = pvr_drm_winsys_buffer_create_from_fd,
@@ -1882,7 +2030,15 @@ index c45a538..8578c90 100644
     .buffer_destroy = pvr_drm_winsys_buffer_destroy,
     .buffer_get_fd = pvr_drm_winsys_buffer_get_fd,
     .buffer_map = pvr_drm_winsys_buffer_map,
-@@ -703,9 +712,14 @@ VkResult pvr_drm_winsys_create(const int render_fd,
+@@ -402,6 +432,7 @@ static const struct pvr_winsys_ops drm_winsys_ops = {
+    .heap_alloc = pvr_drm_winsys_heap_alloc,
+    .heap_free = pvr_drm_winsys_heap_free,
+    .vma_map = pvr_drm_winsys_vma_map,
++   .vma_map_guarded = pvr_drm_winsys_vma_map_guarded,
+    .vma_unmap = pvr_drm_winsys_vma_unmap,
+    .free_list_create = pvr_drm_winsys_free_list_create,
+    .free_list_destroy = pvr_drm_winsys_free_list_destroy,
+@@ -703,9 +734,14 @@ VkResult pvr_drm_winsys_create(const int render_fd,
     os_get_page_size(&drm_ws->base.page_size);
     drm_ws->base.log2_page_size = util_logbase2(drm_ws->base.page_size);
  
@@ -1897,8 +2053,19 @@ index c45a538..8578c90 100644
  
     err = u_rwlock_init(&drm_ws->dmabuf_bo_lock);
     if (err) {
+@@ -722,6 +758,10 @@ VkResult pvr_drm_winsys_create(const int render_fd,
+       goto err_util_sparse_array_finish_bo_map;
+ 
+    drm_ws->bvnc = gpu_info.gpu_id;
++   drm_ws->base.features.buffer_guard =
++      pvr_drm_buffer_guard_enabled(drm_ws->bvnc,
++                                   drm_ws->base.features.host_import,
++                                   drm_ws->base.page_size);
+ 
+    result = pvr_ioctl(render_fd,
+                       DRM_IOCTL_PVR_CREATE_VM_CONTEXT,
 diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c
-index 15d4299..9d05f7d 100644
+index 15d4299..a4b8e51 100644
 --- a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c
 +++ b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.c
 @@ -30,13 +30,20 @@
@@ -2079,11 +2246,100 @@ index 15d4299..9d05f7d 100644
  
     VG(VALGRIND_FREELIKE_BLOCK(bo->map, 0));
  
+@@ -417,6 +510,7 @@ VkResult pvr_drm_winsys_heap_alloc(struct pvr_winsys_heap *heap,
+       goto err_out;
+    }
+ 
++   drm_vma->guard = (struct pvr_winsys_vma){ 0 };
+    result = pvr_winsys_helper_heap_alloc(heap, size, alignment, &drm_vma->base);
+    if (result != VK_SUCCESS)
+       goto err_free_vma;
+@@ -506,7 +600,7 @@ VkResult pvr_drm_winsys_vma_map(struct pvr_winsys_vma *vma,
+    return VK_SUCCESS;
+ }
+ 
+-void pvr_drm_winsys_vma_unmap(struct pvr_winsys_vma *vma)
++static void pvr_drm_vma_unmap_one(struct pvr_winsys_vma *vma)
+ {
+    struct pvr_drm_winsys_bo *const drm_bo = to_pvr_drm_winsys_bo(vma->bo);
+    struct pvr_drm_winsys *const drm_ws = to_pvr_drm_winsys(vma->bo->ws);
+@@ -530,3 +624,71 @@ void pvr_drm_winsys_vma_unmap(struct pvr_winsys_vma *vma)
+ 
+    vma->bo = NULL;
+ }
++
++/* The guard has its own physical BO: a writable alias of the payload's first
++ * page could corrupt caller memory. Never extend an imported host BO's range.
++ */
++VkResult pvr_drm_winsys_vma_map_guarded(struct pvr_winsys_vma *vma,
++                                       struct pvr_winsys_bo *bo,
++                                       uint64_t offset,
++                                       uint64_t size,
++                                       pvr_dev_addr_t *dev_addr_out)
++{
++   struct pvr_drm_winsys_vma *drm_vma = to_pvr_drm_winsys_vma(vma);
++   struct pvr_winsys *ws = bo->ws;
++   const uint64_t page = vma->heap->page_size;
++   struct pvr_winsys_bo *guard_bo;
++   uint64_t payload_size;
++   VkResult result;
++   pvr_dev_addr_t dev_addr;
++
++   /* pvr_CreateBuffer publishes page-size alignment. Valid buffer binds
++    * therefore have no page offset; extend the guard layout if that changes.
++    */
++   if (!ws->features.buffer_guard || !size || offset % page ||
++       size > UINT64_MAX - (page - 1))
++      return vk_error(NULL, VK_ERROR_MEMORY_MAP_FAILED);
++
++   payload_size = ALIGN_POT(size, page);
++   if (payload_size > vma->size || page > vma->size - payload_size)
++      return vk_error(NULL, VK_ERROR_MEMORY_MAP_FAILED);
++
++   assert(!drm_vma->guard.bo);
++   result = pvr_drm_winsys_buffer_create(ws, page, page,
++                                        PVR_WINSYS_BO_TYPE_GPU, 0, &guard_bo);
++   if (result != VK_SUCCESS)
++      return result;
++
++   result = pvr_drm_winsys_vma_map(vma, bo, offset, size, &dev_addr);
++   if (result != VK_SUCCESS)
++      goto out_destroy_guard;
++
++   drm_vma->guard = (struct pvr_winsys_vma){
++      .heap = vma->heap,
++      .dev_addr = PVR_DEV_ADDR_OFFSET(vma->dev_addr, payload_size),
++      .size = page,
++   };
++   result = pvr_drm_winsys_vma_map(&drm_vma->guard, guard_bo, 0, page, NULL);
++   if (result != VK_SUCCESS) {
++      pvr_drm_vma_unmap_one(vma);
++      goto out_destroy_guard;
++   }
++
++   if (dev_addr_out)
++      *dev_addr_out = dev_addr;
++
++out_destroy_guard:
++   /* Each successful map owns a reference; discard the creation reference. */
++   pvr_drm_winsys_buffer_destroy(guard_bo);
++   return result;
++}
++
++void pvr_drm_winsys_vma_unmap(struct pvr_winsys_vma *vma)
++{
++   struct pvr_drm_winsys_vma *drm_vma = to_pvr_drm_winsys_vma(vma);
++
++   /* Darwin requires one exact unmap per mapping, including during rollback. */
++   if (drm_vma->guard.bo)
++      pvr_drm_vma_unmap_one(&drm_vma->guard);
++   pvr_drm_vma_unmap_one(vma);
++}
 diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.h b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.h
-index b7879b1..c7649fd 100644
+index b7879b1..4de5664 100644
 --- a/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.h
 +++ b/src/imagination/vulkan/winsys/powervr/pvr_drm_bo.h
-@@ -42,6 +42,10 @@ struct pvr_drm_winsys_bo {
+@@ -42,10 +42,16 @@ struct pvr_drm_winsys_bo {
  
     uint32_t handle;
     uint64_t flags;
@@ -2094,7 +2350,13 @@ index b7879b1..c7649fd 100644
  };
  
  struct pvr_drm_winsys_vma {
-@@ -69,6 +73,10 @@ VkResult pvr_drm_winsys_buffer_get_fd(struct pvr_winsys_bo *bo,
+    struct pvr_winsys_vma base;
++   /* Embedded mapping only; its VA belongs to base's reservation. */
++   struct pvr_winsys_vma guard;
+ };
+ 
+ /*******************************************
+@@ -69,6 +75,10 @@ VkResult pvr_drm_winsys_buffer_get_fd(struct pvr_winsys_bo *bo,
  
  VkResult pvr_drm_winsys_buffer_map(struct pvr_winsys_bo *bo, void *addr);
  VkResult pvr_drm_winsys_buffer_unmap(struct pvr_winsys_bo *bo, bool reserve);
@@ -2105,6 +2367,18 @@ index b7879b1..c7649fd 100644
  
  VkResult pvr_drm_heap_alloc_carveout(struct pvr_winsys_heap *const heap,
                                       const pvr_dev_addr_t carveout_dev_addr,
+@@ -86,6 +96,11 @@ VkResult pvr_drm_winsys_vma_map(struct pvr_winsys_vma *vma,
+                                 uint64_t offset,
+                                 uint64_t size,
+                                 pvr_dev_addr_t *dev_addr_out);
++VkResult pvr_drm_winsys_vma_map_guarded(struct pvr_winsys_vma *vma,
++                                       struct pvr_winsys_bo *bo,
++                                       uint64_t offset,
++                                       uint64_t size,
++                                       pvr_dev_addr_t *dev_addr_out);
+ void pvr_drm_winsys_vma_unmap(struct pvr_winsys_vma *vma);
+ 
+ /*******************************************
 diff --git a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c b/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c
 index b25c66f..c9e099e 100644
 --- a/src/imagination/vulkan/winsys/powervr/pvr_drm_job_compute.c
@@ -2461,7 +2735,7 @@ index 64c5c76..5179f05 100644
  }
 +#endif /* PVR_WINSYS_DARWIN */
 diff --git a/src/imagination/vulkan/winsys/pvr_winsys.h b/src/imagination/vulkan/winsys/pvr_winsys.h
-index 90b2292..caf42d5 100644
+index 90b2292..88ec5bf 100644
 --- a/src/imagination/vulkan/winsys/pvr_winsys.h
 +++ b/src/imagination/vulkan/winsys/pvr_winsys.h
 @@ -372,6 +372,11 @@ struct pvr_winsys_ops {
@@ -2476,12 +2750,29 @@ index 90b2292..caf42d5 100644
     void (*buffer_destroy)(struct pvr_winsys_bo *bo);
  
     VkResult (*buffer_get_fd)(struct pvr_winsys_bo *bo, int *const fd_out);
-@@ -468,6 +473,8 @@ struct pvr_winsys {
+@@ -390,6 +395,14 @@ struct pvr_winsys_ops {
+                        uint64_t offset,
+                        uint64_t size,
+                        pvr_dev_addr_t *dev_addr_out);
++   /* Optional: map a buffer plus a private trailing GPU guard page. The VMA
++    * must reserve the rounded payload plus one page. vma_unmap removes both.
++    */
++   VkResult (*vma_map_guarded)(struct pvr_winsys_vma *vma,
++                              struct pvr_winsys_bo *bo,
++                              uint64_t offset,
++                              uint64_t size,
++                              pvr_dev_addr_t *dev_addr_out);
+    void (*vma_unmap)(struct pvr_winsys_vma *vma);
+ 
+    VkResult (*free_list_create)(
+@@ -468,6 +481,10 @@ struct pvr_winsys {
  
     struct {
        bool supports_threaded_submit : 1;
 +      /* VK_EXT_external_memory_host: buffer_create_from_host_ptr works. */
 +      bool host_import : 1;
++      /* Buffer padding is provided by private GPU VA guards, not client memory. */
++      bool buffer_guard : 1;
     } features;
  
     const struct pvr_winsys_ops *ops;
