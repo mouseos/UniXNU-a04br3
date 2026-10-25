@@ -53,7 +53,17 @@ def first_pass_stub(reason):
     stub.write_text('// No reference kernel with the original display family yet (build-a04br3-legacy-display.py): the display needs one,\n'
                     '// so this kernel links without it. Build the kernel again to link the display.\n'
                     'void native_legacy_display_probe(void);\nvoid native_legacy_display_probe(void)\n{\n}\n'
-                    'void native_legacy_display_late_probe(void);\nvoid native_legacy_display_late_probe(void)\n{\n}\n')
+                    'void native_legacy_display_late_probe(void);\nvoid native_legacy_display_late_probe(void)\n{\n}\n'
+                    '#include <stddef.h>\n'
+                    '// The first kernel has no HID/display implementation. XNU does not permit unresolved weak imports.\n'
+                    'unsigned native_hid_input_command;\n'
+                    'void *native_gop_handoff_memory(void) { return 0; }\n'
+                    'int native_gop_handoff_acquire(void *owner) { (void)owner; return (int)0xe00002c7U; }\n'
+                    'void native_gop_handoff_close(void *owner) { (void)owner; }\n'
+                    'int native_gop_handoff_call(unsigned op, void *task, const void *in, size_t n, void *out, size_t m)\n'
+                    '{ (void)op; (void)task; (void)in; (void)n; (void)out; (void)m; return (int)0xe00002c7U; }\n'
+                    'int native_gop_handoff_call_owned(void *owner, unsigned op, void *task, const void *in, size_t n, void *out, size_t m)\n'
+                    '{ (void)owner; return native_gop_handoff_call(op, task, in, n, out, m); }\n')
     run(['xcrun','--sdk','iphoneos','clang','-arch','arm64','-mkernel','-miphoneos-version-min=17.0','-Os','-c',stub,'-o',OUT/'FirstPassStub.o'])
     archive.unlink(missing_ok=True)
     run(['xcrun','ar','rcs',archive,OUT/'FirstPassStub.o'])
