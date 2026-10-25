@@ -286,6 +286,47 @@ The exporter includes the complete signed Metal bundle (including its resource s
 bundle at their existing union-mount paths. It refuses output overwrites and validates the original trust-cache pin.
 Check payload capacity and run `scripts/check-a04br3-bootimg.py` after packaging; the boot partition limit is 128 MiB.
 
+### GE8300 の順序保証を再現する
+
+以下は既定オフの実験機能です。通常のクリーンビルドと上の GPU 更新手順を使い、
+`data.dbr`・元の trust cache・ドライバを、固定された IPSW とこのソースから生成してください。
+別の開発環境のファイルや、端末のバックアップから抽出したファイルは必要ありません。
+既存 Data を保つ更新時だけ、最初のビルドが生成した Data seed と UUID を再利用します。
+
+カーネルには `a04br3-gpu-bo-wc=1 a04br3-gpu-bo-map=1` を指定します。
+元の IOBuffer を WC で確保し、その所有 descriptor をユーザー空間へ直接 map する組合せです。
+`a04br3-gpu-bo-sync=1`、SIPF1 dump/touch、強制 TQ Clip はこの試験には使いません。
+
+GPU 単体の順序保証試験は、上の probe 生成コマンドへ `--roa-color` を追加し、
+生成した probe とドライバから `make-a04br3-gpu-addon.py` で addon と owner trust bundle を作ります。
+payload の追加引数は次のとおりです。
+
+```sh
+--kernel-arg a04br3-gpu-metal=0 --kernel-arg sheng-fb-gpu=0 \
+--kernel-arg a04br3-powervrprobed=1 --kernel-arg a04br3-gpu-tq-low=1 \
+--kernel-arg a04br3-gpu-bo-wc=1 --kernel-arg a04br3-gpu-bo-map=1
+```
+
+成功条件は `ROA overlap exact readback` の3ケースがそれぞれ4096/4096画素一致し、
+期待値が128、135、1003505728となることです。1回の draw に128 instances を重ねるため、
+draw 間の barrier で順序保証を代用できません。GLSL と再生成スクリプトは
+`package/powervr/user/shaders/` にあり、`scripts/tests/check_powervr_roa_color.py` で照合できます。
+
+Metal UI の別試験では、Metal plugin 生成に
+`--roa-color --require-fetch-for-apple3 --pipeline-failure-diag` を追加します。
+payload は `a04br3-gpu-metal=1 sheng-fb-gpu=1 a04br3-powervrprobed=0` に切り替えます。
+Rust bridge を変更した場合は `--skip-bridge` を使わず再ビルドしてください。
+`--require-fetch-for-apple3` は実際の framebuffer read 対応が確認できない場合に限って
+Apple3 の互換性 waiver を外し、backend 本来の対応と Apple2 は保持します。
+診断時の `IM main` / `slide` は、backboardd 本体の実際のロード位置です。
+
+R32_UINT の単体試験通過は、Metal UI や XR 二平面形式の動作成功を意味しません。
+画面の確認は framebuffer と実際の present/retire を使い、shader 作成成功だけで完了扱いしません。
+この機種では CPU 描画の最初の画面まで起動後約13分かかった例があるため、
+無出力だけで停止を判定せず、panic 等がなければ十分な観測時間を確保してください。
+追加引数で1000 byteを超える場合は、UniXNU の `--omit-kernel-arg` で不要な診断・自動入力設定を明示的に外し、
+上限を拡大しないでください。例は `--omit-kernel-arg offline-hid-auto-home --omit-kernel-arg offline-hid-auto-home-count` です。
+
 ## Credits
 
 - [UniXNU](https://github.com/UniXNU/UniXNU) and [UniXNU-sheng](https://github.com/UniXNU/UniXNU-sheng): build
