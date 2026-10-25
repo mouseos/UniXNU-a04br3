@@ -862,10 +862,13 @@ extern "C" void native_powervr_dump_render_regs(void)
   // linux/pvr_rogue_cr_defs.h: ROGUE_CR_ISP_CTL, ISP_RENDER. Explicit offsets avoid client/master macro collisions.
   const uint32_t teMtile1 = rd32(0x0C08), teMtile2 = rd32(0x0C10), teScreen = rd32(0x0C18);
   const uint32_t ispMtileSize = rd32(0x0F18), ispCtl = rd32(0x0F38), ispRender = rd32(0x0F08);
+  // Pixel clamp and geometry AA are separate from the tile count (client header).
+  const uint32_t pppScreen = rd32(0x0C98), teAa = rd32(0x0C00);
   // These are sequential live reads, not an atomic capture or a retained state of the completed job.
   IOLog("powervr: render regs live: TE_MTILE1 %08x TE_MTILE2 %08x TE_SCREEN %08x "
         "ISP_MTILE_SIZE %08x ISP_CTL %08x ISP_RENDER %08x\n",
         teMtile1, teMtile2, teScreen, ispMtileSize, ispCtl, ispRender);
+  IOLog("powervr: render pixel regs live: PPP_SCREEN %08x TE_AA %08x\n", pppScreen, teAa);
 }
 
 extern "C" void native_powervr_dump_firmware(const char *when, uint32_t last_words)
