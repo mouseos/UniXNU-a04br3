@@ -601,6 +601,8 @@ int probe_vulkan(const char *library)
   if (unsetenv("PVR_DARWIN_VENDOR_ISP_OVERLAP") != 0) return -1;
   if (setenv("PVR_DARWIN_TERMINATE_TILE_UNITS", "1", 1) != 0) return -1;
   if (setenv("PVR_DARWIN_BUFFER_GUARD", "1", 1) != 0) return -1;
+  const char *tqFirstFlag = getenv("PVR_PROBE_TQ_FIRST");
+  const int tqFirst = tqFirstFlag && strcmp(tqFirstFlag, "1") == 0;
   char detail[256];
   setenv("PVR_I_WANT_A_BROKEN_VULKAN_DRIVER", "1", 1);
   void *driver = dlopen(library, RTLD_NOW | RTLD_LOCAL);
@@ -744,11 +746,15 @@ int probe_vulkan(const char *library)
   const VkCommandBufferAllocateInfo cmdInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .commandBufferCount = 1,
                                                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY};
   if (!vkStep("vkCreateCommandPool", p_vkCreateCommandPool(device, &poolInfo, NULL, &pool), NULL)) goto out_objects;
-  // Run the TQ-independent comparison before any transfer submission: a transfer
-  // context lockup must not prevent observation of the render path. All required
-  // transfer and optimal-copy checks below still determine the final result.
-  const int linearClearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures, 1);
-  const int linearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures, 0);
+  // Default order preserves the independent render evidence before TQ. The
+  // owner-only comparison defers these same checks until TQ readback succeeds.
+  int linearClearOK = 0, linearOK = 0;
+  if (tqFirst) {
+    probe_line("vk order: TQ clear/copy first; render checks deferred (diagnostic, not a fix)");
+  } else {
+    linearClearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures, 1);
+    linearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures, 0);
+  }
   VkCommandBufferAllocateInfo cmdAlloc = cmdInfo;
   cmdAlloc.commandPool = pool;
   const VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -820,6 +826,14 @@ int probe_vulkan(const char *library)
              kWidth * kHeight, first, pixels[first * 4], pixels[first * 4 + 1], pixels[first * 4 + 2], pixels[first * 4 + 3],
              kClear[0], kClear[1], kClear[2], kClear[3]);
   const int clearOK = vkCheck("clear readback", match == kWidth * kHeight, detail);
+  if (tqFirst) {
+    if (!clearOK) {
+      probe_line("vk TQ-first readback failed; no render tests on this context");
+      goto out_objects;
+    }
+    linearClearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures, 1);
+    linearOK = linearTriangleProbe(device, queue, pool, &memory, format.linearTilingFeatures, 0);
+  }
   const int triangleOK = triangleProbe(device, queue, pool, image, buffer, bufferMemory, mapped, coherent);
   if (clearOK && triangleOK && linearOK != 0 && linearClearOK != 0) {
     result = 0;
