@@ -538,10 +538,21 @@ extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), vo
 extern "C" void thread_deallocate(thread_t);
 static void bootThread(void *, wait_result_t) { boot(); }
 
+namespace {
+bool gPacketEnabled;
+void packetDiagnosticInit()
+{
+  unsigned enabled = 0;
+  gPacketEnabled = PE_parse_boot_argn("a04br3-gpu-packet", &enabled, sizeof(enabled)) && enabled == 1;
+}
+}
+extern "C" int native_powervr_packet_enabled(void) { return gPacketEnabled; }
+
 void native_powervr_boot(void)
 {
   unsigned mode = 0;
   if (!PE_parse_boot_argn("a04br3-gpu", &mode, sizeof(mode)) || mode < 2) return;
+  packetDiagnosticInit();
   if (!a04br3_gpu_bvnc || a04br3_gpu_bvnc == ~0ULL) { IOLog("powervr: no core identified; firmware not booted\n"); return; }
   // Its own thread: the boot waits up to 10 s for the firmware and must not hold up unixnu_board_init().
   thread_t thread = nullptr;
@@ -947,3 +958,60 @@ void vmAndQueueBringUp(void)
 }
 }  // namespace
 
+// First PF only, completion-thread caller, outside jobs/FWCCB/VM locks. Copy only
+// the existing owned FW allocation: no MMIO or physical target-memory access.
+extern "C" void native_powervr_packet_hwr(uint32_t ctx_id, uint32_t job_ref, uint32_t dm,
+                                         uint64_t fault_address, uint64_t pc_address)
+{
+  static bool captured;
+  if (!native_powervr_packet_enabled() || captured) return;
+  captured = true;
+  IOLog("powervr: packet PF ctx %u job %u dm %u fault %llx pc %llx (evidence, not a fix)\n",
+        ctx_id, job_ref, dm, (unsigned long long)fault_address, (unsigned long long)pc_address);
+  if (!gHwrInfo) { IOLog("powervr: packet HWR unavailable\n"); return; }
+  // Static snapshot avoids a large kernel stack frame. Only this completion-thread
+  // entry point accesses it; captured prevents a subsequent call from overwriting it.
+  static rogue_fwif_hwrinfobuf snapshot;
+  clean(gHwrInfo, sizeof(*gHwrInfo));
+  const uint32_t before = READ_ONCE_A04(gHwrInfo->hwr_counter);
+  const uint32_t indexBefore = READ_ONCE_A04(gHwrInfo->write_index);
+  memcpy(&snapshot, gHwrInfo, sizeof(snapshot));
+  clean(gHwrInfo, sizeof(*gHwrInfo));
+  const bool stable = before == READ_ONCE_A04(gHwrInfo->hwr_counter) &&
+                      indexBefore == READ_ONCE_A04(gHwrInfo->write_index);
+  IOLog("powervr: packet HWR counter %u index %u stable %u; records are not job-id matched\n",
+        snapshot.hwr_counter, snapshot.write_index, unsigned(stable));
+  if (!stable || !snapshot.hwr_counter) return; // no synthetic fault data
+  // Latest four by modular distance from the copied counter, including first-log
+  // and wrapping slots; a fixed slot order would print stale first-log entries.
+  uint32_t order[ROGUE_FWIF_HWINFO_MAX], count = 0;
+  for (uint32_t i = 0; i < ROGUE_FWIF_HWINFO_MAX; ++i) {
+    const rogue_hwrinfo &r = snapshot.hwr_info[i];
+    if (!r.hwr_number && !r.cr_timer && r.hwr_type == ROGUE_HWRTYPE_UNKNOWNFAILURE) continue;
+    const uint32_t age = snapshot.hwr_counter - r.hwr_number;
+    uint32_t j = count;
+    while (j && age < snapshot.hwr_counter - snapshot.hwr_info[order[j - 1]].hwr_number) {
+      order[j] = order[j - 1]; --j;
+    }
+    order[j] = i; ++count;
+  }
+  for (uint32_t n = 0; n < count && n < 4; ++n) {
+    const rogue_hwrinfo &r = snapshot.hwr_info[order[n]];
+    IOLog("powervr: packet HWR slot %u num %u type %u dm %u hwrt %x event %x recovery %x timer %llx\n",
+          order[n], r.hwr_number, unsigned(r.hwr_type), r.dm, r.active_hwrt_data,
+          r.event_status, r.hwr_recovery_flags, (unsigned long long)r.cr_timer);
+    if (r.hwr_type == ROGUE_HWRTYPE_BIF0FAULT || r.hwr_type == ROGUE_HWRTYPE_BIF1FAULT ||
+        r.hwr_type == ROGUE_HWRTYPE_TEXASBIF0FAULT) {
+      const rogue_bifinfo &b = r.hwr_data.bif_info;
+      IOLog("powervr: packet HWR BIF raw req %llx mmu %llx pc %llx\n",
+            (unsigned long long)b.bif_req_status, (unsigned long long)b.bif_mmu_status,
+            (unsigned long long)b.pc_address);
+    } else if (r.hwr_type == ROGUE_HWRTYPE_MMUFAULT || r.hwr_type == ROGUE_HWRTYPE_MMUMETAFAULT ||
+               r.hwr_type == ROGUE_HWRTYPE_MMURISCVFAULT) {
+      const rogue_mmuinfo &m = r.hwr_data.mmu_info;
+      IOLog("powervr: packet HWR MMU raw %llx %llx pc %llx\n",
+            (unsigned long long)m.mmu_status[0], (unsigned long long)m.mmu_status[1],
+            (unsigned long long)m.pc_address);
+    }
+  }
+}

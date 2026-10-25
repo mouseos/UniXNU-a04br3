@@ -54,6 +54,11 @@ int native_powervr_queue_selftest(void);
 void native_powervr_dump_firmware(const char *when, uint32_t last_words);
 /* Read-only live render-register snapshot after completion; later queued work may already have changed the registers. */
 void native_powervr_dump_render_regs(void);
+/* Boot-only opt-in packet evidence. HWR reader is called only by the completion thread,
+ * outside jobs/FWCCB/VM locks. No command submission or target-memory access. */
+int native_powervr_packet_enabled(void);
+void native_powervr_packet_hwr(uint32_t ctx_id, uint32_t job_ref, uint32_t dm,
+                               uint64_t fault_address, uint64_t pc_address);
 /* Log through IOLog with the powervr: prefix convention. */
 void native_powervr_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 #ifdef __cplusplus

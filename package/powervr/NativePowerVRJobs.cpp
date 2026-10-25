@@ -151,7 +151,8 @@ struct HwrtTrack {
 };
 
 struct ResetNote {
-  uint32_t ctx_id, job_ref, reason, flags;
+  uint32_t ctx_id, job_ref, reason, flags, dm;
+  uint64_t fault_address, pc_address;
 };
 
 struct JobsDevice {
@@ -230,6 +231,111 @@ struct Job {
   native_powervr_host_sync *hosts;
   bool hosts_completed;   // protected by gJobs.lock; success cannot precede the post-GPU cache maintenance
 };
+
+// Values only: records remain valid after the job, queue, BO and context retire.
+struct PacketRecord {
+  uint32_t id, ctx, ctxType, type, opcode, cmdLen, seqno, paired;
+  uint32_t queueFw, queueWrite, hwrtFw, vmFw, cmdFlags;
+  uint64_t root, fence;
+  bool validSize;
+  union { rogue_fwif_frag_regs frag; rogue_fwif_transfer_regs tq; } regs;
+};
+constexpr uint32_t kPacketRecords = 4;
+PacketRecord gPackets[kPacketRecords];
+uint32_t gPacketCount, gPacketPrinted; // gJobs.lock
+static_assert(sizeof(((rogue_fwif_frag_regs *)nullptr)->pbe_word) == 8 * 3 * sizeof(uint64_t), "FRAG PBE bounds");
+static_assert(sizeof(((rogue_fwif_transfer_regs *)nullptr)->pbe_wordx_mrty) == 9 * sizeof(uint64_t), "TQ PBE bounds");
+
+// Called immediately before the final job command is copied to its CCCB.
+// No logs, allocations, VM lookup or firmware commands while gJobs.lock is held.
+void capturePacket(const Job *job)
+{
+  if (!native_powervr_packet_enabled() || gPacketCount >= kPacketRecords) return;
+  PacketRecord &r = gPackets[gPacketCount++];
+  r = {};
+  r.id = job->id; r.ctx = job->ctx->ctx_id; r.ctxType = job->ctx->type;
+  r.type = job->type; r.opcode = job->fw_ccb_cmd_type; r.cmdLen = job->cmd_len;
+  r.seqno = job->seqno; r.fence = job->fence; r.paired = job->paired ? job->paired->id : 0;
+  r.queueFw = pvr_context_get_fw_addr(job->ctx) + job->queue->ctx_offset;
+  r.queueWrite = job->queue->cccb.write_offset;
+  auto *vm = native_powervr_vm_context_vm(reinterpret_cast<native_powervr_vm_context *>(job->ctx->vm_ctx));
+  r.vmFw = native_powervr_vm_fw_mem_ctx(vm); r.root = native_powervr_vm_page_table_root(vm);
+  if (job->hwrt) pvr_fw_object_get_fw_addr(job->hwrt->fw_obj, &r.hwrtFw);
+  if (job->cmd && job->type == DRM_PVR_JOB_TYPE_FRAGMENT && job->cmd_len == sizeof(rogue_fwif_cmd_frag)) {
+    r.regs.frag = static_cast<const rogue_fwif_cmd_frag *>(job->cmd)->regs;
+    r.cmdFlags = static_cast<const rogue_fwif_cmd_frag *>(job->cmd)->flags;
+    r.validSize = true;
+  } else if (job->cmd && job->type == DRM_PVR_JOB_TYPE_TRANSFER_FRAG && job->cmd_len == sizeof(rogue_fwif_cmd_transfer)) {
+    r.regs.tq = static_cast<const rogue_fwif_cmd_transfer *>(job->cmd)->regs;
+    r.cmdFlags = static_cast<const rogue_fwif_cmd_transfer *>(job->cmd)->flags;
+    r.validSize = true;
+  }
+}
+
+void printPacket(const PacketRecord &r)
+{
+  native_powervr_log("powervr: packet job %u ctx %u ctxType %u jobType %u opcode %x len %u seq %u paired %u "
+                     "queue %x write %u hwrt %x vm %x root %llx typed %u flags %x fence %llu (evidence, not a fix)\n",
+                     r.id, r.ctx, r.ctxType, r.type, r.opcode, r.cmdLen, r.seqno, r.paired,
+                     r.queueFw, r.queueWrite, r.hwrtFw, r.vmFw, (unsigned long long)r.root, unsigned(r.validSize),
+                     r.cmdFlags, (unsigned long long)r.fence);
+  if (!r.validSize) return;
+  if (r.type == DRM_PVR_JOB_TYPE_TRANSFER_FRAG) {
+    const rogue_fwif_transfer_regs &t = r.regs.tq;
+    native_powervr_log("powervr: packet TQ ABI regsOff %u regsSize %u infoOff %u codeOff %u dataOff %u pbeOff %u\n",
+      unsigned(offsetof(rogue_fwif_cmd_transfer, regs)), unsigned(sizeof(t)),
+      unsigned(offsetof(rogue_fwif_transfer_regs, event_pixel_pds_info)),
+      unsigned(offsetof(rogue_fwif_transfer_regs, event_pixel_pds_code)),
+      unsigned(offsetof(rogue_fwif_transfer_regs, event_pixel_pds_data)),
+      unsigned(offsetof(rogue_fwif_transfer_regs, pbe_wordx_mrty)));
+    native_powervr_log("powervr: packet TQ bg %llx %llx size %llx mtile %llx pds info/code/data %x %x %x "
+                       "ctl %x aa %x bgval %x out %x render %x rgn %x mtileSize %x origin %x\n",
+      (unsigned long long)t.pds_bgnd0_base, (unsigned long long)t.pds_bgnd1_base,
+      (unsigned long long)t.pds_bgnd3_sizeinfo, (unsigned long long)t.isp_mtile_base,
+      t.event_pixel_pds_info, t.event_pixel_pds_code, t.event_pixel_pds_data, t.isp_ctl, t.isp_aa,
+      t.isp_bgobjvals, t.usc_pixel_output_ctrl, t.isp_render, t.isp_rgn, t.isp_mtile_size, t.isp_render_origin);
+    native_powervr_log("powervr: packet TQ clear %x %x %x %x\n", t.usc_clear_register0,
+      t.usc_clear_register1, t.usc_clear_register2, t.usc_clear_register3);
+    for (uint32_t i = 0; i < 3; ++i)
+      native_powervr_log("powervr: packet TQ pbe %u %llx %llx %llx\n", i,
+        (unsigned long long)t.pbe_wordx_mrty[3*i], (unsigned long long)t.pbe_wordx_mrty[3*i+1],
+        (unsigned long long)t.pbe_wordx_mrty[3*i+2]);
+  } else {
+    const rogue_fwif_frag_regs &f = r.regs.frag;
+    native_powervr_log("powervr: packet FRAG ABI regsOff %u regsSize %u infoOff %u dataOff %u pbeOff %u\n",
+      unsigned(offsetof(rogue_fwif_cmd_frag, regs)), unsigned(sizeof(f)),
+      unsigned(offsetof(rogue_fwif_frag_regs, event_pixel_pds_info)),
+      unsigned(offsetof(rogue_fwif_frag_regs, event_pixel_pds_data)), unsigned(offsetof(rogue_fwif_frag_regs, pbe_word)));
+    native_powervr_log("powervr: packet FRAG pds info/data %x %x ctl %x aa %x bgval %x out %x "
+                       "scissor %llx dbias %llx zls %llx zload %llx stencil %llx\n",
+      f.event_pixel_pds_info, f.event_pixel_pds_data, f.isp_ctl, f.isp_aa, f.isp_bgobjvals,
+      f.usc_pixel_output_ctrl, (unsigned long long)f.isp_scissor_base, (unsigned long long)f.isp_dbias_base,
+      (unsigned long long)f.isp_zlsctl, (unsigned long long)f.isp_zload_store_base,
+      (unsigned long long)f.isp_stencil_load_store_base);
+    for (uint32_t i = 0; i < 3; ++i)
+      native_powervr_log("powervr: packet FRAG bg %u %llx pr %llx\n", i,
+        (unsigned long long)f.pds_bgnd[i], (unsigned long long)f.pds_pr_bgnd[i]);
+    for (uint32_t i = 0; i < 8; ++i)
+      native_powervr_log("powervr: packet FRAG pbe %u %llx %llx %llx\n", i,
+        (unsigned long long)f.pbe_word[i][0], (unsigned long long)f.pbe_word[i][1], (unsigned long long)f.pbe_word[i][2]);
+  }
+}
+
+// Completion-thread only. Each record is copied under the jobs lock, then printed
+// after unlocking. Nothing references a retired Job or context. IDs can be reused;
+// the first-four records are not asserted to match a later reset solely by job ID.
+void drainPackets()
+{
+  if (!native_powervr_packet_enabled()) return;
+  for (;;) {
+    PacketRecord r;
+    IOLockLock(gJobs.lock);
+    if (gPacketPrinted == gPacketCount) { IOLockUnlock(gJobs.lock); break; }
+    r = gPackets[gPacketPrinted++];
+    IOLockUnlock(gJobs.lock);
+    printPacket(r);
+  }
+}
 
 struct UfoList {
   rogue_fwif_ufo ufo[kMaxUfosPerJob];
@@ -862,7 +968,8 @@ void process_fwccb_command(struct pvr_device *pvr_dev, struct rogue_fwif_fwccb_c
     // waits for the KCCB).
     IOLockLock(gJobs.fwccbLock);
     if (gJobs.resetCount < kResetNotes)
-      gJobs.resets[gJobs.resetCount++] = {d->server_common_context_id, d->reset_job_ref, d->reset_reason, d->flags};
+      gJobs.resets[gJobs.resetCount++] = {d->server_common_context_id, d->reset_job_ref, d->reset_reason, d->flags,
+                                                 d->dm, d->fault_address, d->pc_address};
     IOLockUnlock(gJobs.fwccbLock);
     break;
   }
@@ -1216,6 +1323,7 @@ void submit_job_to_cccb(Job *job, UfoList &deps)
     pvr_fw_object_get_fw_addr(job->queue->timeline_ufo.fw_obj, &cmd->partial_render_geom_frag_fence.addr);
     cmd->partial_render_geom_frag_fence.value = job->seqno - 1;
   }
+  capturePacket(job);
   // Submit job to FW
   pvr_cccb_write_command_with_header(cccb, job->fw_ccb_cmd_type, job->cmd_len, job->cmd, job->id, job->id);
   // Update command to signal the job fence.
@@ -1348,6 +1456,12 @@ void completionThread(void *, wait_result_t)
     }
     const bool active = !list_empty(&gJobs.jobs);
     IOLockUnlock(gJobs.lock);
+    if (native_powervr_packet_enabled())
+      for (uint32_t i = 0; i < nnotes; ++i)
+        if (notes[i].flags & ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_PF)
+          native_powervr_packet_hwr(notes[i].ctx_id, notes[i].job_ref, notes[i].dm,
+                                    notes[i].fault_address, notes[i].pc_address);
+    drainPackets();
     list_for_each_entry_safe(j, n, &done, dev_link) {
       list_del(&j->dev_link);
       pvr_job_release(j);
