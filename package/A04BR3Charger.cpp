@@ -14,6 +14,9 @@
 #include "A04BR3ChargerHandoff.h"
 #include "A04BR3ChargerBoardCore.h"
 extern "C" vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+// XNU kern/thread.h declares this only in its private kernel context; this
+// board archive links into that source kernel, using the same C prototype.
+extern "C" void thread_terminate_self(void);
 namespace {
 volatile uint8_t *i2c, *gpio, *top, *infra, *apmixed;
 IOLock *bus;
