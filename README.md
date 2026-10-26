@@ -11,6 +11,82 @@ and interactive performance remain under development.
 | [UniXNU-a04br3](https://github.com/mouseos/UniXNU-a04br3) | this device repository |
 | [uefi-a04br3](https://github.com/mouseos/uefi-a04br3) | Mu-Silicium UEFI port (MT8167Pkg, Benesse/a04br3Pkg) |
 
+## Public WIP source pairing
+
+The default branches are not yet a qualified pair. At this checkpoint the device `main`
+(`b25fe48a282d9e94bba13e98bae38f4bcfbbab73`) still validates a ramdisk address of `0x80000000`,
+while UEFI `main` (`8dbdd50713b8fbb79a5f5837a032b46a4a939723`) uses `0x60000000`.
+For new builds and unattended runs, use device `wip/display` commit
+`dde2dab72621c02696857abc12b29977cdc447a2` or a reviewed descendant, with the UEFI pin above.
+That device commit includes the fastboot argv fix; `ab37700` does not. The fixed device
+commit is published on `wip/display`; the RAM trial remains unqualified on hardware.
+Packet11's payload was actually generated with `ab37700bdd60b56dc855293f28184124da3a8c60`;
+retain that SHA as artifact history, not as the unattended-runner recommendation.
+Use the device boot-image validator from the same pinned device checkout. These pins identify
+source inputs, not a completed hardware qualification. The device WIP is to be merged normally
+into `main` only after the RAM trial passes; no default-branch switch or force push is needed.
+The historical image pins below describe an earlier checkpoint, not today's default-branch pair.
+
+The updated `a04br3-ssh.yml` workflow pins `device_ref` to the RAM600-compatible device
+commit `dde2dab72621c02696857abc12b29977cdc447a2`, including the FB fix, instead of the incompatible old `main`.
+SSH rebuilds without an explicit ref
+retain the initially checked-out commit. This is a source pairing safeguard; RAM hardware
+qualification is still pending. PowerVR inputs are opt-in:
+`powervr_probe=true`, `powervr_metal=true`, `powervr_metal_mode=publish` selects GPU publication;
+`powervr_metal_roa_color=true` additionally forwards `A04BR3_POWERVR_METAL_ROA_COLOR=1` to
+prebuild for framebuffer-fetch pipelines. ROA defaults off and requires both probe and Metal.
+The workflow retains these settings for its initial build and SSH incremental rebuilds.
+The generic `macos.yml` uses its existing `pre_build` commands instead; export the same prebuild
+environment variables explicitly there. Neither mode is a claim that Metal UI or larger RAM
+is qualified. Initial Data/trust inputs are generated from the pinned source/IPSW build;
+users do not need device backup files. GPU-only updates that retain persistent Data use the
+prepared-Data helper documented below, rather than regenerating the seed on every update.
+
+### Explicit build profiles
+
+All GPU options remain off by default. The SSH workflow profiles below are combinations
+of explicit inputs, not additional implicit defaults:
+
+| Profile | powervr_probe | powervr_metal | powervr_metal_mode | powervr_metal_roa_color |
+| --- | --- | --- | --- | --- |
+| CPU framebuffer | false | false | selftest | false |
+| Vulkan probe | true | false | selftest | false |
+| Metal self-test | true | true | selftest | false |
+| Experimental Metal publication with COLOR ROA | true | true | publish | true |
+
+For the experimental publication profile, run the updated workflow from its reviewed
+base revision and explicitly provide the fixed device input:
+
+```sh
+gh workflow run a04br3-ssh.yml --repo mouseos/UniXNU --ref 42d15c7e9f5891057fbdc2f4908c5347512d2492 \
+  -f device_ref=dde2dab72621c02696857abc12b29977cdc447a2 \
+  -f powervr_probe=true -f powervr_metal=true \
+  -f powervr_metal_mode=publish -f powervr_metal_roa_color=true
+```
+
+The base ref above contains the updated workflow; record the run's actual source SHA.
+Do not substitute an older workflow that lacks the ROA input. Generate firmware with
+UEFI pinned to `8dbdd50713b8fbb79a5f5837a032b46a4a939723` and validate the resulting boot
+image using the pinned device's `scripts/check-a04br3-bootimg.py` before deployment.
+This profile does not enable require-fetch, async creation, or pipeline diagnostics.
+
+Host regression checks are direct script invocations from their respective checkouts:
+
+```sh
+# UniXNU checkout
+python3 scripts/tests/test_a04br3_ssh_profile.py
+# UniXNU-a04br3 checkout
+bash -n scripts/run-a04br3-unattended.sh
+python3 scripts/tests/test_a04br3_unattended.py
+python3 scripts/tests/test_a04br3_uart.py
+```
+
+`test_a04br3_unattended.py` executes its assertions at module scope. Run it directly;
+`unittest discover` reporting zero test cases is not a validation result for this script.
+For unattended runs, set `RUNS_ROOT` to an absolute host directory outside the source checkout
+(for this bring-up, `port/gsi/logs/ios-feasibility/unattended` in the parent workspace).
+Keep `MODE=flash`: the default deliberately does not retry the known-broken `fastboot boot` path.
+
 ## Build
 
 The board needs changes to the UniXNU base that are not upstream yet (all behind default-off flags, prepared as pull
@@ -22,13 +98,19 @@ fork [mouseos/UniXNU](https://github.com/mouseos/UniXNU) until they are merged, 
     git clone --recurse-submodules https://github.com/mouseos/UniXNU
     git clone --recurse-submodules https://github.com/mouseos/UniXNU-a04br3
     git clone --recurse-submodules https://github.com/mouseos/uefi-a04br3
+    git -C UniXNU-a04br3 checkout --detach dde2dab72621c02696857abc12b29977cdc447a2
+    git -C UniXNU-a04br3 submodule update --init --recursive
+    git -C uefi-a04br3 checkout --detach 8dbdd50713b8fbb79a5f5837a032b46a4a939723
+    git -C uefi-a04br3 submodule update --init --recursive
+    git -C UniXNU checkout --detach b9017ce1cdf750910a23cc190381f7663f80d37c
+    git -C UniXNU submodule update --init --recursive
     cd UniXNU
     ./unixnu defconfig a04br3_defconfig -D ../UniXNU-a04br3
     ./unixnu fetch
     ./unixnu build package
     ./unixnu build firmware --uefi ../uefi-a04br3
 
-The current image was built from these revisions (Actions run 39850069847 of mouseos/UniXNU, firmware built locally
+The earlier image checkpoint was built from these revisions (Actions run 39850069847 of mouseos/UniXNU, firmware built locally
 with the same command); check them out to reproduce it. The fork main is upstream UniXNU with the pull request branches
 `pr/*` of mouseos/UniXNU merged; the first image (tag `a04br3-image-1`) predates that rebase.
 
