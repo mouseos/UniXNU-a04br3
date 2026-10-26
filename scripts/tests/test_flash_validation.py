@@ -2,6 +2,7 @@
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -60,6 +61,75 @@ class FlashValidationTest(unittest.TestCase):
                     result = self.run_script('check-a04br3-bootimg.py', image)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn('header page', result.stderr)
+
+    def test_portable_complete_bundle_preserves_stock_partitions(self):
+        with tempfile.TemporaryDirectory(prefix='flash fixture ') as tmp:
+            base = Path(tmp)
+            boot = base / 'input boot.img'
+            boot.write_bytes(boot_fixture())
+            userdata = base / 'userdata.img'
+            userdata.write_bytes(bytes(1024))
+            policy = base / 'rootpolicy.img'
+            policy.write_bytes(b'p' * 512)
+            (base / 'rootpolicy.json').write_text(json.dumps({
+                'userdata_offset': 1024, 'bytes': 512,
+                'sha256': hashlib.sha256(policy.read_bytes()).hexdigest()}))
+            out = base / 'bundle'
+            result = self.run_script('make-a04br3-flash.py', '--boot', boot,
+                                     '--userdata', userdata, '--root-policy', base,
+                                     '--bundle', '--out', out)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            moved = base / 'relocated bundle'
+            out.rename(moved)
+            boot.unlink()
+            userdata.unlink()
+            policy.unlink()
+            report = json.loads((moved / 'flash.json').read_text())
+            self.assertIn('logo', report['preserved_partitions'])
+            writes = report['writes']
+            self.assertEqual([w['target'] for w in writes],
+                             ['boot', 'userdata', 'rootpolicy', 'gpt-secondary', 'gpt-primary'])
+            layout = json.loads((SCRIPTS / 'a04br3-gpt.json').read_text())
+            for part in layout['partitions']:
+                if part['name'] not in report['preserved_partitions']:
+                    continue
+                start = part['first_lba'] * 512
+                end = start + part['sectors'] * 512
+                for write in writes:
+                    self.assertTrue(write['offset'] + write['bytes'] <= start or
+                                    write['offset'] >= end, part['name'])
+            for line in (moved / 'write.mtk').read_text().splitlines():
+                if line == 'reset':
+                    continue
+                command, offset, size, name = line.split(' ')
+                self.assertEqual(command, 'wo')
+                self.assertFalse(Path(name).is_absolute())
+                self.assertEqual((moved / name).stat().st_size, int(size, 16))
+            self.assertTrue({'logo', 'nvram', 'proinfo', 'protect1', 'protect2',
+                             'persist', 'lk', 'lk2'} <= set(report['preserved_partitions']))
+            # Independent stock logo byte extent, not derived from generator output.
+            for write in writes:
+                self.assertTrue(write['offset'] + write['bytes'] <= 0x6e00000 or
+                                write['offset'] >= 0x7600000)
+            fake = base / 'fake-mtk'
+            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$PWD" "$@"\n')
+            fake.chmod(0o755)
+            env = dict(os.environ, MTKCLIENT='./fake-mtk')
+            result = subprocess.run([str(moved / 'install.sh')], cwd=base, env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), [str(moved), 'script', 'write.mtk'])
+            (moved / 'boot.img').write_bytes(b'corrupt')
+            result = subprocess.run([str(moved / 'install.sh')], cwd=base, env=env,
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('bundle integrity failure', result.stderr)
+            self.assertEqual(result.stdout, '')
+            (moved / 'boot.img').write_bytes(boot_fixture())
+            manifest = json.loads((moved / 'bundle.json').read_text())
+            for name, item in manifest.items():
+                self.assertEqual(hashlib.sha256((moved / name).read_bytes()).hexdigest(),
+                                 item['sha256'])
 
     def test_policy_offsets_without_userdata(self):
         with tempfile.TemporaryDirectory() as tmp:

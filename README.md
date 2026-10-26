@@ -194,11 +194,33 @@ the root authorization query of the verified NativeVirtioBlock for windows whose
 The tablet must be bootloader-unlocked (LK shows "Orange State"); a locked LK refuses the unsigned boot image and
 fastboot writes.
 
-`scripts/make-a04br3-flash.py --boot <out>/a04br3/boot/boot.img --userdata <userdata-root.img> --out DIR` checks the
-boot image (`scripts/check-a04br3-bootimg.py`) and writes `DIR/write.mtk`: boot, userdata, both GPT copies, then a
-reset. Run it once with mtkclient (`mtk script DIR/write.mtk`, tablet powered off and connected in BROM/preloader
-mode); paths must not contain spaces. `<out>` is the `--out` of `unixnu bootimg`, the userdata image is the
-`unixnu-userdata-a04br3_defconfig` artifact of the macOS workflow. Later images go through fastboot (below).
+For a portable first-install bundle, use the resolved `unixnu status --json` output paths:
+
+    python3 scripts/make-a04br3-flash.py --bundle \
+      --boot BOOT_IMG --userdata USERDATA_ROOT_IMG --root-policy SIGNED_POLICY_DIR \
+      --out NEW_BUNDLE_DIR
+
+The bundle contains boot, the complete userdata image, the signed root policy, both GPT copies,
+`write.mtk`, `install.sh`, and a SHA-256/size inventory in `bundle.json`. Run `install.sh` only for the
+first installation in BROM/preloader mode. `MTKCLIENT` can select the mtkclient executable. The wrapper
+changes to the bundle directory before invoking mtkclient; the bundle may be moved and its parent path
+may contain spaces. The generated script writes boot, userdata, policy, secondary GPT, primary GPT,
+then requests reset. It never writes LK/LK2, logo, NVRAM, proinfo, protect, persist, or calibration data.
+Their GPT extents remain at the stock offsets. A backup from another tablet is not an image input.
+This installation replaces Android userdata and its removed partition extents.
+
+Input ownership is explicit: `unixnu build userdata` decodes the pinned IPSW OS/SystemOS images;
+`unixnu build package firmware` builds the pinned UEFI device source and loader; `unixnu build payload`
+produces the kernel/Data payload; `unixnu bootimg` combines those outputs with the UEFI repository's
+board DTB. The signed policy must match the selected OS windows and the kernel's public owner anchor.
+An existing matching published policy can be reused; a changed OS/key requires its owner's signature.
+Neither a private signing key nor per-device MAC/calibration values belong in a distributed bundle.
+The bundle generator checks the policy file hash/size and placement, but does not verify its RSA
+signature or authenticate the SHNGROOT windows: that separate verification remains required before release.
+
+Without `--bundle`, the older absolute-path script generation remains available for incremental
+host use. Later boot image updates use fastboot. Bundle generation and host tests do not qualify a
+schema2 first boot or prove uninterrupted installation on hardware.
 
 ## Unattended test cycle
 

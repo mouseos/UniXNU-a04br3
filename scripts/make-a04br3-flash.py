@@ -9,11 +9,42 @@ last, so an interrupted write leaves the previous table in place. Nothing here t
 import argparse
 import hashlib
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
+
+
+# Resolve the caller's executable before changing directory. No connection occurs
+# until every staged file (including the write script) matches the inventory.
+INSTALLER = r'''import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+
+root = Path(__file__).resolve().parent
+command = os.environ.get('MTKCLIENT', 'mtk')
+executable = shutil.which(command)
+if executable is None:
+    sys.exit('MTKCLIENT must be an executable path or a command on PATH')
+executable = str(Path(executable).resolve())
+for name, expected in json.loads((root / 'bundle.json').read_text()).items():
+    if Path(name).name != name:
+        sys.exit('invalid bundle inventory filename')
+    path = root / name
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1 << 20), b''):
+            digest.update(block)
+    if path.stat().st_size != expected['bytes'] or digest.hexdigest() != expected['sha256']:
+        sys.exit('bundle integrity failure: ' + name)
+os.chdir(root)
+os.execv(executable, [executable, 'script', 'write.mtk'])
+'''
 
 
 def sha256(path):
@@ -32,26 +63,41 @@ def main():
                         help='directory of scripts/make-a04br3-root-policy.py (rootpolicy.img, rootpolicy.json): written into '
                              'userdata right after the image')
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--bundle', action='store_true',
+                        help='stage a complete portable first-install directory; requires userdata and root policy')
     args = parser.parse_args()
+    if args.bundle:
+        if not args.userdata or not args.root_policy:
+            parser.error('--bundle requires --userdata and --root-policy')
+        if args.out.exists():
+            parser.error('--bundle requires a new output directory')
     layout = json.loads((HERE / 'a04br3-gpt.json').read_text())
     sector = layout['sector_bytes']
     parts = {p['name']: p for p in layout['partitions']}
     args.out.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, HERE / 'make-a04br3-gpt.py', '--out', args.out], check=True, stdout=subprocess.DEVNULL)
     gpt = json.loads((args.out / 'gpt.json').read_text())
-    lines, report = [], {'inputs': {}, 'writes': []}
+    lines, report = [], {'inputs': {}, 'writes': [], 'preserved_partitions': [
+        p['name'] for p in layout['partitions'] if p['name'] not in ('boot', 'userdata')]}
 
     # The stock LK cannot boot a malformed image and nothing would set the fastboot flag: refuse it here.
     subprocess.run([sys.executable, HERE / 'check-a04br3-bootimg.py', args.boot], check=True)
 
     def write(name, path, offset, capacity):
         size = path.stat().st_size
-        if ' ' in str(path.resolve()):
+        if args.bundle:
+            staged = args.out / (name + ('.bin' if name.startswith('gpt-') else '.img'))
+            if path.resolve() != staged.resolve():
+                shutil.copyfile(path, staged)
+            filename = staged.name
+        else:
+            filename = str(path.resolve())
+        if ' ' in filename:
             # mtkclient script splits each line at spaces.
             raise SystemExit(f'{path.resolve()}: mtkclient scripts cannot take paths with spaces')
         if size > capacity:
             raise SystemExit(f'{path}: {size} bytes do not fit {name} ({capacity} bytes)')
-        lines.append(f'wo {offset:#x} {size:#x} {path.resolve()}')
+        lines.append(f'wo {offset:#x} {size:#x} {filename}')
         report['writes'].append({'target': name, 'offset': offset, 'bytes': size, 'capacity': capacity})
 
     write('boot', args.boot, parts['boot']['first_lba'] * sector, parts['boot']['sectors'] * sector)
@@ -80,6 +126,14 @@ def main():
     lines.append('reset')
     (args.out / 'write.mtk').write_text('\n'.join(lines) + '\n')
     (args.out / 'flash.json').write_text(json.dumps(report, indent=2) + '\n')
+    if args.bundle:
+        (args.out / 'install.py').write_text(INSTALLER)
+        (args.out / 'install.sh').write_text(
+            '#!/bin/sh\nset -eu\nexec python3 "$(dirname -- "$0")/install.py"\n')
+        (args.out / 'install.sh').chmod(0o755)
+        manifest = {p.name: {'bytes': p.stat().st_size, 'sha256': sha256(p)}
+                    for p in args.out.iterdir() if p.is_file()}
+        (args.out / 'bundle.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'mtk script {args.out / "write.mtk"}')
 
 
