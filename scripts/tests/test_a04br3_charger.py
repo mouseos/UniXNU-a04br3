@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix='a04br3-charger-') as tmp:
     # Syntax-check the actual board source with compile-context substitutes, not a copied implementation.
     for name, body in {
         'IOKit/IOLib.h': '#pragma once\n#include <stdint.h>\n#include <stddef.h>\ntypedef uintptr_t vm_offset_t;typedef size_t vm_size_t;struct IOLock; IOLock *IOLockAlloc();void IOLockLock(IOLock*);void IOLockUnlock(IOLock*);void IOLog(const char*,...);void IODelay(unsigned);void IOSleep(unsigned);',
-        'kern/thread.h': '#pragma once\ntypedef void* thread_t;typedef int wait_result_t;enum{KERN_SUCCESS=0};int kernel_thread_start(void(*)(void*,wait_result_t),void*,thread_t*);void thread_deallocate(thread_t);void thread_terminate_self();',
+        'kern/thread.h': '#pragma once\ntypedef void* thread_t;typedef int wait_result_t;enum{KERN_SUCCESS=0};int kernel_thread_start(void(*)(void*,wait_result_t),void*,thread_t*);void thread_deallocate(thread_t);',
         'machine/machine_routines.h': '#pragma once\n#include <stdint.h>\nuint64_t mach_absolute_time();void absolutetime_to_nanoseconds(uint64_t,uint64_t*);',
         'pexpert/device_tree.h': '#pragma once\ntypedef void* DTEntry;int SecureDTLookupEntry(DTEntry,const char*,DTEntry*);int SecureDTGetProperty(DTEntry,const char*,const void**,unsigned*);',
         'pexpert/pexpert.h': '#pragma once\n#include <stddef.h>\nbool PE_parse_boot_argn(const char*,void*,size_t);',
