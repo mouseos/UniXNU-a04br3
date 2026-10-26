@@ -42,7 +42,7 @@ static const uint8_t kClear[4] = {0x11, 0x5a, 0xa5, 0xee};
   X(vkBindImageMemory) X(vkBindBufferMemory) X(vkMapMemory) X(vkUnmapMemory) X(vkInvalidateMappedMemoryRanges)                \
   X(vkGetImageSubresourceLayout) X(vkFlushMappedMemoryRanges)                                                            \
   X(vkCreateCommandPool) X(vkDestroyCommandPool) X(vkAllocateCommandBuffers) X(vkBeginCommandBuffer) X(vkEndCommandBuffer)   \
-  X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCmdCopyImageToBuffer) X(vkCreateFence) X(vkDestroyFence)              \
+  X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCmdCopyImageToBuffer) X(vkCmdCopyBuffer) X(vkCreateFence) X(vkDestroyFence)              \
   X(vkQueueSubmit) X(vkWaitForFences) X(vkDeviceWaitIdle)                                                            \
   X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateRenderPass) X(vkDestroyRenderPass)                                   \
   X(vkCreateFramebuffer) X(vkDestroyFramebuffer) X(vkCreateShaderModule) X(vkDestroyShaderModule)                           \
@@ -864,6 +864,7 @@ cleanup:
 }
 
 #include "powervrprobed_roa.h"
+#include "powervrprobed_buffer_rows.h"
 
 int probe_vulkan(const char *library)
 {
@@ -877,6 +878,9 @@ int probe_vulkan(const char *library)
   if (unsetenv("PVR_DARWIN_VENDOR_ISP_OVERLAP") != 0) return -1;
   if (setenv("PVR_DARWIN_TERMINATE_TILE_UNITS", "1", 1) != 0) return -1;
   if (setenv("PVR_DARWIN_BUFFER_GUARD", "1", 1) != 0) return -1;
+  const char *rowsFlag=getenv("PVR_PROBE_BUFFER_ROWS");
+  const int bufferRows=rowsFlag && strcmp(rowsFlag,"1")==0;
+  if(bufferRows && setenv("PVR_DARWIN_BUFFER_ROWS","1",1)!=0)return -1;
   const char *roaFlag=getenv("PVR_PROBE_ROA_COLOR");
   const int roa=roaFlag && strcmp(roaFlag,"1")==0;
   const char *uiBatchFlag = getenv("PVR_PROBE_UI_BATCH");
@@ -884,6 +888,7 @@ int probe_vulkan(const char *library)
   const char *uiFillFlag = getenv("PVR_PROBE_UI_FILL");
   const int uiFill = uiBatch || (uiFillFlag && strcmp(uiFillFlag, "1") == 0);
   if(roa && uiFill){vkCheck("ROA exclusive mode",0,"unset UI_FILL/UI_BATCH for the independent overlap test");return -1;}
+  if(bufferRows && (roa || uiFill)){vkCheck("rows exclusive mode",0,NULL);return -1;}
   const uint32_t width = uiFill ? 388U : kWidth, height = uiFill ? 12U : kHeight;
   const uint32_t mipLevels = uiBatch ? 4U : 1U;
   uint32_t pixelCount = 0;
@@ -951,7 +956,7 @@ int probe_vulkan(const char *library)
              (unsigned)driverProperties.conformanceVersion.major, (unsigned)driverProperties.conformanceVersion.minor,
              (unsigned)driverProperties.conformanceVersion.subminor, (unsigned)driverProperties.conformanceVersion.patch);
   probe_line("vk driverInfo: '%.*s'", (int)sizeof(driverProperties.driverInfo), driverProperties.driverInfo);
-  const int hostImport = (uiFill || roa) ? 0 : hostImportSupported(physical);
+  const int hostImport = (uiFill || roa || bufferRows) ? 0 : hostImportSupported(physical);
   VkPhysicalDeviceExternalMemoryHostPropertiesEXT hostProperties = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
   if (hostImport == 1) {
@@ -968,7 +973,8 @@ int probe_vulkan(const char *library)
   snprintf(detail, sizeof detail, "family %u of %u, flags 0x%x", family, familyCount, family < familyCount ? families[family].queueFlags : 0);
   if (!vkCheck("graphics queue family", family != UINT32_MAX, detail)) goto out_instance;
 
-  VkFormatProperties format;
+  VkFormatProperties format={0};
+  if(!bufferRows) {
   p_vkGetPhysicalDeviceFormatProperties(physical, imageFormat, &format);
   snprintf(detail, sizeof detail, "optimal features 0x%x", format.optimalTilingFeatures);
   vkCheck(roa ? "ROA R32_UINT transfer" : uiFill ? "UI-fill B8G8R8A8_UNORM transfer" : "R8G8B8A8_UNORM transfer", (format.optimalTilingFeatures & (VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
@@ -977,6 +983,8 @@ int probe_vulkan(const char *library)
 
   if (!vkCheck(roa ? "ROA R32_UINT color attachment" : uiFill ? "UI-fill B8G8R8A8_UNORM color attachment" : "R8G8B8A8_UNORM color attachment",
                (format.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0, detail)) goto out_instance;
+
+  }
 
   const float priority = 1.0f;
   const VkDeviceQueueCreateInfo queueInfo = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = family,
@@ -1001,6 +1009,12 @@ int probe_vulkan(const char *library)
   p_vkGetDeviceQueue(device, family, 0, &queue);
   VkPhysicalDeviceMemoryProperties memory;
   p_vkGetPhysicalDeviceMemoryProperties(physical, &memory);
+
+  if(bufferRows) {
+    int rowsResult=bufferRowsProbe(device,queue,family,&memory);
+    if(rowsResult<0){hostCopyPending.active=1;return -1;}
+    result=rowsResult?0:-1;goto out_device;
+  }
 
   VkImage image = VK_NULL_HANDLE;
   VkBuffer buffer = VK_NULL_HANDLE;
