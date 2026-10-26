@@ -5,7 +5,7 @@ metal_revision = "1154c9aa4a2d6b36f5e0a9db0a48d0b92abf8508"
 hid_revision = "8fc6d05403207795b48940d0514cf594219e71d6"
 uefi_recovery_revision = "7ceed2e202b51879ee377e8c7f4cd53439d74412"
 qualification = "host migration candidate; no schema2 runtime qualification"
-paired_tools_revision = "975d07dd66e0a7a94ba26b624bfa12c3b3f58d85"
+paired_tools_revision = "b209e8b37ee41148ae43e447997683bbc0f6a97d"
 legacy_helper_source_commit = "b33e35393f7b9ff69971e5327488a6e5307524c1"
 
 darwinboot_revision = "b9063ad22903288df989c3449621b7eb97de7dd2"

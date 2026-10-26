@@ -31,8 +31,11 @@ and boot-image generation retain the pinned UEFI and board settings documented b
 
 Run the host migration checks from any working directory with Python 3.11+, Git,
 `dtc`, Clang, `g++` and mtools (`mformat`, `mcopy`, `mmd`, `mtype`) on `PATH`.
-Initialize both checkouts' submodules at their recorded revisions first. The SoC
-checkout must be clean and match the commit in this device's `feeds.toml`:
+Use sibling tools and device checkouts, not a device checkout nested in the tools
+repository. Initialize both checkouts' submodules at their recorded revisions.
+The tools checkout must match `migration/inputs.toml`'s `paired_tools_revision`
+exactly (`b209e8b37ee41148ae43e447997683bbc0f6a97d`); the SoC checkout must match
+this device's `feeds.toml`. All three source repositories must be clean:
 
 ```sh
 python3 "$DEVICE_DIR/scripts/check-schema2-host.py" \
@@ -42,12 +45,22 @@ python3 "$DEVICE_DIR/scripts/check-schema2-host.py" \
 ```
 
 The output directory must be new or empty and outside all three source trees.
-`host-results.json` records the tools/device/SoC revisions, dirty state, exact
-commands, exit codes and individual logs. The checks stop on the first failure
-and preserve its evidence. They execute archive and ADT compatibility, controller
+`host-results.json` records the tools/device/SoC revisions and full Git porcelain
+status before and after testing, the required tools pin, exact commands, exit
+codes and individual logs. A dirty source or mismatched tools pin is refused;
+changes during testing also fail. CI records its workflow revision separately
+from the pinned tools revision actually executed. The checks stop on the first
+failure and preserve its evidence. They execute archive and ADT compatibility, controller
 fixtures, optional P19 gauge/buffer-row fixtures and deterministic FAT generation.
 No SDK build, flash, UART, SSH or device operation runs. Host success does not
 qualify the kernel link, firmware or runtime on hardware.
+
+The historical schema2 SDK success is [run 40405990373](https://github.com/mouseos/UniXNU/actions/runs/40405990373),
+with tools `322a4a4a4117dd10f11a664672c421c9cb28b594` and device
+`b0e596f2521c552b3256a581ebd368f05a77fbc0`. It does not qualify this newer
+host-tested pair. Run `40403055901` failed. Host run `40420991577` passed its
+checks but recorded tools `dirty=true` without its status entries; that old
+artifact cannot establish the cause of the dirty state or a clean source tree.
 
 # UniXNU-a04br3
 

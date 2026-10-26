@@ -16,6 +16,23 @@ def revision(root):
     return subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
 
 
+def source_identities(roots):
+    result = {}
+    for name, root in roots.items():
+        status = subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain=v1',
+                                          '--untracked-files=all', '--ignore-submodules=none'], text=True)
+        result[name] = {'path': str(root), 'revision': revision(root),
+                        'dirty': bool(status), 'status_porcelain': status}
+    return result
+
+
+def source_refusal(identities, expected_tools):
+    if identities['tools']['revision'] != expected_tools:
+        return 'tools HEAD differs from migration/inputs.toml paired_tools_revision'
+    dirty = [name for name, value in identities.items() if value['dirty']]
+    return 'dirty source repositories: ' + ', '.join(dirty) if dirty else None
+
+
 def check_paths(tools, soc, out):
     for root in (tools, DEVICE, soc):
         if out == root or root in out.parents:
@@ -28,8 +45,6 @@ def check_paths(tools, soc, out):
     expected = next(s['commit'] for s in sources if s['kind'] == 'soc' and s['name'] == 'mt8167')
     if revision(soc) != expected:
         raise ValueError('SoC HEAD differs from the fixed device feed')
-    if subprocess.check_output(['git', '-C', str(soc), 'status', '--porcelain'], text=True).strip():
-        raise ValueError('SoC source must be clean')
     missing = [name for name in ('git', 'dtc', 'g++', 'clang', 'mformat', 'mcopy', 'mmd', 'mtype') if not shutil.which(name)]
     if missing:
         raise ValueError('missing host tools: ' + ', '.join(missing))
@@ -55,7 +70,7 @@ def plan(tools, soc, out):
     return checks
 
 
-def execute(checks, tools, out, report):
+def execute(checks, tools, out, report, roots=None):
     """Persist each real command's result, and stop at the first failing command."""
     logs = out / 'logs'
     logs.mkdir(parents=True, exist_ok=True)
@@ -79,9 +94,20 @@ def execute(checks, tools, out, report):
                 code = 127
         report['checks'].append({'name': name, 'command': command, 'returncode': code, 'log': str(logfile)})
         report['status'] = 'failed' if code else 'running'
+        if code and roots is not None:
+            report['sources_after'] = source_identities(roots)
         report_path.write_text(json.dumps(report, indent=2) + '\n')
         if code:
             print('FAIL ' + name + ': ' + str(logfile), file=sys.stderr)
+            return 1
+    if roots is not None:
+        after = source_identities(roots)
+        report['sources_after'] = after
+        if after != report['sources']:
+            report['status'] = 'failed'
+            report['error'] = 'source revision or Git status changed during host checks'
+            report_path.write_text(json.dumps(report, indent=2) + '\n')
+            print(report['error'], file=sys.stderr)
             return 1
     report['status'] = 'passed'
     report_path.write_text(json.dumps(report, indent=2) + '\n')
@@ -100,14 +126,22 @@ def main():
         check_paths(tools, soc, out)
         if out.exists() and any(out.iterdir()):
             raise ValueError('--out must be new or empty; preserve earlier evidence separately')
-        identities = {}
-        for name, root in (('tools', tools), ('device', DEVICE), ('soc', soc)):
-            identities[name] = {'path': str(root), 'revision': revision(root),
-                                'dirty': bool(subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip())}
+        roots = {'tools': tools, 'device': DEVICE, 'soc': soc}
+        identities = source_identities(roots)
+        expected_tools = tomllib.loads((DEVICE / 'migration/inputs.toml').read_text())['paired_tools_revision']
     except (ValueError, OSError, subprocess.CalledProcessError) as exc:
         parser.error(str(exc))
-    report = {'schema_version': 1, 'qualification': 'host contracts only; SDK and hardware not tested', 'sources': identities}
-    return execute(plan(tools, soc, out), tools, out, report)
+    report = {'schema_version': 1, 'qualification': 'host contracts only; SDK and hardware not tested',
+              'sources': identities, 'paired_tools_revision': expected_tools,
+              'orchestration_revision': os.environ.get('GITHUB_SHA')}
+    refusal = source_refusal(identities, expected_tools)
+    if refusal:
+        out.mkdir(parents=True, exist_ok=True)
+        report.update(status='refused', error=refusal, checks=[])
+        (out / 'host-results.json').write_text(json.dumps(report, indent=2) + '\n')
+        print(refusal, file=sys.stderr)
+        return 1
+    return execute(plan(tools, soc, out), tools, out, report, roots)
 
 
 if __name__ == '__main__':
