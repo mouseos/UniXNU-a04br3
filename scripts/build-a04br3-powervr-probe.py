@@ -170,6 +170,17 @@ __attribute__((constructor)) static void enable_roa_color_driver(void)
 '''
 
 
+def buffer_rows_probe_source():
+    """Standalone real GPU row-copy qualification, default off."""
+    return tq_first_probe_source().replace('enable_tq_first_comparison', 'enable_buffer_rows_comparison').replace(
+        'PVR_PROBE_TQ_FIRST', 'PVR_PROBE_BUFFER_ROWS').replace('TQ-first comparison', 'buffer-rows qualification') + r'''
+__attribute__((constructor)) static void enable_buffer_rows_driver(void)
+{
+    if (setenv("PVR_DARWIN_BUFFER_ROWS", "1", 1) != 0) _Exit(1);
+}
+'''
+
+
 def job_plist():
     return plistlib.dumps(dict(Label=LABEL, ProgramArguments=[DEVICE_BIN], RunAtLoad=True, KeepAlive=False, UserName='root',
                                StandardErrorPath='/dev/null'), fmt=plistlib.FMT_XML)
@@ -358,6 +369,10 @@ def build(args, powervr):
         comparison = out / 'powervrprobed-sipf1-dump.c'
         comparison.write_text(sipf1_dump_probe_source())
         sources.append(str(comparison))
+    if args.buffer_rows:
+        comparison = out / 'powervrprobed-buffer-rows.c'
+        comparison.write_text(buffer_rows_probe_source())
+        sources.append(str(comparison))
     if args.roa_color:
         comparison = out / 'powervrprobed-roa-color.c'
         comparison.write_text(roa_color_probe_source())
@@ -481,10 +496,17 @@ def main():
     parser.add_argument('--serial-transfer', action='store_true', help='wait transfer fences synchronously for overlap comparison')
     parser.add_argument('--sipf1-encoding', action='store_true', help='enable SIPF1 encoding without forcing TQ Clip routing')
     parser.add_argument('--sipf1-dump', action='store_true', help='enable existing bounded SIPF1 snapshots in this owner probe')
+    parser.add_argument('--buffer-rows', action='store_true', help='independent 1280-row GPU copy with full padding/source sentinel checks')
     parser.add_argument('--roa-color', action='store_true', help='experimental GE8300 COLOR ROA driver and same-draw 128-instance overlap probe')
     parser.add_argument('--ui-batch', action='store_true', help='four-mip UI-shaped clear/copy batch; skips original tests')
     parser.add_argument('--ui-fill', action='store_true', help='388x12 optimal BGRA clear/copy comparison; skips original tests')
     args = parser.parse_args()
+    if args.buffer_rows and args.vulkan is None:
+        parser.error('--buffer-rows requires --vulkan')
+    if args.buffer_rows and any(getattr(args, name) for name in (
+            'roa_color', 'ui_fill', 'ui_batch', 'tq_first', 'tq_clip', 'sipf1_stderr_only',
+            'sipf1_marker_only', 'sipf1_touch', 'submit_barrier', 'serial_transfer', 'sipf1_encoding', 'sipf1_dump')):
+        parser.error('--buffer-rows must run independently of other comparisons')
     if args.ui_batch and args.vulkan is None:
         parser.error('--ui-batch requires --vulkan')
     if args.sipf1_stderr_only and args.vulkan is None:
