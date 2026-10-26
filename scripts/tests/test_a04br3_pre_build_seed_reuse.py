@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""実際のpre-buildをmockコマンドで実行する。macOS・SDK・ネット接続不要。"""
+from pathlib import Path
+import json
+import importlib.util
+import plistlib
+import types
+from unittest import mock
+import os
+import subprocess
+import sys
+import tempfile
+
+SCRIPT = Path(__file__).resolve().parents[1] / 'a04br3-pre-build.sh'
+UUID = '12345678-1234-5678-9ABC-123456789ABC'
+
+
+def executable(path, text):
+    path.write_text(text)
+    path.chmod(0o755)
+
+
+def run_case(reuse, rounds=1, mismatch=False, probe=True, metadata='valid', data=True, fail_seed=False, metal=True):
+    with tempfile.TemporaryDirectory(prefix='pre-build-reuse-') as directory:
+        root = Path(directory)
+        work, temporary, device, tools = [root / p for p in ('work', 'temp', 'device', 'bin')]
+        for path in (work, temporary, device, tools):
+            path.mkdir()
+        tree = work / 'out/a04br3/tree'
+        (tree / 'scripts/data').mkdir(parents=True)
+        (tree / 'scripts/data/gpu-metal-vulkan-inputs.json').write_text(json.dumps({'translator': {'commit': 'test-pin'}}))
+        (tree / '.cache/gpu-reference/metal2vulkan/.git').mkdir(parents=True)
+        dmg = root / 'os.dmg'
+        dmg.write_bytes(b'mock OS')
+        log = root / 'calls'
+        log.touch()
+        if reuse:
+            (temporary / 'owner-data').mkdir()
+            # The reuse path must not need the original raw fixture at all.
+            if metadata != 'missing':
+                value = {'valid': json.dumps({'volume_uuid': UUID.lower()}),
+                         'malformed': '{', 'list': '[]', 'numeric': '{"volume_uuid": 42}',
+                         'invalid': '{"volume_uuid": "not-a-uuid"}',
+                         'nil': '{"volume_uuid": "00000000-0000-0000-0000-000000000000"}'}[metadata]
+                (temporary / 'owner-data/seed.json').write_text(value)
+            if data:
+                (temporary / 'data.dbr').write_bytes(b'' if data == 'empty' else b'existing-seed')
+        executable(work / 'unixnu', '''#!/bin/bash
+set -eu
+printf 'unixnu %s uuid=%s\n' "$*" "${XNU_OWNER_DATA_VOLUME_UUID:-unset}" >> "$MOCK_LOG"
+if [ "$1" = ipsw ]; then echo "$MOCK_DMG"; fi
+if [ "$1" = build ]; then test "$XNU_OWNER_DATA_VOLUME_UUID" = "$MOCK_UUID"; fi
+''')
+        executable(tools / 'hdiutil', '''#!/bin/bash
+printf 'hdiutil %s\n' "$*" >> "$MOCK_LOG"
+''')
+        for name in ('git', 'rustup'):
+            executable(tools / name, '#!/bin/bash\nprintf "' + name + ' %s\\n" "$*" >> "$MOCK_LOG"\n')
+        # UUID validation and pin parsing use real Python; only build/seed scripts are mocked.
+        executable(tools / 'python3', '#!' + sys.executable + '\n' + r'''
+import os
+from pathlib import Path
+import sys
+if sys.argv[1] in ('-', '-c'):
+    os.execv(os.environ['MOCK_PYTHON'], [os.environ['MOCK_PYTHON']] + sys.argv[1:])
+args = sys.argv[2:]
+name = Path(sys.argv[1]).name
+with open(os.environ['MOCK_LOG'], 'a') as log:
+    log.write('python ' + name + ' ' + ' '.join(args) + '\n')
+def option(key): return Path(args[args.index(key) + 1])
+def write(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(value)
+if name == 'prepare-owner-data-fixture.py':
+    out = option('--output')
+    image = out / 'owner-data-32.cdr'
+    if image.exists(): raise SystemExit('fixture would overwrite existing seed')
+    write(image, b'raw-seed')
+    write(out / 'seed.json', ('{"volume_uuid":"' + os.environ['MOCK_UUID'] + '"}').encode())
+elif name == 'packed_ramdisk.py': write(Path(args[-1]), b'packed-seed')
+elif name == 'seed-data-grow.py': write(Path(args[-1]), b'grown-seed')
+elif name == 'build-a04br3-trust-cache.py': write(option('--out'), b'base-trust')
+elif name == 'build-a04br3-powervr-probe.py': write(option('--trust-out'), ('new-owner-trust-' + os.environ['MOCK_GENERATION']).encode())
+elif name == 'build-a04br3-metal-plugin.py': write(option('--out') / 'trust.json', ('plugin-' + os.environ['MOCK_GENERATION']).encode())
+elif name == 'a04br3-seed-powervr-probe.py':
+    if os.environ.get('MOCK_FAIL_SEED') == '1': raise SystemExit('mock reseed failure')
+    source, destination = map(Path, args[-2:])
+    assert source.read_bytes().startswith((b'existing-seed', b'grown-seed'))
+    if '--expected-volume-uuid' in args:
+        expected = args[args.index('--expected-volume-uuid') + 1]
+        if expected != os.environ['MOCK_ACTUAL_UUID']: raise SystemExit('Data volume UUID mismatch')
+    write(destination, source.read_bytes() + ('+new-probe-' + os.environ['MOCK_GENERATION']).encode())
+''')
+        env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
+                   DEVICE_DIR=str(device), RUNNER_TEMP=str(temporary), MOCK_LOG=str(log),
+                   MOCK_DMG=str(dmg), MOCK_UUID=UUID, MOCK_ACTUAL_UUID='87654321-1234-5678-9ABC-123456789ABC' if mismatch else UUID, MOCK_PYTHON=sys.executable,
+                   GITHUB_ENV=str(root / 'github-env'), A04BR3_POWERVR_PROBE='1' if probe else '0',
+                   A04BR3_POWERVR_VULKAN='1', A04BR3_POWERVR_METAL='1' if metal else '0',
+                   MOCK_FAIL_SEED='1' if fail_seed else '0', XNU_OWNER_DATA_VOLUME_UUID='stale')
+        env.pop('A04BR3_REUSE_DATA_SEED', None)
+        if reuse:
+            env['A04BR3_REUSE_DATA_SEED'] = '1'
+        # pre-build prepends the real Cargo bin path; an exported shell function
+        # keeps rustup mocked even after that PATH change, without changing HOME.
+        launcher = 'rustup() { printf "rustup %s\\n" "$*" >> "$MOCK_LOG"; }; export -f rustup; exec bash "$1"'
+        for generation in range(1, rounds + 1):
+            if generation > 1:
+                reuse = True
+                env['A04BR3_REUSE_DATA_SEED'] = '1'
+                # The metadata UUID is unchanged while the artifact bytes evolve.
+                assert json.loads((temporary / 'owner-data/seed.json').read_text())['volume_uuid'].upper() == UUID
+            env['MOCK_GENERATION'] = str(generation)
+            log.write_text('')
+            result = subprocess.run(['bash', '-c', launcher, 'mock-pre-build', str(SCRIPT)], cwd=work, env=env, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
+            calls = log.read_text()
+            failure = reuse and (metadata != 'valid' or not data or data == 'empty') or fail_seed or mismatch or (reuse and not probe)
+            assert (result.returncode != 0) == failure, result.stdout
+            if reuse:
+                for forbidden in ('hdiutil ', 'unixnu ipsw', 'prepare-owner-data-fixture.py',
+                                  'a04br3-seed-launch-policy.py', 'packed_ramdisk.py', 'seed-data-grow.py'):
+                    assert forbidden not in calls, calls
+            elif not failure:
+                for required in ('hdiutil attach', 'hdiutil detach', 'prepare-owner-data-fixture.py',
+                                 'a04br3-seed-launch-policy.py', 'packed_ramdisk.py', 'seed-data-grow.py'):
+                    assert required in calls, calls
+            if failure:
+                assert 'unixnu build' not in calls, calls
+                if not reuse:
+                    assert 'hdiutil detach' in calls, calls
+                if reuse and (metadata != 'valid' or not data or data == 'empty' or not probe):
+                    assert not calls, calls  # 不備はtrust/data変更より前に停止する。
+                if reuse and data:
+                    assert (temporary / 'data.dbr').read_bytes() == (b'' if data == 'empty' else b'existing-seed')
+            else:
+                assert calls.count('unixnu build kernel') == 1, calls
+                assert 'unixnu build kernel uuid=' + UUID in calls, calls
+                for required in ('build-a04br3-trust-cache.py', 'build-pvr-darwin.py',
+                                 'build-a04br3-powervr-probe.py', 'a04br3-seed-powervr-probe.py'):
+                    assert required in calls, calls
+                if reuse:
+                    assert '--expected-volume-uuid ' + UUID in calls
+                else:
+                    assert '--expected-volume-uuid' not in calls
+                if metal:
+                    assert 'build-a04br3-metal-plugin.py' in calls and 'rustup toolchain install' in calls
+                    assert (temporary / 'powervr-metal/trust.json').read_text() == 'plugin-' + str(generation)
+                else:
+                    assert 'build-a04br3-metal-plugin.py' not in calls
+                assert (temporary / 'data.dbr').read_bytes().endswith(('+new-probe-' + str(generation)).encode())
+                assert (temporary / 'trustcache').read_bytes() == ('new-owner-trust-' + str(generation)).encode()
+                assert (temporary / 'a04br3-data.env').read_text() == 'export XNU_OWNER_DATA_VOLUME_UUID=' + UUID + '\n'
+                assert (root / 'github-env').read_text().splitlines()[-1] + '\n' == 'XNU_OWNER_DATA_VOLUME_UUID=' + UUID + '\n'
+
+
+def test_actual_staging_identity():
+    """実際のstaging mainを実行し、diskutil照合より先にguestを書かないことを検証。"""
+    source = SCRIPT.with_name('a04br3-seed-powervr-probe.py')
+    spec = importlib.util.spec_from_file_location('seed_probe_under_test', source)
+    stage = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stage)
+
+    class FirstGuestWrite(Exception):
+        pass
+
+    for actual, expected, should_write in ((UUID.lower(), UUID, True),
+                                           ('87654321-1234-5678-9ABC-123456789ABC', UUID, False),
+                                           (None, UUID, False), ('bad', UUID, False),
+                                           (None, None, True)):
+        with tempfile.TemporaryDirectory(prefix='seed-identity-') as directory:
+            root = Path(directory)
+            base, output = root / 'input.dbr', root / 'output.dbr'
+            base.write_bytes(b'unchanged-input')
+            probe = root / 'probe'
+            probe.write_bytes(b'new-probe')
+            markers = root / 'markers'
+            markers.mkdir()
+            calls = []
+            packed = types.ModuleType('packed_ramdisk')
+            packed.regions = mock.Mock(return_value=(64, [(32, b'NXSB')]))
+
+            def check_output(command):
+                calls.append(command)
+                if command[0] == 'hdiutil':
+                    mount = Path(command[command.index('-mountpoint') + 1])
+                    (mount / 'mobile').mkdir()
+                    return plistlib.dumps({'system-entities': [{'dev-entry': '/dev/mock'}]})
+                assert command[:3] == ['diskutil', 'info', '-plist'], command
+                return plistlib.dumps({} if actual is None else {'VolumeUUID': actual})
+
+            def run(command, **kwargs):
+                calls.append(command)
+                if command[0] == 'sudo':
+                    raise FirstGuestWrite()
+                assert command == ['hdiutil', 'detach', '/dev/mock']
+                return subprocess.CompletedProcess(command, 0)
+
+            argv = [str(source), '--tree', str(root), '--probe-dir', str(root), str(base), str(output)]
+            if expected:
+                argv[1:1] = ['--expected-volume-uuid', expected]
+            with mock.patch.object(stage.sys, 'argv', argv), \
+                 mock.patch.object(stage.sys, 'platform', 'darwin'), \
+                 mock.patch.object(stage, 'plan', return_value=[(probe, 'bin/probe', '0755')]), \
+                 mock.patch.object(stage.tempfile, 'mkdtemp', return_value=str(markers)), \
+                 mock.patch.object(stage.subprocess, 'check_output', side_effect=check_output), \
+                 mock.patch.object(stage.subprocess, 'run', side_effect=run), \
+                 mock.patch.dict(sys.modules, {'packed_ramdisk': packed}), \
+                 mock.patch.object(stage.sys, 'path', list(sys.path)):
+                try:
+                    stage.main()
+                except FirstGuestWrite:
+                    assert should_write
+                except SystemExit as error:
+                    assert not should_write and 'UUID mismatch' in str(error)
+                else:
+                    raise AssertionError('Expected write sentinel or identity rejection')
+            packed.regions.assert_called_once()
+            assert calls[-1] == ['hdiutil', 'detach', '/dev/mock']
+            installs = [c for c in calls if c[0] == 'sudo']
+            assert bool(installs) == should_write
+            assert any(c[0] == 'diskutil' for c in calls) == bool(expected)
+            if installs and expected:
+                assert next(i for i,c in enumerate(calls) if c[0] == 'diskutil') < calls.index(installs[0])
+            assert base.read_bytes() == b'unchanged-input' and not output.exists()
+    print('PASS: actual staging checks mounted UUID before guest install; mismatch/missing/invalid rejected; detach; single unpack; default unchanged')
+
+
+def main():
+    test_actual_staging_identity()
+    run_case(False, rounds=3)
+    run_case(True)
+    run_case(True, metal=False)
+    for metadata in ('missing', 'malformed', 'list', 'numeric', 'invalid', 'nil'):
+        run_case(True, metadata=metadata)
+    run_case(True, mismatch=True)
+    run_case(True, probe=False)
+    run_case(True, data=False)
+    run_case(True, data='empty')
+    run_case(False, fail_seed=True)
+    run_case(True, fail_seed=True)
+    print('PASS: same-workdir initial -> reuse -> reuse; updated probe/plugin/trust; UUID before kernel; no reuse initialization; metadata/Data mismatch and PROBE=0 rejected; input preserved')
+
+
+if __name__ == '__main__':
+    main()

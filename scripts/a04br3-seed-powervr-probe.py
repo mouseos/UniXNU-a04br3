@@ -30,7 +30,7 @@ build-a04br3-powervr-probe.py --trust-out (payload step: --owner-trust-cache).
 The packed seed (drivers/DarwinBoot/Test/packed_ramdisk.py of the UniXNU tree TREE) is unpacked into a sparse raw file, attached with
 ownership honoured and written with sudo, as scripts/a04br3-seed-launch-policy.py writes the launchd policy, then packed again.
 BASE is not modified and the volume UUID is unchanged (XNU_OWNER_DATA_VOLUME_UUID stays valid). A seed whose content changes starts a new
-persistent store (native-msdc-persist=2); a04br3-pre-build.sh makes a new seed on every run anyway."""
+persistent store (native-msdc-persist=2); a04br3-pre-build.sh may explicitly reuse its existing seed. --expected-volume-uuid verifies the mounted Data volume before guest writes."""
 import argparse
 import json
 from pathlib import Path
@@ -38,6 +38,7 @@ import plistlib
 import subprocess
 import sys
 import tempfile
+import uuid
 
 LIB = 'libvulkan_powervr_mesa.dylib'
 LABEL = 'org.unixnu.a04br3.powervrprobed'
@@ -72,6 +73,18 @@ def plan(probe, launchd_job, metal=None, mode='selftest', clients=None, work=Non
     return files
 
 
+def verify_volume_uuid(mount, expected):
+    """Verify the mounted volume identity before any guest file is modified."""
+    info = plistlib.loads(subprocess.check_output(['diskutil', 'info', '-plist', str(mount)]))
+    actual = info.get('VolumeUUID') if isinstance(info, dict) else None
+    try:
+        actual_uuid = uuid.UUID(actual) if isinstance(actual, str) else None
+    except ValueError:
+        actual_uuid = None
+    if actual_uuid != expected:
+        sys.exit('Data volume UUID mismatch: expected %s, mounted %r' % (expected, actual))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--tree', type=Path, help='UniXNU build tree (for drivers/DarwinBoot/Test/packed_ramdisk.py)')
@@ -80,6 +93,7 @@ def main():
     parser.add_argument('--metal-plugin', type=Path, help='output directory of build-a04br3-metal-plugin.py')
     parser.add_argument('--metal-mode', choices=('selftest', 'publish'), default='selftest')
     parser.add_argument('--metal-clients', help='processes besides backboardd with their own Metal device (comma separated)')
+    parser.add_argument('--expected-volume-uuid', type=uuid.UUID, help='require mounted Data volume identity before writes')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('base', type=Path, nargs='?')
     parser.add_argument('output', type=Path, nargs='?')
@@ -124,6 +138,8 @@ def main():
              '-mountpoint', str(mount), '-plist', str(raw)]))
         device = attached['system-entities'][0]['dev-entry']
         try:
+            if args.expected_volume_uuid is not None:
+                verify_volume_uuid(mount, args.expected_volume_uuid)
             if not (mount / 'mobile').is_dir():
                 sys.exit('The Data seed has no /mobile; wrong base image?')
             for source, target, mode in files:

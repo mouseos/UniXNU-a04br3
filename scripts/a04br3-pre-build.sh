@@ -14,26 +14,69 @@
 #     keeps the CPU renderer; =publish makes backboardd composite on the GPU. The kernel needs a04br3-gpu-metal=1 (and sheng-fb-gpu=1 for
 #     the GPU copy into the scanout). The bridge needs the pinned metal2vulkan source and Rust 1.98.0 with the aarch64-apple-ios target;
 #     both are fetched here.
+# A04BR3_REUSE_DATA_SEED=1: require an existing data.dbr + seed.json; update declared
+# probe/plugin/trust inputs without recreating the initial Data volume or UUID.
 # Workflow input: pre_build = bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
 #   with the probe: pre_build = A04BR3_POWERVR_PROBE=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh", owner_trust_cache = true
 set -euo pipefail
 : "${DEVICE_DIR:?}" "${RUNNER_TEMP:?}"
+# SSH incremental builds opt in; default builds still create a fresh fixture.
+read_seed_uuid() {
+  python3 - "$RUNNER_TEMP/owner-data/seed.json" <<'PY_UUID'
+import json
+from pathlib import Path
+import sys
+import uuid
+try:
+    record = json.loads(Path(sys.argv[1]).read_text())
+    if not isinstance(record, dict) or not isinstance(record.get('volume_uuid'), str):
+        raise ValueError('seed.json must be an object with a string volume_uuid')
+    value = uuid.UUID(record['volume_uuid'])
+    if not value.int:
+        raise ValueError('volume_uuid must not be nil')
+except (OSError, ValueError, TypeError) as error:
+    raise SystemExit('Invalid Data seed metadata: ' + str(error))
+print(str(value).upper())
+PY_UUID
+}
+case "${A04BR3_REUSE_DATA_SEED:-0}" in
+  0) ;;
+  1)
+    if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ]; then
+      echo "Data seed reuse requires A04BR3_POWERVR_PROBE=1 for mounted volume UUID validation" >&2
+      exit 1
+    fi
+    if [ ! -f "$RUNNER_TEMP/data.dbr" ] || [ ! -s "$RUNNER_TEMP/data.dbr" ]; then
+      echo "Data seed reuse requires an existing nonempty $RUNNER_TEMP/data.dbr" >&2
+      exit 1
+    fi
+    DATA_UUID=$(read_seed_uuid)
+    ;;
+  *) echo "A04BR3_REUSE_DATA_SEED must be 0 or 1" >&2; exit 1 ;;
+esac
 python3 "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$PWD" --out "$RUNNER_TEMP/trustcache"
 ./unixnu tree -D "$DEVICE_DIR"
 TREE=$PWD/out/a04br3/tree
-OS_DMG=$(./unixnu ipsw fetch OS -D "$DEVICE_DIR" | grep '\.dmg$' | tail -1)
-test -f "$OS_DMG"
-MOUNT=$TREE/.cache/firmware/target-volumes/os-mount
-mkdir -p "$MOUNT"
-hdiutil attach -readonly -nobrowse -owners on -mountpoint "$MOUNT" "$OS_DMG"
-trap 'hdiutil detach "$MOUNT" || true' EXIT
-python3 "$TREE/scripts/prepare-owner-data-fixture.py" --output "$RUNNER_TEMP/owner-data"
-# launchd's disabled jobs from board.toml (sheng-disable-watchdogd, sheng-disable-jobs) into the seed, root-owned.
-python3 "$DEVICE_DIR/scripts/a04br3-seed-launch-policy.py" --board "$DEVICE_DIR/board.toml" "$RUNNER_TEMP/owner-data/owner-data-32.cdr"
-python3 "$TREE/drivers/DarwinBoot/Test/packed_ramdisk.py" "$RUNNER_TEMP/owner-data/owner-data-32.cdr" "$RUNNER_TEMP/data-32.dbr"
-# Grow the 32 MiB seed to 4 GiB (UniXNU scripts/seed-data-grow.py, as UniXNU-tb128fu does with 8 GiB; the volume UUID is
-# unchanged); NativeMsdc keeps the changed pages in its store window (native-msdc-persist=2).
-python3 "$TREE/scripts/seed-data-grow.py" --gib 4 "$RUNNER_TEMP/data-32.dbr" "$RUNNER_TEMP/data.dbr"
+MOUNT=
+SEED_IDENTITY=()
+if [ "${A04BR3_REUSE_DATA_SEED:-0}" = 1 ]; then
+  SEED_IDENTITY=(--expected-volume-uuid "$DATA_UUID")
+fi
+if [ "${A04BR3_REUSE_DATA_SEED:-0}" != 1 ]; then
+  OS_DMG=$(./unixnu ipsw fetch OS -D "$DEVICE_DIR" | grep '\.dmg$' | tail -1)
+  test -f "$OS_DMG"
+  MOUNT=$TREE/.cache/firmware/target-volumes/os-mount
+  mkdir -p "$MOUNT"
+  hdiutil attach -readonly -nobrowse -owners on -mountpoint "$MOUNT" "$OS_DMG"
+  trap 'hdiutil detach "$MOUNT" || true' EXIT
+  python3 "$TREE/scripts/prepare-owner-data-fixture.py" --output "$RUNNER_TEMP/owner-data"
+  # launchd's disabled jobs from board.toml (sheng-disable-watchdogd, sheng-disable-jobs) into the seed, root-owned.
+  python3 "$DEVICE_DIR/scripts/a04br3-seed-launch-policy.py" --board "$DEVICE_DIR/board.toml" "$RUNNER_TEMP/owner-data/owner-data-32.cdr"
+  python3 "$TREE/drivers/DarwinBoot/Test/packed_ramdisk.py" "$RUNNER_TEMP/owner-data/owner-data-32.cdr" "$RUNNER_TEMP/data-32.dbr"
+  # Grow the 32 MiB seed to 4 GiB (UniXNU scripts/seed-data-grow.py, as UniXNU-tb128fu does with 8 GiB; the volume UUID is
+  # unchanged); NativeMsdc keeps the changed pages in its store window (native-msdc-persist=2).
+  python3 "$TREE/scripts/seed-data-grow.py" --gib 4 "$RUNNER_TEMP/data-32.dbr" "$RUNNER_TEMP/data.dbr"
+fi
 if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
   if [ "${A04BR3_POWERVR_METAL:-0}" = 1 ]; then A04BR3_POWERVR_VULKAN=1; fi
   PROBE_VULKAN=()
@@ -63,13 +106,13 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
   python3 "$DEVICE_DIR/scripts/build-a04br3-powervr-probe.py" --out "$RUNNER_TEMP/powervr-probe" ${PROBE_VULKAN[@]+"${PROBE_VULKAN[@]}"} \
     --trust-base "$RUNNER_TEMP/trustcache" --trust-out "$RUNNER_TEMP/trustcache-owner" ${METAL_TRUST[@]+"${METAL_TRUST[@]}"}
   python3 "$DEVICE_DIR/scripts/a04br3-seed-powervr-probe.py" --tree "$TREE" --probe-dir "$RUNNER_TEMP/powervr-probe" \
-    ${METAL_SEED[@]+"${METAL_SEED[@]}"} "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/data-probe.dbr"
+    ${METAL_SEED[@]+"${METAL_SEED[@]}"} ${SEED_IDENTITY[@]+"${SEED_IDENTITY[@]}"} "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/data-probe.dbr"
   mv "$RUNNER_TEMP/data-probe.dbr" "$RUNNER_TEMP/data.dbr"
   mv "$RUNNER_TEMP/trustcache-owner" "$RUNNER_TEMP/trustcache"
   echo "PowerVR probe staged; the payload step needs owner_trust_cache = true (--owner-trust-cache)"
 fi
 # The kernel's owner Data mount (CONFIG_XNU_OWNER_DATA_MOUNT) selects this seed's volume by UUID.
-DATA_UUID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["volume_uuid"])' "$RUNNER_TEMP/owner-data/seed.json")
+DATA_UUID=$(read_seed_uuid)
 test -n "$DATA_UUID"
 echo "XNU_OWNER_DATA_VOLUME_UUID=$DATA_UUID" >> "${GITHUB_ENV:-/dev/null}"
 export XNU_OWNER_DATA_VOLUME_UUID=$DATA_UUID
@@ -82,6 +125,8 @@ ls -l "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/data.dbr"
 # First kernel pass: the PMGR bridge (scripts/build-platform-power.py) and the display (scripts/build-a04br3-legacy-display.py)
 # check themselves against a previous kernel of this tree and link no-ops on a new tree, as UniXNU-tb128fu documents for the
 # bridge; the workflow's kernel step then links both.
-hdiutil detach "$MOUNT" || true
-trap - EXIT
+if [ -n "$MOUNT" ]; then
+  hdiutil detach "$MOUNT" || true
+  trap - EXIT
+fi
 ./unixnu build kernel
