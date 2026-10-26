@@ -1,0 +1,5 @@
+# Optional host-only override; never replace the committed feed pin.
+# [[source]]
+# kind = "soc"
+# name = "mt8167"
+# local = "../UniXNU-mt8167-common"

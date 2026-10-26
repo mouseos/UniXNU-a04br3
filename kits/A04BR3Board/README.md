@@ -1,0 +1,1 @@
+This catalog entry owns the device package archive contract. Runtime sources are supplied exactly once through package/ -> kits/a04br3. Do not mirror the package here: existing builders discover ShengPlatformPower.cpp through kits/* and would compile it twice.

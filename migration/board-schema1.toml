@@ -1,0 +1,294 @@
+# Board description of the Benesse TAB-A04-BR3 (a04br3, MediaTek MT8167), read by the unixnu build driver.
+# Hardware values come from the earlier a04br3 ports by the same maintainer, which ran on this tablet:
+#   github.com/mouseos/xnu_kernel_benesse_a04br3, github.com/mouseos/xnu_bootshim_benesse_a04br3 (XNU on MT8167)
+#   github.com/mouseos/edk2-mtk (branch a04br3-upstream-port, EDK II on MT8167)
+
+[board]
+name = "a04br3"
+soc = "MT8167"
+description = "Benesse TAB-A04-BR3"
+kit = "a04br3"                     # the package/ of this repository appears as kits/a04br3 in the build tree
+
+# The target OS image: the unchanged iPad7,1 iPadOS 17.7.11 restore image, the UniXNU default target (Darwin 23,
+# matching the xnu-10063 source kernel). Give --ipsw PATH to use a local file.
+[ipsw]
+url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
+product = "iPad7,1"
+version = "17.7.11"
+build = "21H461"
+device_class = "j120ap"
+chip_id = 0x8011
+board_id = 12
+fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
+
+[ipsw.sha256]
+"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
+"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
+
+# The eMMC (MSDC0) uses 512-byte sectors. The userdata entry of the a04br3 GPT in scripts/make-a04br3-gpt.py:
+# the Android-only partitions (factory, metadata, system, cache) are removed and userdata runs to flashinfo.
+[userdata]
+first_lba = 557056
+last_lba = 30501887
+lba_bytes = 512
+windows = [
+  { name = "OS", component = "OS" },
+  { name = "SystemOS", component = "Cryptex1,SystemOS" },
+]
+
+[kernel]
+defconfig = "a04br3_defconfig"
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "build-arm-driver.py ArmDTPlatform",
+  "build-arm-driver.py ArmCpu",
+  "build-arm-driver.py NativeAES",
+  "build-native-aes-bindings.py",
+  # NativeRamBlock (the Data RAM disk) and the NativeMsdc userdata windows (CONFIG_XNU_NATIVE_MSDC_BLOCK=y) subclass the original
+  # IOBlockStorageDevice. build-native-virtio-bindings.py binds them with build/storage-abi/interface-audit.json when present,
+  # otherwise with UniXNU scripts/data/native-storage-interface-audit.json (scripts/record-storage-interface.py), the static record
+  # of the kernelcache and slide of [kernel.prelink] below.
+  # Owner root chain (CONFIG_XNU_OWNER_ROOT_TRUST): iPadOS mounts the root only when it is authenticated. The verified
+  # NativeVirtioBlock carries native_verified_block_root_authorized(), which asks NativeMsdc about its windows; NativeMsdc
+  # verifies every block against the owner-signed envelopes in userdata (scripts/make-a04br3-root-policy.py); the root key
+  # archive carries the owner anchor, VerifiedRoot and the anchor self-test (CONFIG_XNU_VERIFIED_ROOT_ARCHIVE).
+  "build-arm-driver.py NativeVirtioBlock --verified-root",
+  "build-native-virtio-bindings.py --component NativeVirtioBlock --directory build/native-virtio-block-verified",
+  "build-a04br3-root-key.py",
+  "build-arm-driver.py NativeRamBlock",
+  "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
+  # NativeMsdc: the eMMC (MSDC0) driver. Without CONFIG_XNU_NATIVE_MSDC_BLOCK it builds the persistent store only.
+  "build-arm-driver.py NativeMsdc --verified-root",
+  "build-native-virtio-bindings.py --component NativeMsdc --block-class NativeMsdcBlock --directory build/native-msdc",
+  "build-mockfs-fixture.py",
+  "build-libpthread-kernel.py",
+  # The AppleKeyStore stand-in of UniXNU (drivers/NativeKeyStoreEvents); build-a04br3-board.py stages it into the board
+  # archive with KeyStoreProbe.cpp (offline-key-events=1, sheng-aks=1).
+  "build-arm-driver.py NativeKeyStoreEvents",
+  "build-a04br3-board.py",
+  # The PowerVR accelerator for the original Metal discovery (package/powervr/NativePowerVRAccelerator.cpp): a subclass of the
+  # original IOAcceleratorES of IOGPUFamily, so its static initializer is staged (UniXNU build-native-adreno-accelerator.py with
+  # --source) and added to the board archive, where package/powervr/NativePowerVRMetal.cpp runs it after loading IOGPUFamily
+  # (kernel argument a04br3-gpu-metal=1). Without that argument the class is linked and never registered.
+  "build-native-adreno-accelerator.py --source kits/a04br3/powervr/NativePowerVRAccelerator.cpp --into build/a04br3-board/libA04BR3Board.a",
+  # The original-PMGR bridge (CONFIG_XNU_SHENG_PMGR, kernel argument sheng-pmgr=2): AMFI requires a published PMGR
+  # ("AMFI: No PMGR?" without it). Generic and hardware-free; from UniXNU-tb128fu/UniXNU-sheng.
+  "build-platform-power.py",
+  # The display (CONFIG_XNU_NATIVE_LEGACY_DISPLAY): NativeLegacyDisplay, a subclass of the original IOMobileFramebufferLegacy, on
+  # the firmware frame buffer (uefi-a04br3's GOP, 800x1280, 32 bpp), QuartzCore's CPU renderer and the HID input with a Home
+  # button, as on UniXNU-tb128fu without its touch, GPU and RPM parts. It checks the original classes against this board's
+  # previous kernel (out/a04br3/kernel); without one it links no-op probes, like build-platform-power.py. After
+  # build-a04br3-board.py: it refuses symbols that the board archive also defines (the key store stand-in is there).
+  "build-a04br3-legacy-display.py",
+]
+
+[kernel.prelink]
+tool = "kits/NativePrelink/emit_prelink.py"
+kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
+kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
+slide = "-0x1000000"
+early_security_init = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
+roots = [
+  # UniXNU-tb128fu's set (the same as UniXNU-sheng's) without com.apple.driver.AppleARMWatchdogTimer (no watchdog backend:
+  # watchdogd is disabled below) and com.apple.driver.AppleEffaceableStorage (not needed by the display; the boot reached
+  # SpringBoard without it). The display set: IOMobileGraphicsFamily (the original IOMobileFramebufferLegacy that
+  # NativeLegacyDisplay subclasses) with IOAVFamily, IOHDCPFamily, IOCECFamily, IOGPUFamily, IOSlowAdaptiveClockingFamily,
+  # IODARTFamily, AppleM2ScalerCSCDriver and the audio set (IOAudio2Family, AppleAudioClockLibs, AppleIISController) of
+  # tb128fu. The a04br3 device tree (scripts/make-a04br3-adt.py) has no Apple hardware node for any of them to match.
+  "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
+  "com.apple.driver.AppleARMPlatform",
+  "com.apple.driver.AppleAudioClockLibs",
+  "com.apple.driver.AppleIISController",
+  "com.apple.driver.AppleM2ScalerCSCDriver",
+  "com.apple.driver.AppleMobileFileIntegrity",
+  "com.apple.driver.ApplePMGR",
+  "com.apple.driver.IODARTFamily",
+  "com.apple.filesystems.apfs",
+  "com.apple.iokit.CoreAnalyticsFamily",
+  "com.apple.iokit.IOAVFamily",
+  "com.apple.iokit.IOAudio2Family",
+  "com.apple.iokit.IOCECFamily",
+  "com.apple.iokit.IOCryptoAcceleratorFamily",
+  "com.apple.iokit.IOGPUFamily",
+  "com.apple.iokit.IOHDCPFamily",
+  "com.apple.iokit.IOMobileGraphicsFamily",
+  "com.apple.iokit.IOReportFamily",
+  "com.apple.iokit.IOSlowAdaptiveClockingFamily",
+  "com.apple.iokit.IOStorageFamily",
+  "com.apple.iokit.IOSurface",
+  "com.apple.kec.Libm",
+  "com.apple.kec.corecrypto",
+  "com.apple.kext.AppleMatch",
+  "com.apple.kext.CoreTrust",
+  "com.apple.security.AppleImage4",
+  "com.apple.security.sandbox",
+  "com.apple.iokit.IOHIDFamily",
+  "com.apple.iokit.IOHIDEventDriver",
+]
+
+[firmware]
+config = "a04br3"                  # Resources/Configs/a04br3.toml in the uefi-a04br3 checkout (--uefi)
+dsc = "Platforms/Benesse/a04br3Pkg/a04br3.dsc"
+fd = "Build/a04br3Pkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+submodules = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
+packages = [
+  "{uefi}",
+  "{uefi}/Platforms/Benesse",
+  "{tree}/package",
+  "{tree}/drivers/DarwinBoot",
+  "{edk2}",
+  "{uefi}/Common/Mu",
+  "{uefi}/Common/Mu_OEM_Sample",
+  "{uefi}/Silicon/MediaTek",
+  "{uefi}/Silicon/Silicium",
+  "{uefi}/Silicium-ACPI",
+]
+
+[firmware.defines]
+DEVICE_MODEL = "a04br3"
+BUILDID_STRING = "a04br3-bringup"
+# Bring-up: uefi-a04br3 a04br3Pkg sets the LK fastboot flag and arms the 31 s watchdog from SEC on
+# (A04BR3PlatformSecBoardLib), A04BR3TestCycleDxe kicks it until ExitBootServices (at most 120 s) and re-arms it there,
+# so firmware or a kernel that stops before a04br3-autoreset (package/A04BR3AutoReset.cpp) takes over still resets
+# into fastboot. Remove together with a04br3-autoreset for a release image.
+A04BR3_TEST_CYCLE = "1"
+
+# The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
+# trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
+[payload]
+volume = "A04BR3ESP"
+size_mib = 126  # Kernel + unchanged Data seed + compressed GPU update; boot.img must pass the 128 MiB checker.
+loader = "firmware"
+title = "Boot"
+dram_size = "0x80000000"             # 2 GiB at 0x40000000 (MT8167 EMI, LK memory node)
+# panic_screen needs a device scripts/patch-xnu-entry-probe.py (UniXNU-sheng); a04br3 reports panics on UART.
+panic_screen = false
+skip_setup_tool = "scripts/seed-data-skip-setup.py"
+# With a display (UniXNU-tb128fu): without these SpringBoard preferences iPadOS turns the display off about 30 s after it starts
+# and puts the system to sleep, which ArmCpu does not support. Applied when the payload step runs with --skip-setup (the
+# workflow's skip_setup input). tb128fu's --plain-framebuffer serves its GPU addon and is left out.
+skip_setup_args = ["--no-auto-dim"]
+trust_cache_sha256 = [
+  "7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7",
+  "8900d6a93d7a59ce1a872a5c081e559f4240a218f97e12d44d22dda46644d68f",
+]
+kernel_args = [
+  "-v",
+  "serial=1",  # output only: with the input bit (2) XNU's serial keyboard thread drains UART0 receive every 16 ms and
+  # would take the reset request of package/A04BR3AutoReset.cpp
+  "debug=0x14e",
+  "kt_fixed_zones=120",
+  "-apfs_shared_datavolume",
+  "-no_slto_panic",
+  # eMMC: publish the userdata windows (OS, SystemOS) read-only; nothing is written to the eMMC.
+  "native-msdc-root=1",
+  # Data: the seed is grown to 4 GiB (a04br3-pre-build.sh); its changed pages persist in the NativeMsdc store window at the
+  # end of userdata, as sheng-data-persist=2 does on UFS. A 32 MiB volatile Data ran out of space (ENOSPC) under launchd.
+  "native-msdc-persist=2",
+  # Descriptor DMA for eMMC reads (NativeMsdc), enabled only after it reads the same bytes as PIO. PIO kept launchd's
+  # first children about 5 minutes away.
+  "native-msdc-dma=1",
+  # Publish the original PMGR nub through the bridge (build-platform-power.py); it reads and writes no hardware.
+  "sheng-pmgr=2",
+  # Compact process/display heartbeat every 60 s. Full UI stacks require the
+  # explicit a04br3-stacklog=1 diagnostic argument (package/A04BR3Board.cpp).
+  # Start the secondary CPUs listed in [payload.adt] cpu_regs (ArmCpu, PSCI CPU_ON), as on UniXNU-tb128fu. On one core the
+  # first-boot LaunchServices database build in lsd did not finish within 45 minutes and SpringBoard waits on it.
+  "sheng-smp=1",
+  "a04br3-proclog=60",
+  # UI stack trace targets are optional diagnostics: pass boot-ui-focus3/4 explicitly when needed.
+  # Bring-up: every reset returns to LK fastboot for the unattended cycle (package/A04BR3AutoReset.cpp). Remove for a
+  # release image.
+  # 7200 s: a round normally ends with the UART reset request (scripts/a04br3-reset.sh); the timer is the fallback.
+  # The first boot of a new Data seed builds the LaunchServices database in lsd (InstalledContentLibrary, one
+  # thread on the Cortex-A35); SpringBoard, backboardd and runningboardd wait on it, and 900 s reset before it finished.
+  "a04br3-autoreset=7200",
+  # After the PMGR bridge: the launchd-side arguments of UniXNU-tb128fu (board.toml) and UniXNU-sheng that need no display.
+  # No corpses for crashing processes (stock XNU osfmk/corpses/corpse.c): on tb128fu each corpse's footprint walk took half
+  # of all CPU samples while daemons without a GPU crashed in loops; a04br3 has one Cortex-A35.
+  "-no_corpses",
+  # Stock XNU lock-panic timeout (osfmk/arm/locks_arm.c, 0xc00000 timebase ticks) times 40, as on tb128fu and sheng.
+  "ml-timeout-lock-panic-scale=40",
+  # The AppleKeyStore stand-in (package/KeyStoreProbe.cpp, UniXNU drivers/NativeKeyStoreEvents), started from
+  # unixnu_board_init(): the notification service and the state answers (no passcode, nothing locked). It holds no keys.
+  "offline-key-events=1",
+  "sheng-aks=1",
+  # The display as on UniXNU-tb128fu (board.toml) and UniXNU-qemu: IOMobileGraphicsFamily loaded from bsd_init, NativeLegacyDisplay
+  # on the firmware frame buffer as the system display (phase 4) with one scanout pixel per point (800x1280 points), logical
+  # power management, swap validation, the transfer to the frame buffer by the CPU (package/LegacyDisplayProbe.cpp,
+  # UniXNU drivers/NativeMobileDisplay), and the HID input with a Home button (package/HidInputProbe.cpp). tb128fu's touch
+  # (sheng-touch-hid, tb128fu-touch), GPU (tb128fu-gpu, sheng-gpu-addon, sheng-fb-gpu) and CPU frequency arguments are left out.
+  "offline-mobile-graphics-load=1",
+  "offline-legacy-register=1",
+  "offline-legacy-phase=4",
+  "offline-legacy-gop=1",
+  "offline-legacy-unit-scale=1",
+  "offline-legacy-pm=1",
+  "offline-legacy-validate=1",
+  "offline-legacy-transfer=1",
+  "offline-legacy-cpu-present=1",
+  "offline-hid-input=1",
+  "offline-hid-home=1",
+  # The touch panel (BU21025) and the Home and volume up keys (package/A04BR3Input.cpp, ported from the iOS 16 bring-up of
+  # this tablet) feeding NativeHidInput.
+  # GPU bring-up (package/A04BR3Gpu.cpp, package/powervr/NativePowerVR.cpp): power the MFG domains, print the Rogue
+  # BVNC and boot the upstream MIPS firmware (2), waiting for FWIF initialisation.
+  "a04br3-gpu=2",
+  # The PowerVR user-space probe (package/powervr/user/powervrprobed.c): started once by the board launch hook before launchd
+  # (package/A04BR3ProbeLaunch.c), its lines "powervrprobed: ..." on UART through /dev/console. Needs the hook
+  # (CONFIG_XNU_BOARD_LAUNCH, upstream proposal native-board-launch-hook) and a seed and trust bundle that carry it
+  # (a04br3-pre-build.sh A04BR3_POWERVR_PROBE=1); without the binary the spawn prints ENOENT (2) and the boot goes on.
+  "a04br3-powervrprobed=1",
+  # The GPU addon union mounts of UniXNU (zzy-native-gpu-addon-mount): /private/var/ngpu/addons over /System/Library/Extensions,
+  # where the platform sandbox allows the executable mapping of the Mesa PowerVR library.
+  "sheng-gpu-addon=1",
+  # The PowerVR Metal accelerator (package/powervr/NativePowerVRMetal.cpp): loads IOGPUFamily and publishes the accelerator; the
+  # plugin runs its self-test unless the seed selects publish (scripts/a04br3-pre-build.sh A04BR3_POWERVR_METAL_MODE).
+  "a04br3-gpu-metal=1",
+  # Bring-up diagnostics: record the CCCB packets and the PTE stream of the first fragments (package/powervr/
+  # NativePowerVRJobs.cpp); a first context fragment drops with fault address=0 while later ones succeed.
+  "a04br3-gpu-packet=1",
+  # Restore the BO mapping and TQ heap policy of the qualified GE8300 ROA run.
+  # This is a board bring-up selection, not proof of Metal UI correctness.
+  "a04br3-gpu-bo-wc=1",
+  "a04br3-gpu-bo-map=1",
+  "a04br3-gpu-tq-low=1",
+  "a04br3-input=1",
+  # NativeHidInput registers its touch sink and digitizer collection only with this (UniXNU-tb128fu, UniXNU-qemu).
+  "sheng-touch-hid=1",
+  # Bring-up: unattended Home presses (package/HidInputProbe.cpp), 60 s after the second presented frame, three times 20 s
+  # apart, to test the Home path from the lock screen without anyone at the tablet. Remove for a release image.
+  "offline-hid-auto-home=60",
+  "offline-hid-auto-home-count=3",
+  # Optional input bring-up: a04br3-input-selftest=<seconds> injects one swipe.
+  # Leave it disabled during interactive use: it shares the real finger stream.
+  # launchd's disabled jobs (package/BootWatchdogPolicy.c labels; written into the Data seed by
+  # scripts/a04br3-seed-launch-policy.py, and by unixnu_board_launch() once CONFIG_XNU_BOARD_LAUNCH reaches UniXNU).
+  # watchdogd: no AppleARMWatchdogTimer here (not in [kernel.prelink] roots); on tb128fu it trapped about 5 minutes in
+  # and its exit is fatal. The jobs are tb128fu's set without a GPU: the SpringBoard wait cycle (identityservicesd,
+  # locationd), radios (CommCenter, bluetoothd) and the respawn/crash loops (PerfPowerServices, iomfb_fdr_loader,
+  # iconservicesagent, which is enabled again here: the iOS 16 bring-up of this tablet drew icons without a GPU).
+  "sheng-disable-watchdogd=1",
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
+]
+
+[payload.adt]
+tool = "scripts/make-a04br3-adt.py"
+chip_id = "8167"
+# The XNU window (DarwinBoot AllocateWindow, first fit from low addresses): one contiguous run of conventional memory.
+# The matching uefi-a04br3 config loads the FAT at 0x60000000 and reserves through 0x68000000.
+# This preserves DXE Heap (0x4E240000-0x52000000), leaving DDR High 0x68000000-0xBE9C0000.
+# Trial request: 1344 MiB. AllocateWindow adds the kernel VA's low 21 bits (packet10: 0x7C000),
+# giving candidate 0x6807C000 and end 0xBC07C000, below the display reservation. Allocation
+# still checks the actual EFI map; relocation and the larger window need hardware qualification.
+owned_memory_size = "0x54000000"
+# The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
+root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
+# All four Cortex-A35 cores (MPIDR Aff0 0..3, boot CPU 0 first). ArmCpu starts the others with PSCI CPU_ON under
+# sheng-smp=1 (GICv2 path, CONFIG_XNU_ARMCPU_GICV2), as tb128fu does with its eight; "0" keeps the boot CPU only.
+cpu_regs = "0,1,2,3"
+psci_method = "smc"
+packed_data_ramdisk = true
+ipad_identity = true
+unique_chip_id = "required"          # the platform seed is not stored in any repository

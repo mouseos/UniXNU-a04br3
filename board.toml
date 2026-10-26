@@ -1,3 +1,5 @@
+schema_version = 2
+
 # Board description of the Benesse TAB-A04-BR3 (a04br3, MediaTek MT8167), read by the unixnu build driver.
 # Hardware values come from the earlier a04br3 ports by the same maintainer, which ran on this tablet:
 #   github.com/mouseos/xnu_kernel_benesse_a04br3, github.com/mouseos/xnu_bootshim_benesse_a04br3 (XNU on MT8167)
@@ -6,11 +8,16 @@
 [board]
 name = "a04br3"
 soc = "MT8167"
+soc_source = "mt8167"
+os_profile = "ipados-17.7.11-21H461"
 description = "Benesse TAB-A04-BR3"
 kit = "a04br3"                     # the package/ of this repository appears as kits/a04br3 in the build tree
 
 # The target OS image: the unchanged iPad7,1 iPadOS 17.7.11 restore image, the UniXNU default target (Darwin 23,
 # matching the xnu-10063 source kernel). Give --ipsw PATH to use a local file.
+[components]
+include = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "Mt8167Platform", "SoftwareAES", "RamBlock", "A04BR3VerifiedVirtioBlock", "AppleKeyStoreState", "NativeHidInput", "NativeMobileDisplay", "NativeMetal", "VerifiedRoot", "A04BR3Board", "NativeMsdc", "PowerVRRogue"]
+
 [ipsw]
 url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
 product = "iPad7,1"
@@ -37,13 +44,16 @@ windows = [
 ]
 
 [kernel]
+build_script = "build-xnu-schema1-baseline.sh"
+config_fragments = ["arch:configs/common.config", "soc:configs/mt8167.config", "os:configs/ipados.config"]
+patch_series = ["arch:patches/xnu/a04br3-compat-series", "soc:patches/xnu/series", "os:patches/xnu/a04br3-compat-series", "device:patches/xnu/series"]
 defconfig = "a04br3_defconfig"
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
-  "build-arm-driver.py ArmDTPlatform",
-  "build-arm-driver.py ArmCpu",
-  "build-arm-driver.py NativeAES",
+  "component:ArmDTPlatform",
+  "component:ArmCpu",
+  "component:SoftwareAES",
   "build-native-aes-bindings.py",
   # NativeRamBlock (the Data RAM disk) and the NativeMsdc userdata windows (CONFIG_XNU_NATIVE_MSDC_BLOCK=y) subclass the original
   # IOBlockStorageDevice. build-native-virtio-bindings.py binds them with build/storage-abi/interface-audit.json when present,
@@ -53,10 +63,10 @@ archives = [
   # NativeVirtioBlock carries native_verified_block_root_authorized(), which asks NativeMsdc about its windows; NativeMsdc
   # verifies every block against the owner-signed envelopes in userdata (scripts/make-a04br3-root-policy.py); the root key
   # archive carries the owner anchor, VerifiedRoot and the anchor self-test (CONFIG_XNU_VERIFIED_ROOT_ARCHIVE).
-  "build-arm-driver.py NativeVirtioBlock --verified-root",
+  "component:A04BR3VerifiedVirtioBlock",
   "build-native-virtio-bindings.py --component NativeVirtioBlock --directory build/native-virtio-block-verified",
   "build-a04br3-root-key.py",
-  "build-arm-driver.py NativeRamBlock",
+  "component:RamBlock",
   "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
   # NativeMsdc: the eMMC (MSDC0) driver. Without CONFIG_XNU_NATIVE_MSDC_BLOCK it builds the persistent store only.
   "build-arm-driver.py NativeMsdc --verified-root",
@@ -65,7 +75,7 @@ archives = [
   "build-libpthread-kernel.py",
   # The AppleKeyStore stand-in of UniXNU (drivers/NativeKeyStoreEvents); build-a04br3-board.py stages it into the board
   # archive with KeyStoreProbe.cpp (offline-key-events=1, sheng-aks=1).
-  "build-arm-driver.py NativeKeyStoreEvents",
+  "component:AppleKeyStoreState",
   "build-a04br3-board.py",
   # The PowerVR accelerator for the original Metal discovery (package/powervr/NativePowerVRAccelerator.cpp): a subclass of the
   # original IOAcceleratorES of IOGPUFamily, so its static initializer is staged (UniXNU build-native-adreno-accelerator.py with
@@ -157,6 +167,8 @@ A04BR3_TEST_CYCLE = "1"
 # The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
 # trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
 [payload]
+# Preserve the current a04br3 payload: no inherited OS text fixups.
+text_fixups = []
 volume = "A04BR3ESP"
 size_mib = 126  # Kernel + unchanged Data seed + compressed GPU update; boot.img must pass the 128 MiB checker.
 loader = "firmware"
@@ -292,3 +304,29 @@ psci_method = "smc"
 packed_data_ramdisk = true
 ipad_identity = true
 unique_chip_id = "required"          # the platform seed is not stored in any repository
+
+[device_tree]
+source = "device:dts/a04br3.dts"
+include_dirs = ["soc:dts"]
+arm_io_base = "0x10000000"
+arm_io_size = "0x10000000"
+
+[adt.root]
+omit_properties = ["compatible"]
+[adt.defaults.u32]
+sleep-disabled = 1
+"kern.maxvnodes" = 33792
+[adt.product]
+omit_properties = ["product-id"]
+omit_children = ["audio"]
+[adt.product.string]
+model = "benesse,a04br3"
+[adt.product.u32]
+thin-bezel = 1
+[adt.buttons.string]
+compatible = "buttons"
+device_type = "buttons"
+[adt.buttons.strings]
+button-names = ["hold", "voldown", "volup"]
+[adt.buttons.u32]
+home-button-type = 2

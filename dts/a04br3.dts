@@ -1,0 +1,19 @@
+/dts-v1/;
+/include/ "mt8167.dtsi"
+/ {
+    model = "Benesse TAB-A04-BR3";
+    compatible = "benesse,a04br3", "mediatek,mt8167";
+    memory@40000000 { device_type = "memory"; reg = <0 0x40000000 0 0x80000000>; };
+    reserved-memory {
+        #address-cells = <2>; #size-cells = <2>; ranges;
+        lk-dtb@4e000000 { reg = <0 0x4e000000 0 0x200000>; no-map; };
+        boot-ramdisk@60000000 { reg = <0 0x60000000 0 0x8000000>; no-map; };
+        display@be9c0000 { reg = <0 0xbe9c0000 0 0x1000000>; no-map; };
+    };
+};
+&cpu0 { status = "okay"; };
+&cpu1 { status = "okay"; };
+&cpu2 { status = "okay"; };
+&cpu3 { status = "okay"; };
+&uart0 { status = "okay"; };
+&mmc0 { status = "okay"; };

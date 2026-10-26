@@ -490,3 +490,8 @@ editing `board.toml`. The build log must contain the explicit define. The
 result is `Build/a04br3Pkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd` in the UEFI checkout.
 Source/host checks passed; actual firmware compilation and boot remain separate
 validation steps. This recipe performs no flash or reboot.
+
+## WIP schema2 branch
+This branch is not the canonical UI branch or a hardware-qualified default. It retains the schema1 board contract in `migration/board-schema1.toml`; original runtime files and builder names are preserved. The MT8167 common source is https://github.com/mouseos/UniXNU-mt8167-common (explicit WIP commit in feeds.toml).
+
+Use the paired migration UniXNU branch, run defconfig/tree/status, then `python3 scripts/tests/check_schema2_contract.py --unixnu ../UniXNU-migration-f85-schema2 --soc ../UniXNU-mt8167-common --out out/schema2-contract`. Source pins are tracked submodules. The root ABI and archive builders still require the original SDK/kernel inputs and first-build compile records. Keep runtime qualification separate from host equivalence.

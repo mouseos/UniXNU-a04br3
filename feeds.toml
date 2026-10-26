@@ -1,0 +1,6 @@
+# WIP source pin: host migration candidate, not qualified hardware/default main.
+[[source]]
+name = "mt8167"
+kind = "soc"
+git = "https://github.com/mouseos/UniXNU-mt8167-common.git"
+commit = "545fa1f158afce62e72ead473c951273929eaca8"
