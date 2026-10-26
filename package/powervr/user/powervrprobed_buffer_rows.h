@@ -68,7 +68,10 @@ static int bufferRowsProbe(VkDevice device, VkQueue queue, uint32_t family,
   }
   VkMappedMemoryRange ranges[2];
   for(unsigned i=0;i<2;i++)ranges[i]=(VkMappedMemoryRange){.sType=VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,.memory=allocations[i],.size=VK_WHOLE_SIZE};
-  BR_STEP("rows flush",p_vkFlushMappedMemoryRanges(device,2,ranges));
+  const uint64_t flushStart=brClockUs();
+  const VkResult flushed=p_vkFlushMappedMemoryRanges(device,2,ranges);
+  const uint64_t flushEnd=brClockUs();
+  BR_STEP("rows flush",flushed);
   VkCommandPoolCreateInfo pi={.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,.queueFamilyIndex=family};
   BR_STEP("rows pool",p_vkCreateCommandPool(device,&pi,NULL,&pool));
   VkCommandBuffer cmd;
@@ -106,19 +109,27 @@ static int bufferRowsProbe(VkDevice device, VkQueue queue, uint32_t family,
   if(!vkStep("rows wait",waited,NULL)) {
     probe_line("vk buffer-rows retained: completion unknown");return -1;
   }
-  BR_STEP("rows invalidate",p_vkInvalidateMappedMemoryRanges(device,2,ranges));
+  const uint64_t invalidateStart=brClockUs();
+  const VkResult invalidated=p_vkInvalidateMappedMemoryRanges(device,2,ranges);
+  const uint64_t invalidateEnd=brClockUs();
+  BR_STEP("rows invalidate",invalidated);
   const uint64_t validateStart=brClockUs();
   ok=brValidate(mapped[0],(size_t)needs[0].size,mapped[1],(size_t)needs[1].size);
   const uint64_t validateEnd=brClockUs();
-  const int clockOK=recordStart!=UINT64_MAX && recordEnd>=recordStart && recordEnd!=UINT64_MAX &&
+  const int clockOK=flushStart!=UINT64_MAX && flushEnd>=flushStart && flushEnd!=UINT64_MAX &&
+    invalidateStart!=UINT64_MAX && invalidateEnd>=invalidateStart && invalidateEnd!=UINT64_MAX &&
+    recordStart!=UINT64_MAX && recordEnd>=recordStart && recordEnd!=UINT64_MAX &&
     submitStart!=UINT64_MAX && submitEnd>=submitStart && submitEnd!=UINT64_MAX &&
     waitStart!=UINT64_MAX && waitEnd>=waitStart && waitEnd!=UINT64_MAX &&
     validateStart!=UINT64_MAX && validateEnd>=validateStart && validateEnd!=UINT64_MAX;
-  probe_line("vk buffer-rows host-us: record=%llu submit=%llu wait=%llu validate=%llu clock=%d",
+  probe_line("vk buffer-rows single-shot host-us: record=%llu submit=%llu wait=%llu validate=%llu clock=%d",
     (unsigned long long)brElapsedUs(recordStart,recordEnd),
     (unsigned long long)brElapsedUs(submitStart,submitEnd),
     (unsigned long long)brElapsedUs(waitStart,waitEnd),
     (unsigned long long)brElapsedUs(validateStart,validateEnd),clockOK);
+  probe_line("vk buffer-rows host-us: flush=%llu invalidate=%llu; phases exclude allocation/pool/fence/setup/log gaps",
+    (unsigned long long)brElapsedUs(flushStart,flushEnd),
+    (unsigned long long)brElapsedUs(invalidateStart,invalidateEnd));
 done:
   if(fence)p_vkDestroyFence(device,fence,NULL);
   if(pool)p_vkDestroyCommandPool(device,pool,NULL);

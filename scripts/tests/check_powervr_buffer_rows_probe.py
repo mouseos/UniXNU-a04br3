@@ -134,10 +134,15 @@ int main(int argc,char **argv){
         if args.lavapipe:
             env=dict(os.environ, VK_DRIVER_FILES='/usr/share/vulkan/icd.d/lvp_icd.json')
             executed=subprocess.run([str(tmp/'probe'),str(args.lavapipe.resolve())],env=env,
-                                    timeout=90,capture_output=True,text=True,check=True)
+                                    timeout=90,capture_output=True,text=True)
             print(executed.stdout,end='')
-            assert 'vk buffer-rows host-us: record=' in executed.stdout
-            assert 'clock=1' in executed.stdout
+            if executed.returncode:
+                print(executed.stderr,end='')
+                raise SystemExit(executed.returncode)
+            for marker in ('vk buffer-rows single-shot host-us: record=', 'clock=1',
+                           'vk buffer-rows host-us: flush=', ' invalidate='):
+                if marker not in executed.stdout:
+                    raise SystemExit('missing timing marker: '+marker)
             run([tmp/'lifecycle',args.lavapipe.resolve()],env=env,timeout=90)
     print('PASS buffer-rows source, opt-in constructor, exclusive CLI'+(', CPU lavapipe real Vulkan copy' if args.lavapipe else ''))
 if __name__=='__main__':main()
