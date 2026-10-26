@@ -84,6 +84,7 @@ archives = [
 ]
 
 [kernel.prelink]
+archive_preflight = ["check-a04br3-wifi-prelink.py"]
 tool = "kits/NativePrelink/emit_prelink.py"
 kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
 kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"

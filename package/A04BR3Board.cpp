@@ -210,8 +210,15 @@ extern "C" void unixnu_board_init(void)
   }
 }
 
+#if A04BR3_WIFI
+void a04br3_wifi_init(void);
+#endif
+
 extern "C" int unixnu_board_launch(void *process, uint64_t scratch)
 {
+#if A04BR3_WIFI
+  a04br3_wifi_init(); // root/MSDC and BSD are ready; explicit opt-in only
+#endif
   const int policy = sheng_boot_watchdog_policy(process, scratch);
   IOLog("a04br3: GPU addon before probe: files %d written %d same %d failed %d error %d; "
         "mount extensions stage %d status %d, daemons stage %d status %d, wallpaper stage %d status %d\n",

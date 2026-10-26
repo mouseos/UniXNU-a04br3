@@ -95,8 +95,14 @@ def llvm_objcopy():
     return found
 
 
+# Refuse duplicate source/original network owners before the first compiler call,
+# including manual archive invocations outside the official kernel build driver.
+if os.environ.get('A04BR3_WIFI') == '1':
+    from a04br3_wifi_build import guard_prelink
+    guard_prelink(ROOT, os.environ)
+
 # The warning set of build-arm-driver.py: the XNU IOKit headers need these exceptions under -Werror.
-CXX_FLAGS = ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-c99-designator', '-Wno-reorder-init-list',
+CXX_FLAGS = ['-DA04BR3_WIFI=' + ('1' if os.environ.get('A04BR3_WIFI') == '1' else '0'), '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-c99-designator', '-Wno-reorder-init-list',
              '-Wno-deprecated-enum-enum-conversion', '-Wno-unnecessary-virtual-specifier', '-I', str(ROOT / '.cache/xnu-work/osfmk')]
 C_FLAGS = ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror']
 
@@ -196,6 +202,11 @@ subprocess.run([llvm_objcopy(), '--remove-section=__DATA,__mod_init_func',
 if text_section(events) != text_section(events_late):
     raise SystemExit('NativeKeyStoreEvents instructions changed by the late initializer staging')
 objects.append(events_late)
+
+if os.environ.get('A04BR3_WIFI') == '1':
+    from a04br3_wifi_build import build_wifi
+    objects += build_wifi(ROOT, KIT, out, compile_one, cxx_record, c_record,
+                          CXX_FLAGS, C_FLAGS, llvm_objcopy, text_section)
 
 archive = out / 'libA04BR3Board.a'
 archive.unlink(missing_ok=True)

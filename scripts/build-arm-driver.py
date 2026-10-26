@@ -105,6 +105,8 @@ if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_GICV2') == '1':
 # needs verified_root_key, vr_open, vr_verify_block and vr_xnu_crypto (libA04BR3RootKey.a). The object stays in
 # build/native-msdc.
 if component == 'NativeMsdc':
+    if os.environ.get('A04BR3_WIFI') == '1':
+        command += ['-DNATIVE_MSDC_PARTITION_READ=1']
     block_devices = os.environ.get('XNU_NATIVE_MSDC_BLOCK') == '1'
     command += ['-DNATIVE_MSDC_BLOCK_DEVICES=' + ('1' if block_devices else '0')]
     if block_devices:
