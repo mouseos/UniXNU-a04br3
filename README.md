@@ -201,7 +201,7 @@ For a portable first-install bundle, use the resolved `unixnu status --json` out
       --out NEW_BUNDLE_DIR
 
 The bundle contains boot, the complete userdata image, the signed root policy, both GPT copies,
-`write.mtk`, `install.sh`, and a SHA-256/size inventory in `bundle.json`. Run `install.sh` only for the
+`write.mtk`, `install.sh`, `install.py`, and a SHA-256/size inventory in `bundle.json`. Run `install.sh` only for the
 first installation in BROM/preloader mode. `MTKCLIENT` can select the mtkclient executable. The wrapper
 changes to the bundle directory before invoking mtkclient; the bundle may be moved and its parent path
 may contain spaces. The generated script writes boot, userdata, policy, secondary GPT, primary GPT,
@@ -212,7 +212,16 @@ This installation replaces Android userdata and its removed partition extents.
 Input ownership is explicit: `unixnu build userdata` decodes the pinned IPSW OS/SystemOS images;
 `unixnu build package firmware` builds the pinned UEFI device source and loader; `unixnu build payload`
 produces the kernel/Data payload; `unixnu bootimg` combines those outputs with the UEFI repository's
-board DTB. The signed policy must match the selected OS windows and the kernel's public owner anchor.
+board DTB. For the unchanged pinned 21H461 OS and owner anchor, no private key is needed:
+
+    python3 scripts/fetch-a04br3-root-policy.py \
+      --userdata-report USERDATA_ROOT_JSON --out SIGNED_POLICY_DIR
+
+This fetches the prerelease binary input from `mouseos/UniXNU-a04br3`, verifies the immutable blob
+and metadata hashes, and matches the generated userdata window hashes/sizes and current public anchor.
+`--source CACHE_DIR` reuses the exact same pinned files offline. It refuses duplicate windows,
+mismatched OS/key inputs and existing output directories. The release contains only signed block
+hashes, not Apple OS data or device data. The signed policy must match the selected OS windows and the kernel's public owner anchor.
 An existing matching published policy can be reused; a changed OS/key requires its owner's signature.
 Neither a private signing key nor per-device MAC/calibration values belong in a distributed bundle.
 The bundle generator checks the policy file hash/size and placement, but does not verify its RSA
