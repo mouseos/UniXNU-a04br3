@@ -22,6 +22,8 @@
 #include "NativeMetalBoard.h"
 #include "NativeBridgeMetalFrontend.h"
 
+extern "C" void native_metal_set_exception_output(void (*output)(const char *));
+
 namespace {
 // NativePowerVRABI.h (kept in step; the header itself needs the Linux uAPI first).
 constexpr uint32_t kTunnelMagic = 0x4e544e4c, kTunnelProbe = 0xffffffffu;
@@ -111,6 +113,7 @@ extern "C" void native_metal_board_prepare(unsigned port) {
         native_bridge_metal_require_fetch_for_apple3(true);
     const char *pipelineDiag=getenv("PVR_METAL_PIPELINE_DIAG");
     if(pipelineDiag && !strcmp(pipelineDiag,"1")) {
+        native_metal_set_exception_output(native_metal_board_text);
         native_bridge_metal_set_pipeline_failure_callback(pipelineFailure);
         // Actual process main image, not a guessed base of a sampled dylib.
         // One bounded record per preparation; this reads no arbitrary pointers.
