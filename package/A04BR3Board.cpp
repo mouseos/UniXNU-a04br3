@@ -25,6 +25,8 @@
 
 extern "C" {
 void a04br3_autoreset_init(void);
+void a04br3_charger_init(void);
+void a04br3_registers_init(void);
 void a04br3_gpu_init(void);
 void boot_memory_snapshot(uint64_t out[7]);
 void native_keystore_probe(void);
@@ -197,6 +199,8 @@ static void a04br3_proclog_init(void)
 extern "C" void unixnu_board_init(void)
 {
   a04br3_autoreset_init();
+  a04br3_registers_init(); // shared I2C0/I2C2 mux lock before either thread
+  a04br3_charger_init(); // explicit opt-in; separate I2C2 owner, no PWRAP
   a04br3_proclog_init();
   a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)
   unsigned events = 0;

@@ -129,6 +129,9 @@ def main():
         ('#size-cells', struct.pack('<I', 2)),
     ], [
         node('chosen', [('random-seed', os.urandom(64)),
+                        # Reserved inline boot-local metadata; zeros are NOT a valid owner.
+                        # Only reviewed opt-in FW can seal this at EBS; kernel refuses zeros.
+                        ('a04br3-charger-owner', bytes(128)),
                         # Without these XNU never publishes IOPlatformUUID and gethostuuid() blocks forever
                         # for callers (configd) that pass a zero timeout.
                         *([('unique-chip-id', struct.pack('<Q', args.unique_chip_id)), ('chip-id', struct.pack('<I', args.chip_id))]

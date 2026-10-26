@@ -17,6 +17,7 @@
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
+#include "A04BR3RegisterLock.h"
 
 extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
 extern "C" void thread_deallocate(thread_t);
@@ -191,7 +192,9 @@ void touchThread(void *, wait_result_t)
   wr(gGpio, 0x08, 1U << 8);
   wr(gGpio, 0x904, (1U << 3) | (1U << 15));
   wr(gTop, 0x84, 1U << 3);
-  wr(gInfra, 0x80, rd(gInfra, 0x80) & ~(1U << 1));
+  if (!a04br3_infra_update(gInfra, 1U << 1, 0)) {
+    a04br3_touch_error = -1; IOLog("a04br3 input: shared infra mux unavailable\n"); return;
+  }
   iwr(0x50, 1); iwr(0x40, 3); iwr(0x54, 0); iwr(0x70, 4); iwr(0x20, 0x73f); iwr(0x48, 0); iwr(0x28, 0x8001);
   e = command(0x50); if (!e) e = command(0xb0); if (!e) e = command(0);
   a04br3_touch_error = e;
