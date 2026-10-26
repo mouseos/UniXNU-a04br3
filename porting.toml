@@ -161,17 +161,17 @@ evidence = [{ kind = "source", reference = "migration/board-schema1.toml", resul
 
 [[area]]
 id = "packaging"
-status = "implemented"
+status = "host-verified"
 components = []
 paths = ["scripts/*payload*", "scripts/*bootimg*", "scripts/*seed*", "scripts/tests/test_flash_validation.py"]
 inputs = ["Retained device1b13730 and source-pinned components; packaging implementation remains in its original package."]
 configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
 procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
-findings = ["packaging: existing source retained. The complete prebuild Data fixture now exercises schema2 namespaced output with spaces and schema1, preserving seed UUID, immutable baseline, failure cleanup and the initial kernel pass. Schema2 SDK/runtime qualification remains pending."]
+findings = ["Official CLI CPU-profile payload, package/normal firmware and Android boot image generation passed. The board LK boot-image validator passed. Retained SDK runner also generated the whole userdata image; its window hashes and append offset match the existing root policy whose RSA signatures, signed table digests and pinned public anchor were reverified. Data fixtures preserve the initial two-pass build and failure cleanup. No device full qualification or GPU user-space profile verification is implied."]
 completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
 limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
 next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
-evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }, { kind = "host", reference = "https://github.com/mouseos/UniXNU/releases/tag/a04br3-ssh-40407602791", result = "Published CPU payload and userdata report/log from fixed basea70/deviceb0. Boot image generation and LK validator PASS locally; existing policy signatures and generated window hashes match. Raw userdata remains on retained runner; device full qualification remains pending.", command = "a04br3-ssh.yml; unixnu build userdata; unixnu bootimg; scripts/check-a04br3-bootimg.py", revision = "b0e596f2521c552b3256a581ebd368f05a77fbc0" }]
 
 [[area]]
 id = "diagnostics"
