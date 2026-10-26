@@ -20,7 +20,7 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None):
+def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None):
     with tempfile.TemporaryDirectory(prefix='pre-build-reuse-') as directory:
         root = Path(directory)
         work, temporary, device, tools = [root / p for p in ('work', 'temp', 'device', 'bin')]
@@ -105,6 +105,9 @@ elif name == 'a04br3-seed-powervr-probe.py':
                    GITHUB_ENV=str(root / 'github-env'), A04BR3_POWERVR_PROBE='1' if probe else '0',
                    A04BR3_POWERVR_VULKAN='1', A04BR3_POWERVR_METAL='1' if metal else '0',
                    MOCK_FAIL_SEED='1' if fail_seed else '0', MOCK_FAIL_GROW='1' if fail_grow else '0', XNU_OWNER_DATA_VOLUME_UUID='stale')
+        env.pop('A04BR3_POWERVR_METAL_ROA_COLOR', None)
+        if roa_color is not None:
+            env['A04BR3_POWERVR_METAL_ROA_COLOR'] = roa_color
         env.pop('A04BR3_POWERVR_METAL_PIPELINE_DIAG', None)
         if pipeline_diag is not None:
             env['A04BR3_POWERVR_METAL_PIPELINE_DIAG'] = pipeline_diag
@@ -130,6 +133,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
             calls = log.read_text()
             assert not list(temporary.glob('a04br3-seed-rebuild.*')), 'temporary seed leaked'
             diagnostic_failure = pipeline_diag not in (None, '0', '1') or (pipeline_diag == '1' and not (metal and probe))
+            diagnostic_failure |= roa_color not in (None, '0', '1') or (roa_color == '1' and not (metal and probe))
             failure = diagnostic_failure or reuse and (metadata != 'valid' or not data or data == 'empty' or not baseline) or fail_seed or generation == fail_round or fail_grow or mismatch or (reuse and not probe)
             assert (result.returncode != 0) == failure, result.stdout
             if reuse:
@@ -165,6 +169,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
                     assert (temporary / 'powervr-metal/trust.json').read_text() == 'plugin-' + str(generation)
                     build = next(line for line in calls.splitlines() if line.startswith('python build-a04br3-metal-plugin.py '))
                     assert build.split().count('--pipeline-failure-diag') == (1 if pipeline_diag == '1' else 0), build
+                    assert build.split().count('--roa-color') == (1 if roa_color == '1' else 0), build
                     assert '--require-fetch-for-apple3' not in build and '--async-creation' not in build, build
                 else:
                     assert 'build-a04br3-metal-plugin.py' not in calls
@@ -256,6 +261,14 @@ def test_actual_staging_identity():
 
 def main():
     test_actual_staging_identity()
+    run_case(False, roa_color='1')
+    run_case(True, roa_color='1')
+    run_case(True, roa_color='0')
+    run_case(True, roa_color='invalid')
+    run_case(True, roa_color='1', metal=False)
+    run_case(False, roa_color='1', probe=False)
+    run_case(False, roa_color='1', pipeline_diag='1')
+    run_case(True, roa_color='1', pipeline_diag='1')
     run_case(False, pipeline_diag='1')
     run_case(True, pipeline_diag='1')
     run_case(True, pipeline_diag='0')

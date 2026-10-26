@@ -18,6 +18,8 @@
 # preserving its UUID without carrying forward obsolete APFS pages from data.dbr.
 # A04BR3_POWERVR_METAL_PIPELINE_DIAG=1: opt in to the existing bounded pipeline
 # failure callback in the Metal plugin (requires PROBE=1 and METAL=1).
+# A04BR3_POWERVR_METAL_ROA_COLOR=1: opt in to the existing GE8300 COLOR ROA
+# implementation in this bundle (requires PROBE=1 and METAL=1; default off).
 # Workflow input: pre_build = bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
 #   with the probe: pre_build = A04BR3_POWERVR_PROBE=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh", owner_trust_cache = true
 set -euo pipefail
@@ -31,6 +33,16 @@ case "${A04BR3_POWERVR_METAL_PIPELINE_DIAG:-0}" in
     fi
     ;;
   *) echo "A04BR3_POWERVR_METAL_PIPELINE_DIAG must be 0 or 1" >&2; exit 1 ;;
+esac
+case "${A04BR3_POWERVR_METAL_ROA_COLOR:-0}" in
+  0) ;;
+  1)
+    if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL:-0}" != 1 ]; then
+      echo "Metal COLOR ROA requires A04BR3_POWERVR_PROBE=1 and A04BR3_POWERVR_METAL=1" >&2
+      exit 1
+    fi
+    ;;
+  *) echo "A04BR3_POWERVR_METAL_ROA_COLOR must be 0 or 1" >&2; exit 1 ;;
 esac
 # SSH incremental builds opt in; default builds still create a fresh fixture.
 read_seed_uuid() {
@@ -126,6 +138,9 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
     METAL_DIAGNOSTICS=()
     if [ "${A04BR3_POWERVR_METAL_PIPELINE_DIAG:-0}" = 1 ]; then
       METAL_DIAGNOSTICS=(--pipeline-failure-diag)
+    fi
+    if [ "${A04BR3_POWERVR_METAL_ROA_COLOR:-0}" = 1 ]; then
+      METAL_DIAGNOSTICS+=(--roa-color)
     fi
     python3 "$TREE/scripts/build-a04br3-metal-plugin.py" ${METAL_DIAGNOSTICS[@]+"${METAL_DIAGNOSTICS[@]}"} --out "$RUNNER_TEMP/powervr-metal" \
       --vulkan "$DEVICE_DIR/build/mesa-pvr-ios/src/imagination/vulkan/libvulkan_powervr_mesa.dylib"
