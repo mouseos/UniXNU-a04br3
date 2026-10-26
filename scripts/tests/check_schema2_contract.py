@@ -8,6 +8,13 @@ parser.add_argument('--out', type=Path, required=True)
 options = parser.parse_args()
 B=options.unixnu.resolve();D=Path(__file__).resolve().parents[2];S=options.soc.resolve();L=options.out.resolve();L.mkdir(parents=True,exist_ok=True)
 sys.path.insert(0,str(B/'scripts'))
+# Verify retained runtime sources against the fixed P18 + SecureDT repair blobs.
+# The fixture stores only public source hashes; no canonical checkout is needed.
+contract=json.loads((D/'migration/p18-source-contract.json').read_text())
+for name,digest in contract['files'].items():
+ assert hashlib.sha256((D/name).read_bytes()).hexdigest()==digest, 'runtime source changed: '+name
+for name,revision in contract['components'].items():
+ assert subprocess.check_output(['git','-C',str(D/name),'rev-parse','HEAD'],text=True).strip()==revision, 'runtime component changed: '+name
 from unixnu.cli import parser
 from unixnu.config import Context
 from unixnu import feeds,kernel,devicetree,patches,tree
