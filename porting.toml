@@ -1,0 +1,188 @@
+schema_version = 1
+[device]
+name = "a04br3"
+soc = "MT8167"
+os_profile = "ipados-17.7.11-21H461"
+summary = "WIP schema2 migration preserving a04br3 source, archive order and ADT; not hardware qualified"
+
+[[area]]
+id = "configuration"
+status = "host-verified"
+components = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "Mt8167Platform", "SoftwareAES", "RamBlock", "A04BR3VerifiedVirtioBlock", "AppleKeyStoreState", "NativeHidInput", "NativeMobileDisplay", "NativeMetal", "VerifiedRoot", "A04BR3Board", "NativeMsdc", "PowerVRRogue"]
+paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", "unixnu.lock", ".github/**", "drivers/**", "kits/**", "local.toml.example", "migration/**", "dts/**", "scripts/tests/check_schema2_contract.py"]
+inputs = ["Retained device1b13730 and source-pinned components; configuration implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["20 expanded archive calls,38 effective config values and full ADT semantics match the retained schema1 contract in host checks."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "host", reference = "scripts/tests/check_schema2_contract.py", result = "20 ordered archive calls,38 config values and full ADT property/node semantics match schema1 in two payload modes. Paired tools706128f; SoC545fa1f. Kernel/device execution is not implied.", command = "python3 scripts/tests/check_schema2_contract.py --unixnu ../UniXNU-migration-f85-schema2 --soc ../UniXNU-mt8167-common --out out/schema2-contract", revision = "c8fc91a53f7673c797b3fffa06149bae3875f733" }]
+
+[[area]]
+id = "firmware"
+status = "implemented"
+components = []
+paths = ["proprietary-files.txt", "scripts/extract-files.py", "scripts/gen-touch-firmware.py"]
+inputs = ["Retained device1b13730 and source-pinned components; firmware implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["firmware: existing source retained. Schema2 runtime has not been observed."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "cpu"
+status = "implemented"
+components = []
+paths = ["package/Cpu*", "scripts/*armcpu*"]
+inputs = ["Retained device1b13730 and source-pinned components; cpu implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["cpu: existing source retained. Schema2 runtime has not been observed."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "memory"
+status = "implemented"
+components = []
+paths = ["package/*Memory*", "package/*Ram*", "scripts/*ram*"]
+inputs = ["Retained device1b13730 and source-pinned components; memory implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["RAM600/owned1344 source is retained; schema1 kernel reached then BB memory rejection/display panic. This is not full RAM qualification."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "storage"
+status = "implemented"
+components = []
+paths = ["scripts/*root*", "scripts/*userdata*", "scripts/*msdc*", "package/*Storage*"]
+inputs = ["Retained device1b13730 and source-pinned components; storage implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["storage: existing source retained. Schema2 runtime has not been observed."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "display"
+status = "implemented"
+components = []
+paths = ["package/*Display*", "package/*Framebuffer*", "scripts/*display*", "scripts/*gop*"]
+inputs = ["Retained device1b13730 and source-pinned components; display implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["UI remains unresolved: no frame offer in previous observations, later display leaf345 panic. No schema2 display run exists."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "input"
+status = "implemented"
+components = []
+paths = ["package/A04BR3Input.cpp", "scripts/tests/test_a04br3_buttons.py", "scripts/*input*"]
+inputs = ["Retained device1b13730 and source-pinned components; input implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["Home hold/press/release and pending-release retry sources remain pinned to HID8fc6d05. Schema2 hardware input is untested."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "gpu"
+status = "implemented"
+components = []
+paths = ["package/powervr/**", "package/A04BR3RoguePower.h", "scripts/*powervr*", "scripts/*metal*", "scripts/tests/*powervr*", "scripts/tests/*metal*"]
+inputs = ["Retained device1b13730 and source-pinned components; gpu implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["PowerVR Rogue package and NativeMetal f1623c35 remain separate from Adreno. NoCopy diagnostics from devicec93bf77 are retained; import protection-failure work is owned by another agent and excluded."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "network"
+status = "planned"
+components = []
+paths = ["package/*Wifi*", "package/*Ethernet*", "scripts/*wifi*"]
+inputs = ["Retained device1b13730 and source-pinned components; network implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["No newly implemented or qualified schema2 network service. Existing source assets are retained."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "audio"
+status = "planned"
+components = []
+paths = ["package/*Audio*", "scripts/*audio*"]
+inputs = ["Retained device1b13730 and source-pinned components; audio implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["No newly implemented or qualified schema2 audio service. Existing source assets are retained."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "power"
+status = "implemented"
+components = []
+paths = ["package/*Power*", "package/*Reset*", "package/*Charger*", "scripts/*power*", "scripts/tests/*charger*"]
+inputs = ["Retained device1b13730 and source-pinned components; power implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["Existing TOPRGU recovery source is retained. User-reported schema1 SEC62s and DXE183s returns are baseline-only; charger runtime owner remains incomplete."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "packaging"
+status = "implemented"
+components = []
+paths = ["scripts/*payload*", "scripts/*bootimg*", "scripts/*seed*", "scripts/tests/test_flash_validation.py"]
+inputs = ["Retained device1b13730 and source-pinned components; packaging implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["packaging: existing source retained. Schema2 runtime has not been observed."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+
+[[area]]
+id = "diagnostics"
+status = "implemented"
+components = []
+paths = ["package/Boot*", "scripts/*unattended*", "scripts/*ssh*", "scripts/tests/check_boot_process_targets.py"]
+inputs = ["Retained device1b13730 and source-pinned components; diagnostics implementation remains in its original package."]
+configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
+procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
+findings = ["diagnostics: existing source retained. Schema2 runtime has not been observed."]
+completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
+limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
+next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
