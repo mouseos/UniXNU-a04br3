@@ -31,7 +31,7 @@ def main():
     if data[:8] != b'ANDROID!':
         fail('no ANDROID! magic')
     kernel_size, kernel_addr, ramdisk_size, ramdisk_addr, _, _, tags_addr, page = struct.unpack_from('<8I', data, 8)
-    if page != 2048 or kernel_addr != 0x40080000 or ramdisk_addr != 0x80000000 or tags_addr != 0x4E000000:
+    if page != 2048 or kernel_addr != 0x40080000 or ramdisk_addr != 0x60000000 or tags_addr != 0x4E000000:
         fail(f'header page {page} kernel {kernel_addr:#x} ramdisk {ramdisk_addr:#x} tags {tags_addr:#x}')
     if not data[64:64 + 512].startswith(b'bootopt=64S3,32N2,64N2'):
         fail('command line does not start with bootopt=64S3,32N2,64N2')

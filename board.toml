@@ -277,11 +277,12 @@ kernel_args = [
 tool = "scripts/make-a04br3-adt.py"
 chip_id = "8167"
 # The XNU window (DarwinBoot AllocateWindow, first fit from low addresses): one contiguous run of conventional memory.
-# LK places the boot ramdisk at 0x80000000 (uefi-a04br3 MemoryMapLib "Boot Ramdisk", 0x80000000-0x88000000) and PrePi
-# takes DxeCore and page tables from the top of "DXE Heap", so "DDR Mid 2" (0x52000000-0x80000000, 736 MiB) is the
-# largest run the firmware leaves untouched. The window start adds the low bits of the kernel base (0x4000), so
-# 0x2DE00000 (734 MiB) always fits there; "DDR High" (873 MiB) is shared with firmware allocations and the payload files.
-owned_memory_size = "0x2DE00000"
+# The matching uefi-a04br3 config loads the FAT at 0x60000000 and reserves through 0x68000000.
+# This preserves DXE Heap (0x4E240000-0x52000000), leaving DDR High 0x68000000-0xBE9C0000.
+# Trial request: 1344 MiB. AllocateWindow adds the kernel VA's low 21 bits (packet10: 0x7C000),
+# giving candidate 0x6807C000 and end 0xBC07C000, below the display reservation. Allocation
+# still checks the actual EFI map; relocation and the larger window need hardware qualification.
+owned_memory_size = "0x54000000"
 # The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 # All four Cortex-A35 cores (MPIDR Aff0 0..3, boot CPU 0 first). ArmCpu starts the others with PSCI CPU_ON under

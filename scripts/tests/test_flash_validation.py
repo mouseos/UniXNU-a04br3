@@ -24,7 +24,7 @@ def boot_fixture():
     header = bytearray(2048)
     header[:8] = b'ANDROID!'
     struct.pack_into('<8I', header, 8, len(kernel), 0x40080000,
-                     len(ramdisk), 0x80000000, 0, 0, 0x4E000000, 2048)
+                     len(ramdisk), 0x60000000, 0, 0, 0x4E000000, 2048)
     command = b'bootopt=64S3,32N2,64N2'
     header[64:64 + len(command)] = command
     kernel += bytes((-len(kernel)) % 2048)
@@ -48,6 +48,18 @@ class FlashValidationTest(unittest.TestCase):
                     result = self.run_script('check-a04br3-bootimg.py', image)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn('truncated', result.stderr)
+
+    def test_old_or_misaligned_ramdisk_address_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / 'boot.img'
+            for address in (0x80000000, 0x50000000, 0x60001000):
+                with self.subTest(address=address):
+                    data = bytearray(boot_fixture())
+                    struct.pack_into('<I', data, 20, address)
+                    image.write_bytes(data)
+                    result = self.run_script('check-a04br3-bootimg.py', image)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('header page', result.stderr)
 
     def test_policy_offsets_without_userdata(self):
         with tempfile.TemporaryDirectory() as tmp:
