@@ -146,6 +146,8 @@ packages = [
 ]
 
 [firmware.defines]
+# Diagnostic branch only: raw loader map snapshots; no RAM/ownership changes.
+DARWINBOOT_MEMORY_MAP_DIAG = "1"
 DEVICE_MODEL = "a04br3"
 BUILDID_STRING = "a04br3-bringup"
 # Bring-up: uefi-a04br3 a04br3Pkg sets the LK fastboot flag and arms the 31 s watchdog from SEC on

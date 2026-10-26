@@ -360,8 +360,9 @@ R32_UINT の単体試験通過は、Metal UI や XR 二平面形式の動作成�
 
 These pins identify the reviewed default-off descriptor diagnostic source, not a
 hardware-qualified larger-RAM configuration. The earlier image checkpoint above
-is unchanged. No board default enables the diagnostic and no owned-memory size,
-UEFI reservation or resource ownership changes are included.
+is unchanged. This diagnostic branch alone enables the firmware define; baseline
+main leaves it unset. No owned-memory size, UEFI reservation or resource
+ownership changes are included.
 
 | Repository | Commit | Branch |
 | --- | --- | --- |
@@ -371,9 +372,18 @@ UEFI reservation or resource ownership changes are included.
 
 The base pin records both the DarwinBoot gitlink and its mouseos fork URL, so a
 fresh recursive checkout does not depend on a local remote override. Use the
-one-build `DARWINBOOT_MEMORY_MAP_DIAG=1` firmware-defines override documented in
-that base's `docs/guide/boot.md`; it calls the official firmware build path without
-editing `board.toml`. The build log must contain the explicit define. The
+normal official firmware build with a separate checkout of this branch, from
+the pinned UniXNU root:
+
+```sh
+./unixnu build firmware -D ../UniXNU-a04br3-memory-map \
+  --uefi ../uefi-a04br3 --edk2 out/feeds/mu_basecore-89034cbb --target DEBUG -j 4
+```
+
+There is no runtime dictionary override or unrecorded source edit. Select only
+`firmware` to leave the existing kernel artifact untouched. Use the same existing
+output directory as the host's warm build if it differs from the default.
+The build log must contain `-D DARWINBOOT_MEMORY_MAP_DIAG=1`. The
 result is `Build/a04br3Pkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd` in the UEFI checkout.
 Source/host checks passed; actual firmware compilation and boot remain separate
 validation steps. This recipe performs no flash or reboot.
