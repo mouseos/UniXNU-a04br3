@@ -1,0 +1,26 @@
+{
+  "canonical_device": "f5f0d203b7bf97e5117611d9200765999767b262",
+  "files": {
+    "package/A04BR3AutoReset.cpp": "799be633d6f8565e244d3175f97360ce06e52379181c3e0c93784c5448a5eecb",
+    "package/A04BR3Board.cpp": "e3f609e9a1a89dbd4a364276bd3c10675a0f1ff2024b8f03443b2037cb183c36",
+    "package/A04BR3Charger.cpp": "2a2bf7f72111afa066494aa33a2b766843b5e45bd895cf4c082bfe9880adc588",
+    "package/A04BR3ChargerBoardCore.h": "90cf1cf960a1c35d5d20ab5e8184cbac15613b9c1d34195b39f31b432b6ac4ae",
+    "package/A04BR3ChargerCore.h": "541c73d6ebe7de48643f2d7d33c39a7d0f5b64fa0aed00ee21e5e7ca3607b135",
+    "package/A04BR3ChargerHandoff.h": "1e233114f68042721a50ff169de23260ffff658260a6739e5187e181a3bb9a04",
+    "package/A04BR3Input.cpp": "e1608689aec8257b5f44c5767b0f328acbff17f0b50c7f2c56ba4cf0ce93e764",
+    "package/A04BR3RegisterLock.cpp": "12fbf29008ca47a79dbdfeba54aa33bbeefed8d61ea249e671e68d7885699427",
+    "package/A04BR3RegisterLock.h": "350e0ee7b718ebc87da83e36090ce49d9e826ed9ef8e19720ab79040d64a931a",
+    "patches/mesa/pvr-darwin-winsys.patch": "f5c637ba4f0fd0565312625f9d296a848073251139307975c411e0f63831fd67",
+    "scripts/build-a04br3-board.py": "2ce6885386dbf401456818cae3de0f8d76da631a3d836946e17e68d8c2305369",
+    "scripts/build-a04br3-metal-plugin.py": "69be0207272ab12f516eb199babb1d99ed8066af7f0af0e37ca51c4fd47e5826",
+    "scripts/make-a04br3-adt.py": "49fe4818d07779dda9fb447b30d0f0e338b8c67035708dc1f23eb88b848ff160",
+    "package/A04BR3GaugeCore.h": "d7c66c9981331ed1809fa1f0b741fd046acf410f9f3a5d2a4f2a22d6d4624bac",
+    "package/powervr/user/powervrprobed_buffer_rows.h": "e9226c76262c784cbd374a892cb6fb37460e23a3a95e9cd1f53a5d7a407f8539",
+    "package/powervr/user/powervrprobed_vulkan.c": "627c8e9ff2fb7581173ac02f718481aa1fb657b8437c96ea287cbdea27bccd6e",
+    "scripts/build-a04br3-powervr-probe.py": "a08da7ff54f738f0ef86e10083997d6d4c7cce261f3e36587b6c341a0880a6a9"
+  },
+  "components": {
+    "drivers/NativeMetal": "1154c9aa4a2d6b36f5e0a9db0a48d0b92abf8508",
+    "drivers/DarwinBoot": "b9063ad22903288df989c3449621b7eb97de7dd2"
+  }
+}

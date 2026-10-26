@@ -1,6 +1,6 @@
 schema_version = 1
 canonical_base = "c78b53c7d2c8cd30264195fc0130360057bc3581"
-canonical_device = "32fe8b7f86e3f3818814c4acec94c7179b39c651"
+canonical_device = "f5f0d203b7bf97e5117611d9200765999767b262"
 metal_revision = "1154c9aa4a2d6b36f5e0a9db0a48d0b92abf8508"
 hid_revision = "8fc6d05403207795b48940d0514cf594219e71d6"
 uefi_recovery_revision = "7ceed2e202b51879ee377e8c7f4cd53439d74412"

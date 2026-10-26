@@ -8,9 +8,9 @@ parser.add_argument('--out', type=Path, required=True)
 options = parser.parse_args()
 B=options.unixnu.resolve();D=Path(__file__).resolve().parents[2];S=options.soc.resolve();L=options.out.resolve();L.mkdir(parents=True,exist_ok=True)
 sys.path.insert(0,str(B/'scripts'))
-# Verify retained runtime sources against the fixed P18 + SecureDT repair blobs.
+# Verify retained runtime sources against the fixed P19 + SecureDT repair blobs.
 # The fixture stores only public source hashes; no canonical checkout is needed.
-contract=json.loads((D/'migration/p18-source-contract.json').read_text())
+contract=json.loads((D/'migration/p19-source-contract.json').read_text())
 for name,digest in contract['files'].items():
  assert hashlib.sha256((D/name).read_bytes()).hexdigest()==digest, 'runtime source changed: '+name
 for name,revision in contract['components'].items():
