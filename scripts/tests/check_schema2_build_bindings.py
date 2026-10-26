@@ -43,6 +43,34 @@ assert 'drivers/NativeHidInput/NativeHidInput.cpp' in hid
 assert 'drivers/ShengHidInput/' not in hid
 assert (tree / 'kits/NativePrelink/native_prelink.py').is_file()
 
+# Exercise the actual display audit's candidate discovery against the builder's staging path.
+display = (tree / 'scripts/build-a04br3-legacy-display.py').read_text()
+audit = (tree / 'scripts/audit-mobile-graphics-legacy.py').read_text()
+with tempfile.TemporaryDirectory() as directory:
+    fixture = Path(directory)
+    candidate = value(assignment(display, 'reference'), ROOT=fixture)
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b'candidate path fixture, not a Mach-O')
+    statements = ast.parse(audit).body
+    first = next(i for i,n in enumerate(statements) if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id=='path' for t in n.targets))
+    last = next(i for i,n in enumerate(statements) if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id=='blob' for t in n.targets))
+    code = compile(ast.Module(body=statements[first:last], type_ignores=[]), '<actual audit candidate discovery>', 'exec')
+    def require(ok, reason):
+        if not ok:
+            raise AssertionError(reason)
+    names = {'ROOT': fixture, 'require': require}
+    exec(code, names)
+    assert names['path'] == candidate
+    candidate.unlink()
+    try:
+        exec(code, {'ROOT': fixture, 'require': require})
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('missing candidate accepted')
+
 # Run the complete real AES binder's recorded-binding branch with a tool seam.
 # The seam checks every archive input exists; it does not emulate compilation/ABI.
 with tempfile.TemporaryDirectory() as directory:
@@ -75,4 +103,4 @@ else:
     subprocess.run([sys.executable, str(root / 'scripts/build-native-aes-bindings.py')], check=True,
                    env={**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH']})
     assert (out / 'libNativeAES.a').is_file()
-print('PASS actual AES producer/object/binder/archive and HID producer/header/audited-source paths; full SDK build still required')
+print('PASS actual AES producer/object/binder/archive and HID producer/header/audited-source paths, display candidate discovery; full SDK build still required')
