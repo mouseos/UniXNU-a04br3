@@ -434,6 +434,133 @@ cleanup:
   return ok;
 }
 
+// A failed fence wait does not prove completion. Quarantine this device and all
+// referenced host allocations instead of destroying or reusing in-flight objects.
+// No timeout path relies on process exit to retire GPU work.
+static struct {
+  int active;
+  VkInstance instance;
+  VkDevice device;
+  VkBuffer ordinaryBuffer, importedBuffer;
+  VkDeviceMemory ordinaryMemory, importedMemory, sourceMemory;
+  VkImage source;
+  VkCommandPool pool;
+  VkFence ordinaryFence, hostFence;
+  void *ordinaryMap, *importedMap, *hostPointer;
+} hostCopyPending;
+
+// Ordinary driver-owned destination for the same hostclear image; no second clear or draw.
+static int hostOrdinaryCopyReadback(VkDevice device, VkQueue queue, VkCommandPool pool, VkImage image,
+                                      const VkPhysicalDeviceMemoryProperties *memory)
+{
+  VkBuffer buffer = VK_NULL_HANDLE;
+  VkDeviceMemory allocation = VK_NULL_HANDLE;
+  VkFence fence = VK_NULL_HANDLE;
+  void *mapped = NULL;
+  int ok = 0, pending = 0;
+  probe_line("vk host-ordinary-copy begin (same hostclear image; independent destination)");
+#define COPY_STEP(name, expression) do { \
+  if (!vkStep("host-ordinary-copy " name, (expression), NULL)) goto cleanup; \
+} while (0)
+  const VkBufferCreateInfo info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = kWidth * kHeight * 4, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+  COPY_STEP("vkCreateBuffer", p_vkCreateBuffer(device, &info, NULL, &buffer));
+  VkMemoryRequirements need;
+  p_vkGetBufferMemoryRequirements(device, buffer, &need);
+  uint32_t type = memoryType(memory, need.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  const int coherent = type != UINT32_MAX;
+  if (!coherent) type = memoryType(memory, need.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+  if (!vkCheck("host-ordinary-copy host-visible memory", type != UINT32_MAX, NULL)) goto cleanup;
+  const VkMemoryAllocateInfo allocate = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = need.size, .memoryTypeIndex = type};
+  COPY_STEP("vkAllocateMemory", p_vkAllocateMemory(device, &allocate, NULL, &allocation));
+  COPY_STEP("vkBindBufferMemory", p_vkBindBufferMemory(device, buffer, allocation, 0));
+  COPY_STEP("vkMapMemory", p_vkMapMemory(device, allocation, 0, VK_WHOLE_SIZE, 0, &mapped));
+  memset(mapped, 0xcd, (size_t)need.size);
+  if (!coherent) {
+    const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+        .memory = allocation, .offset = 0, .size = VK_WHOLE_SIZE};
+    COPY_STEP("vkFlushMappedMemoryRanges", p_vkFlushMappedMemoryRanges(device, 1, &whole));
+  }
+  VkCommandBuffer cmd = VK_NULL_HANDLE;
+  const VkCommandBufferAllocateInfo cmdInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
+  COPY_STEP("vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdInfo, &cmd));
+  const VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+  COPY_STEP("vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin));
+  // The completed hostclear already transitioned this same source to TRANSFER_SRC.
+  imageBarrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+               VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+               VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+  const VkBufferMemoryBarrier fromHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE};
+  p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        0, 0, NULL, 1, &fromHost, 0, NULL);
+  const VkBufferImageCopy region = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+      .imageExtent = {kWidth, kHeight, 1}};
+  p_vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+  const VkBufferMemoryBarrier toHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE};
+  p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                        0, 0, NULL, 1, &toHost, 0, NULL);
+  COPY_STEP("vkEndCommandBuffer", p_vkEndCommandBuffer(cmd));
+  const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  COPY_STEP("vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence));
+  const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .commandBufferCount = 1, .pCommandBuffers = &cmd};
+  probe_line("vk host-ordinary-copy packet correlation: source image 0x%llx destination buffer 0x%llx memory 0x%llx; 64x64 RGBA8 offset 0; next submission is TQ copy",
+             (unsigned long long)(uintptr_t)image, (unsigned long long)(uintptr_t)buffer,
+             (unsigned long long)(uintptr_t)allocation);
+  pending = 1;  // A submit error also does not establish safe resource retirement.
+  COPY_STEP("vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
+  COPY_STEP("vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  pending = 0;
+  if (!coherent) {
+    const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+        .memory = allocation, .offset = 0, .size = VK_WHOLE_SIZE};
+    COPY_STEP("vkInvalidateMappedMemoryRanges", p_vkInvalidateMappedMemoryRanges(device, 1, &whole));
+  }
+  const uint8_t expected[4] = {0x39, 0x72, 0xb4, 0xe1};
+  const volatile uint8_t *pixels = mapped;
+  uint32_t matched = 0, first = UINT32_MAX;
+  for (uint32_t i = 0; i < kWidth * kHeight; i++) {
+    int same = 1;
+    for (uint32_t c = 0; c < 4; c++) same &= pixels[4 * i + c] == expected[c];
+    matched += same;
+    if (!same && first == UINT32_MAX) first = i;
+  }
+  char detail[160];
+  snprintf(detail, sizeof detail, "%u/4096 pixels = 3972b4e1; first mismatch %u", matched, first);
+  ok = vkCheck("host-ordinary-copy full CPU readback", matched == kWidth * kHeight, detail);
+cleanup:
+  if (pending) {
+    hostCopyPending.active = 1;
+    hostCopyPending.device = device;
+    hostCopyPending.ordinaryBuffer = buffer;
+    hostCopyPending.ordinaryMemory = allocation;
+    hostCopyPending.ordinaryFence = fence;
+    hostCopyPending.ordinaryMap = mapped;
+    hostCopyPending.source = image;
+    hostCopyPending.pool = pool;
+    probe_line("vk host-ordinary-copy ABORT: completion unknown; resources retained; imported comparison NOT RUN");
+    return -1;
+  }
+  if (fence) p_vkDestroyFence(device, fence, NULL);
+  if (mapped) p_vkUnmapMemory(device, allocation);
+  if (buffer) p_vkDestroyBuffer(device, buffer, NULL);
+  if (allocation) p_vkFreeMemory(device, allocation, NULL);
+#undef COPY_STEP
+  probe_line("vk host-ordinary-copy end %s", ok ? "PASS" : "FAIL");
+  return ok;
+}
+
 // Direct readback is checked first; a separate copy then reads the same completed draw without rendering again.
 static int linearTriangleProbe(VkDevice device, VkQueue queue, VkCommandPool pool,
                                const VkPhysicalDeviceMemoryProperties *memory, VkFormatFeatureFlags features, int clearOnly)
@@ -536,7 +663,7 @@ static int hostImportProbe(VkPhysicalDevice physical, VkDevice device, VkQueue q
   VkCommandPool pool = VK_NULL_HANDLE;
   VkFence fence = VK_NULL_HANDLE;
   void *pointer = NULL, *mapped = NULL;
-  int ok = 0;
+  int ok = 0, ordinaryOK = 0, pending = 0;
   char detail[256];
   probe_line("vk host-import begin: HOST_ALLOCATION, ordinary aligned CPU allocation; original tests completed");
 #define HOST_STEP(name, expression) do { \
@@ -647,11 +774,18 @@ static int hostImportProbe(VkPhysicalDevice physical, VkDevice device, VkQueue q
   const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   HOST_STEP("hostclear vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence));
   const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
+  pending = 1;
   HOST_STEP("hostclear vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
   HOST_STEP("hostclear vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  pending = 0;
   probe_line("vk hostclear end PASS");
   p_vkDestroyFence(device, fence, NULL);
   fence = VK_NULL_HANDLE;
+
+  // Compare destinations with exactly the same source image and expected color.
+  // A failed ordinary verdict must not skip the imported destination test.
+  ordinaryOK = hostOrdinaryCopyReadback(device, queue, pool, image, memory);
+  if (ordinaryOK < 0) { pending = 1; goto cleanup; }
 
   // Keep the completed clear command buffer owned by the pool; copy gets a
   // fresh buffer and fence, so a clear failure cannot submit any copy work.
@@ -669,8 +803,13 @@ static int hostImportProbe(VkPhysicalDevice physical, VkDevice device, VkQueue q
   p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 0, NULL, 1, &toHost, 0, NULL);
   HOST_STEP("hostcopy vkEndCommandBuffer", p_vkEndCommandBuffer(cmd));
   HOST_STEP("hostcopy vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence));
+  probe_line("vk host-import-copy packet correlation: source image 0x%llx destination buffer 0x%llx memory 0x%llx; same source as host-ordinary-copy; 64x64 RGBA8 offset 0; next submission is TQ copy",
+             (unsigned long long)(uintptr_t)image, (unsigned long long)(uintptr_t)buffer,
+             (unsigned long long)(uintptr_t)imported);
+  pending = 1;
   HOST_STEP("hostcopy vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
   HOST_STEP("hostcopy vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  pending = 0;
   probe_line("vk hostcopy end PASS");
   HOST_STEP("vkInvalidateMappedMemoryRanges", p_vkInvalidateMappedMemoryRanges(device, 1, &whole));
   // Flush/invalidate apply to vkMapMemory's pointer, not an arbitrary alias.
@@ -693,8 +832,24 @@ static int hostImportProbe(VkPhysicalDevice physical, VkDevice device, VkQueue q
   snprintf(detail, sizeof detail, "mapped %u/4096 pixels = 3972b4e1; original alias %s matched %u/4096 first mismatch %u",
            mappedMatched, checkOriginal ? "checked" : "not checked", matched, first);
   ok = vkCheck("host-import full CPU readback", (!checkOriginal || matched == kWidth * kHeight) && mappedMatched == kWidth * kHeight, detail);
+  probe_line("vk same hostclear image comparison: host-ordinary-copy %s; host-import-copy %s (diagnostic, not a fix)",
+             ordinaryOK ? "PASS" : "FAIL", ok ? "PASS" : "FAIL");
+  ok = ordinaryOK && ok;
 cleanup:
-  if (pool) p_vkDeviceWaitIdle(device);   // retire submissions before releasing imported pages, including on errors
+  if (pending) {
+    hostCopyPending.active = 1;
+    hostCopyPending.device = device;
+    hostCopyPending.source = image;
+    hostCopyPending.sourceMemory = imageMemory;
+    hostCopyPending.pool = pool;
+    hostCopyPending.hostFence = fence;
+    hostCopyPending.importedBuffer = buffer;
+    hostCopyPending.importedMemory = imported;
+    hostCopyPending.importedMap = mapped;
+    hostCopyPending.hostPointer = pointer;
+    probe_line("vk host-import ABORT: completion unknown; source/pool/import and backing retained; comparison incomplete");
+    return -1;
+  }
   if (fence) p_vkDestroyFence(device, fence, NULL);
   if (pool) p_vkDestroyCommandPool(device, pool, NULL);
   if (mapped) p_vkUnmapMemory(device, imported);
@@ -712,6 +867,10 @@ cleanup:
 
 int probe_vulkan(const char *library)
 {
+  if (hostCopyPending.active) {
+    probe_line("vk stage ABORT: prior host-copy completion unknown; retained device cannot be reused");
+    return -1;
+  }
   // Owner probe only: the Darwin winsys bounds its opt-in geometry trace to 32 lines.
   if (setenv("PVR_DARWIN_DEBUG_GEOMETRY", "1", 1) != 0) return -1;
   // Isolate terminal PPP clipping; do not combine this with the overlap comparison.
@@ -1000,7 +1159,14 @@ int probe_vulkan(const char *library)
     result = 0;
     // Last: a host-import failure must not prevent any original render/TQ test.
     if (hostImport == 1) {
-      if (!hostImportProbe(physical, device, queue, family, &memory, hostProperties.minImportedHostPointerAlignment)) result = -1;
+      const int hostOK = hostImportProbe(physical, device, queue, family, &memory,
+                                         hostProperties.minImportedHostPointerAlignment);
+      if (hostCopyPending.active) {
+        hostCopyPending.instance = instance;
+        probe_line("vulkan stage failed: host-copy completion unknown; device/instance and dependent resources retained");
+        return -1;
+      }
+      if (!hostOK) result = -1;
     } else if (hostImport == 0) {
       probe_line("vk host-import SKIP: VK_EXT_external_memory_host absent (not a PASS)");
     } else {
