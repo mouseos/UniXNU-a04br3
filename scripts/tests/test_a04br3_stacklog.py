@@ -85,10 +85,12 @@ int main(void) {
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include "powervr/native_powervr_bo_stats.h"
 volatile uint32_t armcpu_smp_requested, armcpu_smp_running, armcpu_smp_step[8];
 volatile int32_t armcpu_smp_psci_rc[8];
 char boot_process_rows[10][120];
-unsigned enabled, captures, snapshots, traces;
+unsigned enabled, captures, snapshots, traces, boSnapshots;
+void native_powervr_bo_live_snapshot(native_powervr_bo_live_record *out) { ++boSnapshots; *out={}; out->enabled=enabled; }
 void IOLog(const char *, ...) {}
 bool PE_parse_boot_argn(const char *name, void *value, unsigned size) {
     assert(!strcmp(name, "a04br3-stacklog") && size == sizeof(unsigned));
@@ -103,13 +105,13 @@ unsigned boot_ui_trace_role_rows(unsigned, char [][120], unsigned, unsigned) { +
 int main(int argc, char **argv) {
     assert(argc == 2); enabled = argv[1][0] == '1';
     a04br3_thread_report(); a04br3_thread_report();
-    assert(captures == enabled * 2 && snapshots == enabled * 2 && traces == enabled * 8);
+    assert(captures == enabled * 2 && snapshots == enabled * 2 && traces == enabled * 8 && boSnapshots == enabled * 2);
 }
 '''
         with tempfile.TemporaryDirectory(prefix='a04br3-stacklog-test-') as tmp:
             cpp, binary = Path(tmp) / 'report.cpp', Path(tmp) / 'report'
             cpp.write_text(harness)
-            subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', str(cpp), '-o', str(binary)], check=True)
+            subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I', str(SOURCE.parent), str(cpp), '-o', str(binary)], check=True)
             for enabled in ('0', '1'):
                 subprocess.run([str(binary), enabled], check=True)
 

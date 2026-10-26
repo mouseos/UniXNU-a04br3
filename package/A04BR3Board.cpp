@@ -19,6 +19,7 @@
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
+#include "powervr/native_powervr_bo_stats.h"
 #include <kern/thread.h>
 #include <libkern/libkern.h>
 
@@ -100,6 +101,14 @@ static void a04br3_thread_report(void)
   boot_memory_snapshot(memory);
   IOLog("a04br3 memory: approx pagesz=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu\n",
         memory[0], memory[1], memory[2], memory[3], memory[4], memory[5], memory[6]);
+  struct native_powervr_bo_live_record bos;
+  native_powervr_bo_live_snapshot(&bos);
+  if (bos.enabled) {
+    IOLog("a04br3 BO live: objects-only normal count=%llu bytes=%llu peak_count=%llu peak_bytes=%llu\n",
+          bos.normal.count, bos.normal.bytes, bos.normal.peak_count, bos.normal.peak_bytes);
+    IOLog("a04br3 BO live: objects-only host-import count=%llu bytes=%llu peak_count=%llu peak_bytes=%llu\n",
+          bos.host_import.count, bos.host_import.bytes, bos.host_import.peak_count, bos.host_import.peak_bytes);
+  }
   boot_process_capture();
   boot_process_snapshot();
   for (unsigned i = 0; i < 10; ++i)
