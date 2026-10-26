@@ -85,6 +85,7 @@
 
 extern "C" {
 void flush_dcache(vm_offset_t addr, unsigned count, int phys);
+void proc_selfname(char *, int);
 vm_offset_t phystokv(uint64_t pa);
 extern uint64_t gPhysBase, gPhysSize;
 // The firmware image (scripts/build-a04br3-board.py) and the core's CORE_ID register (A04BR3Gpu.cpp).
