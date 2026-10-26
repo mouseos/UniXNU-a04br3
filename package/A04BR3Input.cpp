@@ -8,12 +8,12 @@
 //  - Touch: ROHM BU21025 resistive controller at I2C0 (0x11009000) address 0x48, powered from MT6392 VGP1 1.8 V through
 //    PWRAP WACS2, polled PIO with the pen interrupt on GPIO8. Each contact is published as one finger to the finger set of
 //    package/TouchState.cpp (x 0..30480, y 0..20320 over the 800x1280 portrait panel) and NativeHidInput is notified.
-//  - Keys: the MT8167 keypad (0x10002000), bit 0 volume up, bit 1 Home. Home goes through NativeHidInput's Home path
-//    (native_hid_input_command, HidInputProbe.cpp: read on NativeHidInput's 1 s tick, one 100 ms press per request, after the
-//    second presented frame), volume up through the button sink (report 2 bit 2). Needs sheng-touch-hid=1 for the
-//    digitizer collection and the touch sink of NativeHidInput.
+//  - Keys: the MT8167 keypad (0x10002000), bit 0 volume up, bit 1 Home. Both physical down/up states go through
+//    NativeHidInput's Consumer report 2 (Home bit 0, volume up bit 2). The mailbox remains for synthetic self-tests only.
+//    Needs sheng-touch-hid=1 for the digitizer collection and the touch sink of NativeHidInput.
 // The only other PWRAP user, package/A04BR3AutoReset.cpp, finishes its WACS2 transactions in bsd_init before this starts.
 #include <IOKit/IOLib.h>
+#include <libkern/c++/OSObject.h>
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
@@ -41,8 +41,47 @@ namespace {
 
 volatile uint8_t *gI2c, *gGpio, *gTop, *gInfra, *gPwrap, *gKeypad;
 IOLock *gPublishLock;
-void (*volatile gButtonSink)(void *, uint32_t);
-void *volatile gButtonContext;
+// Callback context is the NativeHidInput OSObject. Registration and each in-flight
+// notification own a reference; never enter its work loop while holding this lock.
+IOLock *gButtonLock;
+void (*gButtonSink)(void *, uint32_t);
+OSObject *gButtonContext;
+uint32_t gButtonMask;
+bool gButtonDirty = true;
+
+IOLock *buttonLock()
+{
+  IOLock *lock = __atomic_load_n(&gButtonLock, __ATOMIC_ACQUIRE);
+  if (lock) return lock;
+  IOLock *candidate = IOLockAlloc();
+  if (!candidate) return nullptr;
+  IOLock *expected = nullptr;
+  if (!__atomic_compare_exchange_n(&gButtonLock, &expected, candidate, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+    IOLockFree(candidate);
+    return expected;
+  }
+  return candidate;
+}
+
+// Called by the single keypad producer, including when a newly registered sink
+// needs the current held state. No fabricated press/release or periodic repeat.
+void publishButtons(unsigned keypad)
+{
+  IOLock *lock = buttonLock();
+  if (!lock) return;
+  const uint32_t mask = ((keypad & 2) ? 1U : 0U) | ((keypad & 1) ? 4U : 0U);
+  void (*sink)(void *, uint32_t) = nullptr;
+  OSObject *context = nullptr;
+  IOLockLock(lock);
+  if (mask != gButtonMask) { gButtonMask = mask; gButtonDirty = true; }
+  if (gButtonDirty && gButtonSink) {
+    sink = gButtonSink; context = gButtonContext;
+    context->retain();
+    gButtonDirty = false;
+  }
+  IOLockUnlock(lock);
+  if (sink) { sink(context, mask); context->release(); }
+}
 
 uint32_t rd(volatile uint8_t *b, unsigned o) { uint32_t v = *reinterpret_cast<volatile uint32_t *>(b + o); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
 void wr(volatile uint8_t *b, unsigned o, uint32_t v) { *reinterpret_cast<volatile uint32_t *>(b + o) = v; __asm__ volatile("dsb oshst" ::: "memory"); }
@@ -199,14 +238,11 @@ void keyThread(void *, wait_result_t)
     if (value == candidate) stable++; else { candidate = value; stable = 0; }
     if (stable >= 2 && candidate != previous) {
       const unsigned changed = candidate ^ previous;
-      if ((changed & 2) && (candidate & 2)) { native_hid_input_command = 1; a04br3_key_presses = a04br3_key_presses + 1; }
-      if (changed & 1) {
-        void (*sink)(void *, uint32_t) = gButtonSink;
-        if (sink) sink(gButtonContext, (candidate & 1) ? (1U << 2) : 0);   // report 2 bit 2: Volume Increment
-      }
+      if ((changed & 2) && (candidate & 2)) a04br3_key_presses = a04br3_key_presses + 1;
       IOLog("a04br3 input: keys volup %u home %u\n", candidate & 1, (candidate >> 1) & 1);
       previous = candidate;
     }
+    publishButtons(previous);
     IOSleep(10);
   }
 }
@@ -252,14 +288,24 @@ void start(void (*fn)(void *, wait_result_t))
 
 }  // namespace
 
-// NativeHidInput registers its button sink here (HidInputProbe.cpp keeps a weak no-op for boards without buttons).
+// Only this board opts into physical Home in the existing Consumer report.
+extern "C" bool native_buttons_physical_home(void) { return true; }
+
+// NativeHidInput supplies its OSObject as context and unregisters before stop.
+// Replacing/removing a sink releases registration ownership outside the lock;
+// an already dispatched notification retains its own context until it returns.
 void native_buttons_set_sink(void (*sink)(void *, uint32_t), void *context)
 {
-  gButtonSink = nullptr;
-  __asm__ volatile("dmb ish" ::: "memory");
-  gButtonContext = context;
-  __asm__ volatile("dmb ish" ::: "memory");
-  gButtonSink = sink;
+  IOLock *lock = buttonLock();
+  if (!lock) return;
+  OSObject *next = sink ? static_cast<OSObject *>(context) : nullptr;
+  if (sink && !next) return;
+  if (next) next->retain();
+  IOLockLock(lock);
+  OSObject *old = gButtonContext;
+  gButtonSink = sink; gButtonContext = next; gButtonDirty = true;
+  IOLockUnlock(lock);
+  if (old) old->release();
 }
 
 void a04br3_input_start(void)
