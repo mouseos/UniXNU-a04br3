@@ -102,6 +102,9 @@ extern "C" void native_metal_board_prepare(unsigned port) {
         if (auto retain = (RetainFn)dlsym(iokit, "IOObjectRetain")) retain(port);
     }
     gIOKit.port = port;
+    const char *asyncCreation=getenv("PVR_METAL_ASYNC_CREATION");
+    if(asyncCreation && !strcmp(asyncCreation,"1"))
+        native_bridge_metal_set_async_creation(true);
     // Qualified GE8300 diagnostic policy; the generic bridge remains unchanged by default.
     const char *fetchPolicy=getenv("PVR_METAL_REQUIRE_FETCH_FOR_APPLE3");
     if(fetchPolicy && !strcmp(fetchPolicy,"1"))

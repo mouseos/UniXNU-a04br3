@@ -3,12 +3,17 @@
 (drivers/NativeMetal/NativeVulkanMetalPlugin.mm, scripts/build-vulkan-metal-plugin.py) with this board's hooks
 (package/powervr/user/NativePowerVRMetalBoard.mm) and Mesa's PowerVR Vulkan driver (scripts/build-pvr-darwin.py --target ios).
 
-  build-a04br3-metal-plugin.py [--vulkan LIBRARY] [--out DIR] [--skip-bridge] [--sipf1-dump] [--submit-barrier] [--serial-transfer] [--tq-clip] [--pipeline-failure-diag] [--require-fetch-for-apple3] [--roa-color]
+  build-a04br3-metal-plugin.py [--vulkan LIBRARY] [--out DIR] [--skip-bridge] [--sipf1-dump] [--submit-barrier] [--serial-transfer] [--tq-clip] [--pipeline-failure-diag] [--require-fetch-for-apple3] [--roa-color] [--async-creation]
 
 --roa-color is off by default and sets PVR_DARWIN_ROA_COLOR=1 only in this bundle.
 It selects the experimental Darwin GE8300 COLOR ROA path in the supplied Mesa
 library, independently of --require-fetch-for-apple3. It does not qualify UI/XR
 rendering or enable plugin publication.
+
+--async-creation is off by default and sets PVR_METAL_ASYNC_CREATION=1 in this
+bundle. The board opts the five frontend completion-form creation APIs into a
+serial compile worker with separate completion delivery. It is a contract trial;
+it does not establish the cause of the current UI stall. No Rust rebuild is needed.
 
 Runs in a UniXNU build tree (out/a04br3/tree: the tree's scripts/ holds both repositories' scripts, kits/a04br3 this package).
 The names match the accelerator of package/powervr/NativePowerVRMetal.cpp: MetalPluginName NativePowerVRMetal, MetalPluginClassName
@@ -57,6 +62,8 @@ def main():
                         help='qualify GE8300 Apple3 compatibility claims against actual framebuffer-fetch support')
     parser.add_argument('--roa-color', action='store_true',
                         help='opt in to experimental Darwin GE8300 COLOR ROA in this bundle (default off)')
+    parser.add_argument('--async-creation', action='store_true',
+                        help='opt in to frontend asynchronous creation with separate completion delivery (default off)')
     args = parser.parse_args()
     builder = ROOT / 'scripts/build-vulkan-metal-plugin.py'
     if not builder.is_file():
@@ -84,7 +91,8 @@ def main():
             (args.tq_clip, 'tq-clip', 'PVR_DARWIN_TQ_CLIP'),
             (args.pipeline_failure_diag, 'pipeline-failure-diag', 'PVR_METAL_PIPELINE_DIAG'),
             (args.require_fetch_for_apple3, 'require-fetch-for-apple3', 'PVR_METAL_REQUIRE_FETCH_FOR_APPLE3'),
-            (args.roa_color, 'roa-color', 'PVR_DARWIN_ROA_COLOR')):
+            (args.roa_color, 'roa-color', 'PVR_DARWIN_ROA_COLOR'),
+            (args.async_creation, 'async-creation', 'PVR_METAL_ASYNC_CREATION')):
         if not enabled:
             continue
         # As with the dump source, survive the generic builder's OUT cleanup.

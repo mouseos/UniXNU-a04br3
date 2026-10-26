@@ -6,14 +6,28 @@ from unittest.mock import patch
 R=Path(__file__).resolve().parents[2]
 module=runpy.run_path(str(R/'scripts/build-a04br3-metal-plugin.py'))
 main=module['main'];real_run=subprocess.run
-flags=('--sipf1-dump','--submit-barrier','--serial-transfer','--tq-clip','--pipeline-failure-diag','--require-fetch-for-apple3','--roa-color')
-variables=('PVR_DARWIN_SIPF1_DUMP','PVR_DARWIN_SUBMIT_BARRIER','PVR_DARWIN_SERIAL_TRANSFER','PVR_DARWIN_TQ_CLIP','PVR_METAL_PIPELINE_DIAG','PVR_METAL_REQUIRE_FETCH_FOR_APPLE3','PVR_DARWIN_ROA_COLOR')
+flags=('--sipf1-dump','--submit-barrier','--serial-transfer','--tq-clip','--pipeline-failure-diag','--require-fetch-for-apple3','--roa-color','--async-creation')
+variables=('PVR_DARWIN_SIPF1_DUMP','PVR_DARWIN_SUBMIT_BARRIER','PVR_DARWIN_SERIAL_TRANSFER','PVR_DARWIN_TQ_CLIP','PVR_METAL_PIPELINE_DIAG','PVR_METAL_REQUIRE_FETCH_FOR_APPLE3','PVR_DARWIN_ROA_COLOR','PVR_METAL_ASYNC_CREATION')
+board_source=(R/'package/powervr/user/NativePowerVRMetalBoard.mm').read_text()
+assert 'if(asyncCreation && !strcmp(asyncCreation,"1"))\n        native_bridge_metal_set_async_creation(true);' in board_source
+gate_start=board_source.index('    const char *asyncCreation=')
+gate_end=board_source.index('native_bridge_metal_set_async_creation(true);',gate_start)+len('native_bridge_metal_set_async_creation(true);')
+board_gate=board_source[gate_start:gate_end]
 with tempfile.TemporaryDirectory(prefix='pvr-metal-flags-') as t:
  root=Path(t);(root/'scripts').mkdir();builder=root/'scripts/build-vulkan-metal-plugin.py';builder.write_text('# fixture generic builder\n')
+ gate=root/'board-gate.c'
+ gate.write_text('#include <stdlib.h>\n#include <stdbool.h>\n#include <string.h>\n#include <assert.h>\n'
+                 'static unsigned calls; static void native_bridge_metal_set_async_creation(bool on){assert(on);calls++;}\n'
+                 'static void prepare(void){\n'+board_gate+'\n}\n'
+                 'int main(void){const char *values[]={"", "0", "1", "01", "2", "true", "-1"};\n'
+                 'unsetenv("PVR_METAL_ASYNC_CREATION");prepare();assert(!calls);\n'
+                 'for(unsigned i=0;i<sizeof(values)/sizeof(values[0]);i++){calls=0;setenv("PVR_METAL_ASYNC_CREATION",values[i],1);prepare();assert(calls==!strcmp(values[i],"1"));}}\n')
+ real_run(['cc','-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror',str(gate),'-o',str(root/'board-gate')],check=True)
+ real_run([str(root/'board-gate')],check=True)
  board=root/'package/powervr/user/NativePowerVRMetalBoard.mm';board.parent.mkdir(parents=True);board.write_text('// board unchanged\n')
  library=root/'driver.dylib';library.write_bytes(b'fixture')
  out=root/'out'/'plugin';main.__globals__['ROOT']=root
- for bits in itertools.product((False,True),repeat=7):
+ for bits in itertools.product((False,True),repeat=len(flags)):
   skip=bool(sum(bits)%2);seen=[]
   argv=['metal','--vulkan',str(library),'--out',str(out),*[f for f,b in zip(flags,bits) if b],*(['--skip-bridge'] if skip else [])]
   def generic(command,check):
@@ -39,4 +53,4 @@ with tempfile.TemporaryDirectory(prefix='pvr-metal-flags-') as t:
   with patch.object(sys,'argv',argv),patch('subprocess.run',side_effect=generic):main()
   assert len(seen)==1
  assert board.read_text()=='// board unchanged\n'
-print('PASS actual Metal command preparation: 128 independent flag combinations, exact constructors/env=1 only when selected, OUT cleanup survival, stale siblings unused, skip-bridge preserved; no GPU/build execution')
+print('PASS actual Metal command preparation: 256 independent flag combinations, exact constructors/env=1 only when selected, OUT cleanup survival, stale siblings unused, skip-bridge preserved, strict board async gate; no GPU/build execution')
