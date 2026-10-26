@@ -1,0 +1,117 @@
+{
+  "scope": "Actual iOS16 eapolclient SET3 WEP/MSK/PMKSA fields, association20 PMK/passphrase fields, native EAPOL AF_NDRV registration and authenticated completion interest endpoint. Typed strict parser and registration codec; runtime integration and WPA2-PSK handshake engine not implemented.",
+  "artifact": {
+    "original_io80211_sha256": "d7620894ad830fffd8f4a5489cc5a89564ce2b30b62ee90ca3e5bbe062eeb851",
+    "focused_elf_sha256": "5ad1a0f267e55da17d4af357d19c10c23ac3893f03e2c1c7633d1e8c93062093",
+    "wrapper": "Existing address-preserving offline ELF; original binary is neither patched nor executed. Existing retained REA analysis reused."
+  },
+  "native_evidence": [
+    {
+      "procedure": "_Apple80211SetWithIOCTL",
+      "address": "0x1d3ecd9e0",
+      "evidence_id": "ev_5e881c73cf48dcae4c9998d6b0cb1141d250ce703276ccea80c54972577503c5",
+      "contract": "Initial request is zeroed; req.type at16 receives selector. Case3 requires nonnull param4 and param5==0x94. Forwards original pointer with length148 to IOCTLSetWrapper. No field extraction, PMK/PTK/GTK semantics or authenticated-success signal is established by this case. The implemented subset accepts value0 from this producer and rejects other values."
+    },
+    {
+      "procedure": "_Apple80211IOCTLSetWrapper",
+      "contract": "Existing retained wrapper analysis establishes ARM64 SET request0x802869c8 and common request fields. The new carrier is consumed only after the existing credential-checked bounded copyin adapter. It does not accept or dereference a user pointer."
+    },
+    {
+      "operation": "search_procedures",
+      "evidence_id": "ev_1a659e6a1586a3dde354bf4bb5ae67aa9c6524776e1172118143015004d8c535",
+      "contract": "Bounded case-insensitive procedure-name search Key|Cipher|EAPOL|SetWithIOCTL|Controlled|Port in the existing IO80211 target. Found SetWithIOCTL; no named EAPOL/key/controlled-port producer was identified. This is not evidence of absence of code or an ABI proof."
+    },
+    {
+      "procedure": "eapolclient FUN_10000f7d8",
+      "evidence_id": "ev_aff92e061a112f467754a4a06da82ef334f873ee52d32117d168a8774bea6d64",
+      "contract": "Actual SET3 producer zeroes148, version32@0=1; len32@4=5/13; cipher32@8=1/2; flags16@12 from native input table1,2,5,9; index16@14 from argument; key bytes@16. No CCMP producer inferred."
+    },
+    {
+      "procedure": "eapolclient FUN_10000fa48",
+      "evidence_id": "ev_4f4833a63488133e48a466ff02b1ff693a92ebc8e97fc2d0df292442af9e9772",
+      "contract": "Actual SET3 zeroed148, version1; len0 or64@4, secret@16; cipher7 with six-byte supplied BSSID@92, cipher9 without BSSID. Flag/index/counter/tail zero. Called as wireless_set_wpa_msk from FUN_10000c8c0, not a PTK/TK16 setter."
+    },
+    {
+      "procedure": "__performAssociation",
+      "evidence_id": "ev_45252d12b57e35e7517b86d8fabd6e8c0c7937e59b9f25f8d0b8bb8c315bb2cd",
+      "contract": "Actual association592 rootlocal_2c8 embeds key rootlocal_290 at56. version1, len32@key+4 and cipher6@key+8 with32-byte parsed PMK@key+16; alternative cipher10 with passphrase@key+16 and actual length. Parser supports strict PMK32 or8..63 passphrase with unsupported extension bytes rejected. This does NOT prove direct SET3 PMK/CCMP carriers."
+    },
+    {
+      "procedure": "eapolclient FUN_10000c418 and FUN_10000e7ac",
+      "evidence_ids": [
+        "ev_15bf8351caa435399a24f27b3b40ff2c860dfdef340b4be54250878601889e12",
+        "ev_0b700b4064322a1273b8b734e3a1f0ecdfe1ec0dd458abc4838e6dfdd4e9dc78",
+        "ev_ddb2103ef5c59384b0c5266a053502e716ce6ffb3d0786817cf7e9f65b831ef4",
+        "ev_65c6bafd7ca2288785478f6d9b6c545510153b5ca399be1c2ffdc19e55716fe9",
+        "ev_1af671d5784cee9d85dc9d8f93b91879d7dc1e81127a942b256a0260f1e4297f"
+      ],
+      "contract": "Native transmit refreshes unknown BSSID before sending and refuses TX if still absent. Actual GET9 six-byte BSSID; GET1 SSID; CopyValue2 AUTH_UPPER. This is association metadata BEFORE port authorization; no GET103 dependency inferred."
+    },
+    {
+      "procedure": "EAP8021X _eapol_socket 0x1d3ea7784",
+      "evidence_id": "ev_be342fb52b2a1a5989ea277261a7c862caf07aa8d24d7a8bdd6a77f590bb7d4d",
+      "contract": "Observed native socket arguments27/3/0, sockaddr18 with family27 and ifname16; nonblocking ioctl; setsockopt level0 option4 with24-byte protocol version1/family0x8021ec/count1 or2/pointer@16. Each32-byte demux entry type16=4/length16=2, network-order EtherTypes888e and wireless88c7. Exact fields corroborate pinned Apple eapol_socket.c. Unused union bytes are malloc data and MUST NOT be required zero."
+    },
+    {
+      "procedure": "eapolclient FUN_10000d1ac",
+      "evidence_id": "ev_ca3ac4737ed35806e72c078cd47f474e22bdf3bb084e74345a59dbd11858612b",
+      "contract": "Uses existing stdin when fstat reports a socket; otherwise calls imported _eapol_socket(ifname,is_wireless). Registers FD handler callback FUN_10000da40 and EAPOLClientAttach. A listener is not proven to be running merely by adding DLIL input."
+    },
+    {
+      "procedure": "eapolclient FUN_100010514 / FUN_10001089c / FUN_10000f42c",
+      "evidence_ids": [
+        "ev_e3fc84f61a3980f82da4ed8264d038c1bd46d38a6b7038fb8bca7117f25d45e7",
+        "ev_cf7f6e61dfc6e68ca8503eeaf6e7040d2c3b658e23809e731ef9175bf031e024",
+        "ev_bee0caa766a3159e9799df25e724ab2968aaec2cf58db3f706a00bc3726b9016"
+      ],
+      "contract": "IOBSDNameMatching(ifname), walks two IOService parents, IOGeneralInterest callback; only message0xe0000130 calls 4-way-handshake-complete callback. It is not SET3 return success. Do not send this until actual authenticated handshake and genuine key/TX confirmations."
+    }
+  ],
+  "source_contracts": [
+    {
+      "source": "../sdio/A04BR3WLANSecurity.h and A04BR3WLANData.h",
+      "contract": "Existing board-owned WPA2-PSK/CCMP128 descriptor-v2 subset. EtherType0x888e, actual associated AP/station addresses, Ethernet14..1514; pairwise EAPOL M1/M3 RX and M2/M4 TX only. New preflight uses the existing actual MIC verifier and phase/replay/deadline checks. It does not advance phase, mark TX_DONE, install a key or authorize a port."
+    },
+    {
+      "source": "../sdio/A04BR3WLANBackendAPI.h",
+      "contract": "Existing typed eapol/install_key/authorize functions remain separate. Transport completion is not authentication. SET3 must never call authorize merely because a key was accepted. Production key decoding and native supplicant transport/completion require separate evidence and integration."
+    },
+    {
+      "repository": "https://github.com/mouseos/android_kernel_benesse_TAB-A04-BR3",
+      "commit": "eb47f42e1f84fe5716ef239620725f82718a620a",
+      "contract": "Existing backend's MediaTek gen3 CMD_802_11_KEY, ADD_PKEY_DONE, TX_DONE and Ethernet HIF framing derive from this pinned board source. No new firmware encoding or crypto algorithm is copied into these adapters."
+    },
+    {
+      "repository": "https://github.com/OpenIntelWireless/itlwm",
+      "commit": "53c51c2cdd6e4b69beb91f310d74c53422b0f8bd",
+      "files": [
+        "include/Airport/apple80211_var.h",
+        "AirportItlwm/AirportSTAIOCTL.cpp"
+      ],
+      "contract": "Compared only as a source reference. Its key fields and flag mapping are not established for this iOS artifact by the retained SET3 function. No field mapping or its immediate RSN_HANDSHAKE_DONE behavior is copied."
+    },
+    {
+      "repository": "https://github.com/apple-oss-distributions/eap8021x",
+      "commit": "6f181a4221f6a0a8bf9559894818cb4f0f369b25",
+      "files": [
+        "EAP8021X.fproj/eapol_socket.c",
+        "eapolclient.tproj/EAPOLSocket.c",
+        "eapolclient.tproj/InterestNotification.c"
+      ],
+      "contract": "Copied primary Apple source, not cloned. Version equality with iOS16 not assumed; native REA observations above corroborate these paths. wireless.c contains no implementation; wireless.h/m empty, so public source alone cannot establish native key ABI."
+    }
+  ],
+  "integration_limits": [
+    "Existing NativeRendezvous drops RX kind2 and registers verifier null. Existing BSD input/output also require authorized datapath_ready; native AF_NDRV control traffic needs a distinct pre-authorization path tied to real association and exact EAPOL type/addresses, not ordinary IP admission.",
+    "XNU bsd/net/ndrv.c actually attaches copied demux descriptors with ifnet_attach_protocol and ndrv_input finds matching ifnet/protocol family and prepends14-byte Ethernet header. BSD bridge uses ether_demux/ether_add_proto. Native socket registration is now artifact-proven, but runtime listener presence is unobserved.",
+    "CurrentRecord/GET21 open-only gating belongs to another owner. Actual eapolclient demands GET9/1/2 while unauthorized; secure association and port authorization must remain separate. No native GET103 dependency established.",
+    "Actual eapolclient SET3 producers are WEP and MSK/PMKSA (enterprise path). WPA2-Personal uses association PMK/passphrase. No PTK16/cipher5 producer discovered; the parser rejects that unproven mapping. Existing MT6630 CCMP backend therefore cannot consume these as ready TK keys.",
+    "A genuine WPA2-PSK handshake/crypto owner remains required from supplied PMK/passphrase, with real KCK/MIC/GTK unwrap and backend event confirmations. verifier null cannot be changed to unconditional success. No SET3 or registration parser authorizes anything.",
+    "Typed parser supports only observed fields and strict zero extensions; keys are owned and explicitly clearable, never logged. No runtime wiring, existing-owner source changes, console/tty/sampler edits, native Apple binary patch, hardware/SSH/mtk or SDK build."
+  ],
+  "credit": "Original board adapter code; retained REA evidence and existing project security backend are referenced. No third-party implementation or Apple code bytes are embedded.",
+  "artifacts_observed": {
+    "eapolclient_sha256": "eeeb53b1303504ceee332f8a98cf860fb5b5c2661bff62851759483240d550fe",
+    "EAP8021X_extracted_sha256": "6129b08b0e1ae899614daeb4a8ba229be368b7f9d71b256e68c656d5b85f13f2"
+  }
+}

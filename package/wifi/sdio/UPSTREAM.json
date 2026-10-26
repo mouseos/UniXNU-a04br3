@@ -1,0 +1,42 @@
+{
+  "board_source_repository": "https://github.com/mouseos/android_kernel_benesse_TAB-A04-BR3.git",
+  "board_source_commit": "eb47f42e1f84fe5716ef239620725f82718a620a",
+  "source_paths": [
+    "arch/arm64/boot/dts/mediatek/a04br3.dts",
+    "arch/arm64/boot/dts/mediatek/mt8167.dtsi",
+    "arch/arm64/boot/dts/mediatek/mt8167-pinfunc.h",
+    "drivers/clk/mediatek/clk-mt8167.c",
+    "drivers/pinctrl/mediatek/pinctrl-mt8167.c",
+    "drivers/mmc/host/mtk-sdio.c",
+    "drivers/mmc/host/mtk-sdio.h",
+    "modules/connectivity/common/common_main/platform/mtk_wcn_cmb_hw.c",
+    "modules/connectivity/common/common_detect/sdio_detect.c",
+    "modules/connectivity/common/common_main/core/stp_core.c",
+    "modules/connectivity/common/common_main/core/wmt_ic_6630.c",
+    "modules/connectivity/common/common_main/linux/stp_sdio.c",
+    "modules/connectivity/common/common_main/linux/osal.c"
+  ],
+  "credit": "MediaTek board hardware definitions and SDIO sequencing; new XNU implementation, not Linux source linked into XNU",
+  "status": "WMT patch ACK127/reset3/fn1 hardware verified; first WLAN MTKW firmware boot candidate, packet path/native Wi-Fi not verified",
+  "launcher_reference": {
+    "repository": "https://github.com/s1204IT/CT3_GPL_LGPL_Src",
+    "commit": "7c4782127d4ea11965be00ce1343056be9bfb769",
+    "source": "combo_tool/src/stp_uart_launcher.c",
+    "firmware_inputs": [
+      "combo_tool/patch_folder/mt6630_patch_e3_0_hdr.bin",
+      "combo_tool/patch_folder/mt6630_patch_e3_1_hdr.bin"
+    ],
+    "scope": "source selection rule, not a claim of byte-identical TAB-A04-BR3 stock launcher"
+  },
+  "wlan_source_root": "modules/connectivity/wlan/gen3",
+  "wlan_reference_paths": [
+    "common/wlan_lib.c",
+    "include/nic_init_cmd_event.h",
+    "include/nic_cmd_event.h",
+    "include/nic/mt6630_reg.h",
+    "nic/nic_tx.c",
+    "nic/nic_rx.c",
+    "mgmt/auth.c",
+    "mgmt/assoc.c"
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "scope": "Source-built native SET20 strict592/open-only admission, GET21 result, GET103 actual current network. Separate open SET22 teardown subset documented in NativeTeardownSources.json.",
+  "artifact": {
+    "original_io80211_sha256": "d7620894ad830fffd8f4a5489cc5a89564ce2b30b62ee90ca3e5bbe062eeb851",
+    "focused_elf_sha256": "5ad1a0f267e55da17d4af357d19c10c23ac3893f03e2c1c7633d1e8c93062093",
+    "wrapper": "Preserves original code/data addresses; no Apple binary modification."
+  },
+  "native_evidence": [
+    {
+      "procedure": "__waitForJoinResult",
+      "address": "0x1d3ed66a0",
+      "evidence_id": "ev_03c4f1d06025f98f092200688280c3fe567df3681d3ce6ead41a6babace2a8e0",
+      "contract": "Repeated RawGet with req.type21 at16, req.value32bit at20, length0 at24, null user pointer32. Value0 continues; nonzero passes to result mapper. Any ioctl error returns errno. Up to400polls; unresolved delay import not interpreted."
+    },
+    {
+      "procedure": "__errorForAssociateResult",
+      "address": "0x1d3ec1744",
+      "evidence_id": "ev_bec80ff41f168bf26c602e555319e47aad5f0d9812b13a1c1f5a727cd6a05d49",
+      "contract": "Inputs1..35 index table at0x1d3ef90d0; no guessed error-code mapping implemented."
+    },
+    {
+      "address": "0x1d3ef90d0",
+      "evidence_id": "ev_7a77ede896cfe6270764a90281bc5392ffc6980b14a357042f1c300846ab9511",
+      "contract": "Read140mappedbytes; first little-endian32bit entry is0, proving native result1 means successful return. Result0 pending is proven separately by poll body."
+    },
+    {
+      "procedure": "__performAssociation",
+      "address": "0x1d3ebf1ac",
+      "evidence_id": "ev_45252d12b57e35e7517b86d8fabd6e8c0c7937e59b9f25f8d0b8bb8c315bb2cd",
+      "contract": "Original raw592/version1; mode16bit at4 default2; lower-auth16bit at6 set1 for open; upper-auth16bit at8 left0 in open branch; SSIDlen32bit12/data16/32bytes. ForceBSSID writes6bytes at48 and ORs0x20 into flag byte463. Remaining fields are zeroed absent extensions. Only this strict open subset accepted; unsupported nonzero key/privateMAC/flags/IE/extensions rejected. Root pointer is sp+0x218; saved REA assembly at1d3ebf2c8..2dc proves SSID root+0x10."
+    },
+    {
+      "procedure": "_Apple80211GetWithIOCTL",
+      "address": "0x1d3ec3f64",
+      "evidence_id": "ev_6e87fc12e1077c6c752bbb4e58b30ddca8df7a79fcfa3605e9dceb69d251cefe",
+      "contract": "case103 bzeroes1164byte raw result, sets inlineIEcapacity1024 at0x8a, calls GetWrapper, passes result to __addScanResultToList. Current getter permits observed version0 and direct version1. Output uses existing proven result encoder with only actually associated peer metadata and its capturedIE/RSSI observation age."
+    }
+  ],
+  "backend_contract": "SET20 resolver reads completed generation-bound observations. ExactSSID plus optional forcedBSSID must identify one openAP, otherwise ENOENT/EEXIST/EOPNOTSUPP. New typed target API supplies generation/index/BSSID/SSID/channel/band and rechecks generation/identity/freshness/security/policy/state under SAME transportLock as actual station_select; no cached-index race. Success means admission only; GET21 remains pending until genuine activation. Current103 requires real selected/open associated station and matching captured-peer metadata, completeIEs<=1024, actual RCPI; no scanned AP becomes current solely by query, no zero RSSI/truncation/updatedtimestamp. No IP/secure authorization success implied.",
+  "implementation_credit": "Original board adapter implementation; no third-party association implementation copied. Existing MT6630 station parser/event source is reused without firmware ABI changes; Apple original code is inspected only as retained evidence.",
+  "limitations": [
+    "Native secure/WEP/WPA/private-MAC/unknown-extension requests deliberately unsupported; key3/EAPOL/native supplicant owned by separate integration phase.",
+    "Open SET22 is a separate bounded teardown/admission subset; see NativeTeardownSources.json. Secure/key/data-inflight cancellation remains unsupported; no firmware completion invented.",
+    "GET103 preserves timestamp/RCPI of actual selected-peer observation, not a claimed new measurement. Missing/oversize/invalid metadata causes explicit failure.",
+    "No actual hardware SET20/open association/GET103 verified. Full SDK compilation remains parent gate."
+  ],
+  "codec_dependency_boundary": "Pure SET20 decoder is isolated in A04BR3NativeAssociationCodec.h with explicit stdint/string/errno dependencies and own byte-only unicast validator. No SDIO/IOKit/test helper required. Actual standalone C11/C++14 -pedantic-errors -Werror ASan/UBSan compilation/execution, plus standalone production association/current headers, verified."
+}

@@ -1,0 +1,392 @@
+{
+  "donor_repository": "https://github.com/mouseos/xnu_kernel_benesse_a04br3",
+  "donor_commit": "f5d43bf1677955e7e367545b9bbbd6449776cdda",
+  "import_record": "IMPORT.sources.json",
+  "adapted_imports": [
+    {
+      "path": "sdio/A04BR3SDIO.cpp",
+      "source": "iokit/Kernel/arm/sdio/A04BR3SDIO.cpp",
+      "original_sha256": "baf7ed5d72055e3f6ec20034caf16314120aa223c8806075588a1d06d5d8074f",
+      "vendored_sha256": "c7fa60811d1b44e354d538be54e0e0e8399f51cd292e550b9f39dfeeb9949de3"
+    },
+    {
+      "path": "sdio/A04BR3WLANBootFirmware.h",
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANBootFirmware.h",
+      "original_sha256": "9ab3ffa107fa101970e7cb105ad624c4d3002b0ce18d0553837110e32e6a8918",
+      "vendored_sha256": "622c8ca4c9f2ef061faea4e416b3b81ac1950a9f39351d28dc85043be5393cd2"
+    },
+    {
+      "path": "sdio/A04BR3WMTBootFirmware.h",
+      "source": "iokit/Kernel/arm/sdio/A04BR3WMTBootFirmware.h",
+      "original_sha256": "08624531a90b4d77af1bedd150e24e57c47cc5ffbc675f4b2363d1ba973cf65f",
+      "vendored_sha256": "e5da3775e828834fa88393930c50a2b97adc3868a288b7e420c88c66d55de2d0"
+    },
+    {
+      "path": "sdio/A04BR3WLANPersonalCrypto.h",
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANPersonalCrypto.h",
+      "original_sha256": "522f14c9b83ad24c8b9664d468ff384a97d067a42cf14e1d1d518980eb2ea3bd",
+      "vendored_sha256": "59070816399a0d40bb0da884b33450b85d0770d5d3657e7ad4593a0383b02537"
+    },
+    {
+      "path": "sdio/A04BR3WLANPSKBinding.h",
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANPSKBinding.h",
+      "original_sha256": "cd9ba29b0199f15f330f40b66410186937053b6f19e0c131e2d1a73772263f3b",
+      "vendored_sha256": "d31986e5e8ffb98a34ddcc93a9fe8913bc88add3da8f19788217eba9eac1c97f"
+    }
+  ],
+  "bearssl_files": [
+    {
+      "path": "bearssl/LICENSE.txt",
+      "source": "libkern/crypto/a04br3_bearssl/LICENSE.txt",
+      "original_sha256": "771bf18c8633ea69ec9b07d2e604c4b99b7bef41b0f5ce6385d24df4448f61ca",
+      "vendored_sha256": "771bf18c8633ea69ec9b07d2e604c4b99b7bef41b0f5ce6385d24df4448f61ca",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/UPSTREAM.json",
+      "source": "libkern/crypto/a04br3_bearssl/UPSTREAM.json",
+      "original_sha256": "0611b0d09ef01ad7360e3970a540588be54bff14b708b516d70f23e82f3a21e0",
+      "vendored_sha256": "0611b0d09ef01ad7360e3970a540588be54bff14b708b516d70f23e82f3a21e0",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl.h",
+      "original_sha256": "8543ceb43850a5121782ebb0cff767a610ea7d215b1ad57ff9866deca214e92f",
+      "vendored_sha256": "8543ceb43850a5121782ebb0cff767a610ea7d215b1ad57ff9866deca214e92f",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_aead.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_aead.h",
+      "original_sha256": "9d90afbc65535335517c028817ac0704af6b58971f2c262a65eb26e0b4099201",
+      "vendored_sha256": "9d90afbc65535335517c028817ac0704af6b58971f2c262a65eb26e0b4099201",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_block.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_block.h",
+      "original_sha256": "a00b4a48c42c824f2ec4ee775672df9cec86ad455b08cb8ae7eb8c89e63d082a",
+      "vendored_sha256": "a00b4a48c42c824f2ec4ee775672df9cec86ad455b08cb8ae7eb8c89e63d082a",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_ec.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_ec.h",
+      "original_sha256": "6e9eb7490b5b256f9a98bea86906e008bd0d5f2bf1423c9c2eeb7af29ad1e9df",
+      "vendored_sha256": "6e9eb7490b5b256f9a98bea86906e008bd0d5f2bf1423c9c2eeb7af29ad1e9df",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_hash.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_hash.h",
+      "original_sha256": "d31186fcdfe224965d1028592d1df78e1a10cb61fb8830fdafac847921e26572",
+      "vendored_sha256": "d31186fcdfe224965d1028592d1df78e1a10cb61fb8830fdafac847921e26572",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_hmac.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_hmac.h",
+      "original_sha256": "a40c14a7a71d5b4fa21f8485d7ad3975d3a37b9cd8b9f72cd0fa032af8105614",
+      "vendored_sha256": "a40c14a7a71d5b4fa21f8485d7ad3975d3a37b9cd8b9f72cd0fa032af8105614",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_kdf.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_kdf.h",
+      "original_sha256": "e4cf36cab1c4692e4bba034c9e257c630e8e370c8e40d38b8fa106c7b4dbf8d5",
+      "vendored_sha256": "e4cf36cab1c4692e4bba034c9e257c630e8e370c8e40d38b8fa106c7b4dbf8d5",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_pem.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_pem.h",
+      "original_sha256": "ef36260e8568e5927178e92c2aab849be71bc07414c01baeb1d12a3a51a82c3e",
+      "vendored_sha256": "ef36260e8568e5927178e92c2aab849be71bc07414c01baeb1d12a3a51a82c3e",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_prf.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_prf.h",
+      "original_sha256": "0162e674d6c49425bfa0e8e9c79b3d850530e7928288930284fb7ac940a12b17",
+      "vendored_sha256": "0162e674d6c49425bfa0e8e9c79b3d850530e7928288930284fb7ac940a12b17",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_rand.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_rand.h",
+      "original_sha256": "968335e8a2957e5bf64cb0b6b1f916e53bc330e8c66d5f2d2f658f415a56dd44",
+      "vendored_sha256": "968335e8a2957e5bf64cb0b6b1f916e53bc330e8c66d5f2d2f658f415a56dd44",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_rsa.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_rsa.h",
+      "original_sha256": "2d4ee476ce67c6361c0e3792e192a12297dd29c039272c03dd0ab4225ed534c1",
+      "vendored_sha256": "2d4ee476ce67c6361c0e3792e192a12297dd29c039272c03dd0ab4225ed534c1",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_ssl.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_ssl.h",
+      "original_sha256": "1d11c6ca7563f974d6f6d847ed435900c66e4e9d7b8b88ce88be402db5727414",
+      "vendored_sha256": "1d11c6ca7563f974d6f6d847ed435900c66e4e9d7b8b88ce88be402db5727414",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/inc/bearssl_x509.h",
+      "source": "libkern/crypto/a04br3_bearssl/inc/bearssl_x509.h",
+      "original_sha256": "a0680ddf9d1ba6d3bbf3e9436ed295c208d022a1a2d73cd51c520a4f93c11699",
+      "vendored_sha256": "a0680ddf9d1ba6d3bbf3e9436ed295c208d022a1a2d73cd51c520a4f93c11699",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/codec/dec32be.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/codec/dec32be.c",
+      "original_sha256": "ebd7bf469655a9e4de4b3d1d01d4c54f19117def3e3b918242629c150979bd9c",
+      "vendored_sha256": "ebd7bf469655a9e4de4b3d1d01d4c54f19117def3e3b918242629c150979bd9c",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/codec/dec32le.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/codec/dec32le.c",
+      "original_sha256": "fb45ce9e370d72c495dfbb08267e2fd32dcf5215c28df5d2db24f842b2d2d43a",
+      "vendored_sha256": "fb45ce9e370d72c495dfbb08267e2fd32dcf5215c28df5d2db24f842b2d2d43a",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/codec/dec64be.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/codec/dec64be.c",
+      "original_sha256": "7197b141800ed2748550c274d2539147a1fd0ce50f25b848dd7bf41c5a9d826e",
+      "vendored_sha256": "7197b141800ed2748550c274d2539147a1fd0ce50f25b848dd7bf41c5a9d826e",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/codec/enc32be.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/codec/enc32be.c",
+      "original_sha256": "8090b5bd6959586e769814e9d3698ac1c454e31ee4dfd5a2b2eb95a805063ae4",
+      "vendored_sha256": "8090b5bd6959586e769814e9d3698ac1c454e31ee4dfd5a2b2eb95a805063ae4",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/codec/enc32le.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/codec/enc32le.c",
+      "original_sha256": "7faa71643fc74570fd4c550974a075ec05485a0b3805cbdc826d662cb347e79b",
+      "vendored_sha256": "7faa71643fc74570fd4c550974a075ec05485a0b3805cbdc826d662cb347e79b",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/codec/enc64be.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/codec/enc64be.c",
+      "original_sha256": "a80ad043abcdee0f156c04add94819a1b25a27d58d71d5bcc19ebb5cc24143a3",
+      "vendored_sha256": "a80ad043abcdee0f156c04add94819a1b25a27d58d71d5bcc19ebb5cc24143a3",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/config.h",
+      "source": "libkern/crypto/a04br3_bearssl/src/config.h",
+      "original_sha256": "7fcf78414405f4f747758dd9c4aaa2c4993dfd123bb2e5240e943b3b9e1eae56",
+      "vendored_sha256": "7fcf78414405f4f747758dd9c4aaa2c4993dfd123bb2e5240e943b3b9e1eae56",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/hash/md5.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/hash/md5.c",
+      "original_sha256": "f5000426ffef7d696027f7ddc558822fef2d280bedf8bce73b8295a1d0fdd39e",
+      "vendored_sha256": "f5000426ffef7d696027f7ddc558822fef2d280bedf8bce73b8295a1d0fdd39e",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/hash/sha1.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/hash/sha1.c",
+      "original_sha256": "42393b67d65319ba384120b49e1ad102aa5cc59cd9fdbaf2ed69b33d6f96826a",
+      "vendored_sha256": "42393b67d65319ba384120b49e1ad102aa5cc59cd9fdbaf2ed69b33d6f96826a",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/hash/sha2big.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/hash/sha2big.c",
+      "original_sha256": "96c2210689e0fa3725ceb6eb562feee81d5658d1371bf65d184d71b257c90329",
+      "vendored_sha256": "96c2210689e0fa3725ceb6eb562feee81d5658d1371bf65d184d71b257c90329",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/inner.h",
+      "source": "libkern/crypto/a04br3_bearssl/src/inner.h",
+      "original_sha256": "fa5732672f151970e69e9b451f2fa250b635b0ef2f97e4547847621171364230",
+      "vendored_sha256": "fa5732672f151970e69e9b451f2fa250b635b0ef2f97e4547847621171364230",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/symcipher/aes_ct.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/symcipher/aes_ct.c",
+      "original_sha256": "673c1c82e9a62ba349b806674249b62ed3116482f06f433f6ce71decd9413f0c",
+      "vendored_sha256": "673c1c82e9a62ba349b806674249b62ed3116482f06f433f6ce71decd9413f0c",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/symcipher/aes_ct_cbcdec.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/symcipher/aes_ct_cbcdec.c",
+      "original_sha256": "dd0d74cfc3db5adce1fec4e089816f0fdea7692ee87e07cb4c984614ea7d17cc",
+      "vendored_sha256": "dd0d74cfc3db5adce1fec4e089816f0fdea7692ee87e07cb4c984614ea7d17cc",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/symcipher/aes_ct_cbcenc.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/symcipher/aes_ct_cbcenc.c",
+      "original_sha256": "04dbba4141bbc380ff183e5d80192ef9a30987968434b620c1c7c5176581dcef",
+      "vendored_sha256": "04dbba4141bbc380ff183e5d80192ef9a30987968434b620c1c7c5176581dcef",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/symcipher/aes_ct_dec.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/symcipher/aes_ct_dec.c",
+      "original_sha256": "1b1f6c3aa363f119d88c7d5c2dab583a01d55dc3ee2226f08af9a0451cb7291b",
+      "vendored_sha256": "1b1f6c3aa363f119d88c7d5c2dab583a01d55dc3ee2226f08af9a0451cb7291b",
+      "byte_identical": true
+    },
+    {
+      "path": "bearssl/src/symcipher/aes_ct_enc.c",
+      "source": "libkern/crypto/a04br3_bearssl/src/symcipher/aes_ct_enc.c",
+      "original_sha256": "71c32d29383af46ef103359210773f4f76c3529f8abc38c0d35b074dc10130bd",
+      "vendored_sha256": "71c32d29383af46ef103359210773f4f76c3529f8abc38c0d35b074dc10130bd",
+      "byte_identical": true
+    }
+  ],
+  "network_host_tests": [
+    {
+      "path": "network/tests/test_bsd_network.py",
+      "source": "iokit/Kernel/arm/network/tests/test_bsd_network.py",
+      "original_sha256": "5cbbc6a02a8f81cc03117b230318c998b749f570f91ae99f951cb96d39062ffb",
+      "vendored_sha256": "618e8b9be965631cf1565ba4cd8f059540daa4c0ca1131d73706efa4e741bb38",
+      "byte_identical": false
+    },
+    {
+      "path": "network/tests/test_ethernet_binding.py",
+      "source": "iokit/Kernel/arm/network/tests/test_ethernet_binding.py",
+      "original_sha256": "6ad976e62b5d96da3276d7920b6ca19c3f8bc7ecc132f315dfbc347be4007264",
+      "vendored_sha256": "64c0f5b94e5232433dd897b3ffe979c5f1d7e56feb996243160ca03962f07f80",
+      "byte_identical": false
+    },
+    {
+      "path": "network/tests/test_link_publication.py",
+      "source": "iokit/Kernel/arm/network/tests/test_link_publication.py",
+      "original_sha256": "3d1924cd6b6e9009548d2599e2e066424f2ca67fcb2a82c7ee5f88ce9d894e0a",
+      "vendored_sha256": "3d1924cd6b6e9009548d2599e2e066424f2ca67fcb2a82c7ee5f88ce9d894e0a",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_association_result.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_association_result.py",
+      "original_sha256": "c58e8e1ed7cd7426ec6d9f1abd15ab7a00614a75ffecb912428a32a7bfc2b787",
+      "vendored_sha256": "c2f337fc9309ff522720a35a4028cd76977d0152303fff9485c23a7c7b545a8a",
+      "byte_identical": false
+    },
+    {
+      "path": "network/tests/test_native_association_set.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_association_set.py",
+      "original_sha256": "76d36cb185b10e7c20d1f42fa7c3fe4927e687a12007358b9bef3454b17cba0d",
+      "vendored_sha256": "0d9d9fd02c63fa2ac4387a6feff0e123e1939710f77832ee26945e2d079b2b97",
+      "byte_identical": false
+    },
+    {
+      "path": "network/tests/test_native_auth_link_lifetime.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_auth_link_lifetime.py",
+      "original_sha256": "5dd092087cd7903ff50bfe29c979e1a5f123b78a83684ad53a31221fb66f3836",
+      "vendored_sha256": "5dd092087cd7903ff50bfe29c979e1a5f123b78a83684ad53a31221fb66f3836",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_cipher_carrier.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_cipher_carrier.py",
+      "original_sha256": "7b6f8deb724bdf70a39de86690cec543b1f488d7c85f5e5ab42996cbd560930e",
+      "vendored_sha256": "7b6f8deb724bdf70a39de86690cec543b1f488d7c85f5e5ab42996cbd560930e",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_eapol_protocol.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_eapol_protocol.py",
+      "original_sha256": "d63aa2b6238bd15b8ade94426eaba583a8d1605fd8d497f71e56e61d975429e9",
+      "vendored_sha256": "d63aa2b6238bd15b8ade94426eaba583a8d1605fd8d497f71e56e61d975429e9",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_get.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_get.py",
+      "original_sha256": "702e1b02b2692d8a4fb4bb35f2f3f449df0aa31a3d72b0a8ed1a535dd42cb0a6",
+      "vendored_sha256": "702e1b02b2692d8a4fb4bb35f2f3f449df0aa31a3d72b0a8ed1a535dd42cb0a6",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_peer_identity.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_peer_identity.py",
+      "original_sha256": "ba32966152d9794c1bf8ae4170444bb893a806635af3158d9a211740cc314513",
+      "vendored_sha256": "ba32966152d9794c1bf8ae4170444bb893a806635af3158d9a211740cc314513",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_personal_association.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_personal_association.py",
+      "original_sha256": "a4321723b1d8a239a6cca61eab0407518a929857ffa605052bf791bec319222f",
+      "vendored_sha256": "a4321723b1d8a239a6cca61eab0407518a929857ffa605052bf791bec319222f",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_personal_auth.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_personal_auth.py",
+      "original_sha256": "0076a3e26ed01b42204aaa5e2e49b1c7b6d1ef985fc835be8caa46ea0d6c95ad",
+      "vendored_sha256": "0076a3e26ed01b42204aaa5e2e49b1c7b6d1ef985fc835be8caa46ea0d6c95ad",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_power.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_power.py",
+      "original_sha256": "75cbdde2b824780959e92c724b6e607ca83950bf02a3440b8c56d35cdfdc61a5",
+      "vendored_sha256": "75cbdde2b824780959e92c724b6e607ca83950bf02a3440b8c56d35cdfdc61a5",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_scan.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_scan.py",
+      "original_sha256": "100c6a5cbd178240f993ac7caa0854293035b64fc31d71ea0cc7c4ea12a09f5d",
+      "vendored_sha256": "100c6a5cbd178240f993ac7caa0854293035b64fc31d71ea0cc7c4ea12a09f5d",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_scan_results.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_scan_results.py",
+      "original_sha256": "9020594855dc47da80ffae8a27123c609301a057f0da1118eea5ef1ddc90018e",
+      "vendored_sha256": "9020594855dc47da80ffae8a27123c609301a057f0da1118eea5ef1ddc90018e",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_native_teardown.py",
+      "source": "iokit/Kernel/arm/network/tests/test_native_teardown.py",
+      "original_sha256": "5557a9e228c438d35d594d7949e379fcac1a9ba5375527117adb8e57ef60acbb",
+      "vendored_sha256": "22fe9d197560c3ada1c47c1d24b7a7905004c734f8e26eea19d97bcaf9bb6dbc",
+      "byte_identical": false
+    },
+    {
+      "path": "network/tests/test_network_control_frame.py",
+      "source": "iokit/Kernel/arm/network/tests/test_network_control_frame.py",
+      "original_sha256": "c084cc43514f62eb32feb2577e053fd7c1723f98ad833040b5f8b0a59afc0977",
+      "vendored_sha256": "ced9722c0dadc8eb88753433cf69df84990fb7876460300cda14f1e33ccf348d",
+      "byte_identical": false
+    },
+    {
+      "path": "network/tests/test_stack_authorization.py",
+      "source": "iokit/Kernel/arm/network/tests/test_stack_authorization.py",
+      "original_sha256": "9ed195cf3a95d94af5032e1cf37709be976fb8ac764b235f0de77861cfcda5f0",
+      "vendored_sha256": "9ed195cf3a95d94af5032e1cf37709be976fb8ac764b235f0de77861cfcda5f0",
+      "byte_identical": true
+    },
+    {
+      "path": "network/tests/test_station_phase.py",
+      "source": "iokit/Kernel/arm/network/tests/test_station_phase.py",
+      "original_sha256": "84a59781ce632f8b073a72c3c0257248c25a65d0784fcd7b1bf8a29266f9e8b9",
+      "vendored_sha256": "84a59781ce632f8b073a72c3c0257248c25a65d0784fcd7b1bf8a29266f9e8b9",
+      "byte_identical": true
+    }
+  ],
+  "scope": "All original blob hashes in IMPORT.sources.json were compared with this pinned local donor. BearSSL upstream identity remains in bearssl/UPSTREAM.json; donor identity verified here is not an independent claim of upstream byte identity. Test adapters retain source SPDX headers."
+}

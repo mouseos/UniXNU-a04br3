@@ -1,0 +1,434 @@
+{
+  "source_repository": "https://github.com/mouseos/xnu_kernel_benesse_a04br3",
+  "source_commit": "f5d43bf1677955e7e367545b9bbbd6449776cdda",
+  "files": {
+    "sdio/A04BR3WMTFirmware.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WMTFirmware.h",
+      "sha256": "0e6b0f8beefc9bf587e4db7222c8618e754a3af7a2068e6458b8d6d152ccc2ed"
+    },
+    "sdio/A04BR3WLANEAPOLCarrier.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANEAPOLCarrier.h",
+      "sha256": "ff7fa3983174ab964bff3a03c0a2c27e7e4bcc5baddb010118201e4a33efaf39"
+    },
+    "sdio/A04BR3SDIO.cpp": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3SDIO.cpp",
+      "sha256": "baf7ed5d72055e3f6ec20034caf16314120aa223c8806075588a1d06d5d8074f"
+    },
+    "sdio/A04BR3WLANBootFirmware.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANBootFirmware.h",
+      "sha256": "9ab3ffa107fa101970e7cb105ad624c4d3002b0ce18d0553837110e32e6a8918"
+    },
+    "sdio/A04BR3WLANData.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANData.h",
+      "sha256": "867de20edcbd25d6240110cf1e0e890b5257e3424260c44fffb2c6094179b17c"
+    },
+    "sdio/A04BR3WLANPersonalCrypto.sources.json": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANPersonalCrypto.sources.json",
+      "sha256": "33cbd42239ca156bd03f0f913ed14b9c120a47b9540af26b6c1352c2f6f33e62"
+    },
+    "sdio/A04BR3SDIOProtocol.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3SDIOProtocol.h",
+      "sha256": "52d2644220ce73d626f6d84557bf589b436d85b872b664e32206a953cafbd9b9"
+    },
+    "sdio/A04BR3SDIOPIO.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3SDIOPIO.h",
+      "sha256": "c0b519f9a7595621eb95aa02f2c16d65c9893d144127dbdde449e2d8d39b50d7"
+    },
+    "sdio/A04BR3WLANRuntime.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANRuntime.h",
+      "sha256": "7ab8c34ef58b5020f142cdc8ae6fe77c4c9d475d45d26ff67c2a655abfbc53e3"
+    },
+    "sdio/A04BR3WLANProtocol.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANProtocol.h",
+      "sha256": "68cf12452d664a39d6c3786ca8b9284eb4bc8df68c6abbe257dc9c5ac9349062"
+    },
+    "sdio/A04BR3WLANBackendAPI.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANBackendAPI.h",
+      "sha256": "4e059bbc9a7140c6a86ad5e2b96fedbeab185eecb30d982bfe6905ca9f537905"
+    },
+    "sdio/A04BR3WLANHost.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANHost.h",
+      "sha256": "1b04ad9b5a19b985a459027419315ab678821b317cad88706f9738a9a0b90e5b"
+    },
+    "sdio/A04BR3WLANFirmware.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANFirmware.h",
+      "sha256": "a584a97f244eaa99eba23baa9869c22338a00279ce9f764ef890bfc27b64471b"
+    },
+    "sdio/A04BR3WMTProtocol.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WMTProtocol.h",
+      "sha256": "d448a4a0866e88ae6567fc97e1b3aadf12fc8e7d9b48ce578fb1380c165d2b11"
+    },
+    "sdio/A04BR3WLANJoinTarget.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANJoinTarget.h",
+      "sha256": "5aa77dcfdcd4e49b12106a57b19784be1cd989c45ed6b19a6a5a1b42932c1d8c"
+    },
+    "sdio/A04BR3WLANPSK4Way.sources.json": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANPSK4Way.sources.json",
+      "sha256": "604e0fbad5bed18833007a556dd787c026f861dc25ddbdc5e45ff10a36caa1b4"
+    },
+    "sdio/A04BR3WLANJoinAdmission.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANJoinAdmission.h",
+      "sha256": "43bb0834a88806bc1e9b1384316edfe80da3649c868f1b9fb25b4cd25f46445b"
+    },
+    "sdio/A04BR3WMTBootFirmware.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WMTBootFirmware.h",
+      "sha256": "08624531a90b4d77af1bedd150e24e57c47cc5ffbc675f4b2363d1ba973cf65f"
+    },
+    "sdio/A04BR3SDIOPads.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3SDIOPads.h",
+      "sha256": "884aeb21190d9689b1e8cdb6f990d378be5665939b22e780709c48eb4c131bdd"
+    },
+    "sdio/A04BR3WLANSecurity.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANSecurity.h",
+      "sha256": "d321dc8b83308185cbd0f4adcc74996f3c2c05eebc4551a23791530d337853b0"
+    },
+    "sdio/UPSTREAM.json": {
+      "source": "iokit/Kernel/arm/sdio/UPSTREAM.json",
+      "sha256": "c05ea6e46344a6de649c47ceaa3f97ad193a653186dd3cfe6c6c4268b5098ff1"
+    },
+    "sdio/A04BR3WLANTeardown.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANTeardown.h",
+      "sha256": "31581df9b9278da6560e06805a46fe8c1a39f6bd6feeba18ffb2b017b4757ae1"
+    },
+    "sdio/A04BR3WLANPersonalRuntime.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANPersonalRuntime.h",
+      "sha256": "cb48e2395c1e039d490d91014e77ff98d1560bd3392cffa8ca5fb78173a40706"
+    },
+    "sdio/A04BR3WLANPersonalCrypto.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANPersonalCrypto.h",
+      "sha256": "522f14c9b83ad24c8b9664d468ff384a97d067a42cf14e1d1d518980eb2ea3bd"
+    },
+    "sdio/A04BR3WLANCurrentNetwork.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANCurrentNetwork.h",
+      "sha256": "a2566352f700db062492a3cee9fc1656fbc80cd44003888981c5433685d3b35b"
+    },
+    "sdio/A04BR3WMTRoundtrip.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WMTRoundtrip.h",
+      "sha256": "b0a2dfab1147e9e37a4a7d942bd92ccd1a25bcf6e0fb9c4b70a006bd29a56a35"
+    },
+    "sdio/A04BR3SDIOTransport.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3SDIOTransport.h",
+      "sha256": "2389ab0f4520de4e97687125d484fc9c840f9ffa523ac5b6aa392a270781269f"
+    },
+    "sdio/A04BR3WLANPSKBinding.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANPSKBinding.h",
+      "sha256": "cd9ba29b0199f15f330f40b66410186937053b6f19e0c131e2d1a73772263f3b"
+    },
+    "sdio/A04BR3WLANNetworkProfile.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANNetworkProfile.h",
+      "sha256": "9b96fc207daad1759e01f771d289b1a6cce4bfeb9340705eaf6ad49ad6376c58"
+    },
+    "sdio/A04BR3WLANScanSnapshot.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANScanSnapshot.h",
+      "sha256": "1cc1a0b232421e00b5102b74161dd000cc93162cc791296aa5c2d3a9a583a1ec"
+    },
+    "sdio/A04BR3WLANPSK4Way.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANPSK4Way.h",
+      "sha256": "0d2aa2404059e400447beab28edcafca2029d44f068469238ca21b9b149a6b1c"
+    },
+    "sdio/A04BR3WLANStation.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WLANStation.h",
+      "sha256": "2ed29ef61ecd543d4be3b71384ff60fef5c045215610610125153dc34fc95eab"
+    },
+    "sdio/A04BR3WMTDownload.h": {
+      "source": "iokit/Kernel/arm/sdio/A04BR3WMTDownload.h",
+      "sha256": "f3a2e0a045664cb984a5f1be32289030f5ae9777fbeab77002cd1a2f96b21762"
+    },
+    "network/A04BR3NativeScan.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeScan.h",
+      "sha256": "3e02528451767faf4f7e98fbcdd05805b1dbe4010a14aa61ac963816e0ad8449"
+    },
+    "network/A04BR3NativeRendezvous.cpp": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeRendezvous.cpp",
+      "sha256": "d743f255551812d3d31f0bd8c361ca7b4ed65035b8cd4bc2d666c59d9ed03ac3"
+    },
+    "network/A04BR3NativeCipherCarrier.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeCipherCarrier.h",
+      "sha256": "741fbd33d3fefc9716931b0812ba4ae672e252d1ba32100b1e9eb73338d7a616"
+    },
+    "network/A04BR3NativeAssociation.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeAssociation.h",
+      "sha256": "14b683ce50727daf9cdd84ddd35d02c9d00c25cb483f4bd0f0a7a08501a44827"
+    },
+    "network/A04BR3NativeAssociationAdapter.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeAssociationAdapter.h",
+      "sha256": "aff566696d4dd3a4000672e68d25c42448578502a1aac77e2499454c6b3b4a85"
+    },
+    "network/A04BR3NativeEAPOLProtocol.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeEAPOLProtocol.h",
+      "sha256": "51e8fe28a2e9dd59127f92968130786917e4203cf03ca684034e88bdca367fb6"
+    },
+    "network/A04BR3NetworkControlFrame.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NetworkControlFrame.h",
+      "sha256": "8324f874b8a8df78f6de60571fb1663ad2ae8a3c61e22103a6a47502210297d9"
+    },
+    "network/NativeTeardownSources.json": {
+      "source": "iokit/Kernel/arm/network/NativeTeardownSources.json",
+      "sha256": "5646957d2a309c5a3421dc9a0b3e9591fffccdefd2301034001a140e9b073eb5"
+    },
+    "network/A04BR3BSDNetwork.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3BSDNetwork.h",
+      "sha256": "9ac06895f6eea5dd396946a2fc21e40420163647339b01a0fec45cebf3fd871b"
+    },
+    "network/A04BR3NetworkRuntime.cpp": {
+      "source": "iokit/Kernel/arm/network/A04BR3NetworkRuntime.cpp",
+      "sha256": "299ee20449847856764ca9ffbecdc9536094697127dfcf0331e2685ea12f90b8"
+    },
+    "network/A04BR3NetworkRuntime.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NetworkRuntime.h",
+      "sha256": "64baf37ff5d82fc7c4a93de61eda408786bf0b4255688e7252956e465cdb432e"
+    },
+    "network/A04BR3NativePersonalAuth.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativePersonalAuth.h",
+      "sha256": "d9bf672c50ea9ed014f38e00ce389f4f514c2c54ca4beed28a14a21e48f3e2da"
+    },
+    "network/A04BR3WiFiMedia.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3WiFiMedia.h",
+      "sha256": "f2f1117aab62856ed0a057f41c64c9b7436dfed2473149351dd22710162f5965"
+    },
+    "network/NativeAssociationSources.json": {
+      "source": "iokit/Kernel/arm/network/NativeAssociationSources.json",
+      "sha256": "ffcca31a6eb9cdae956cdca414e423e8af442c54ab15cc49eb7d2bb00830b996"
+    },
+    "network/A04BR3NativeScanDispatch.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeScanDispatch.h",
+      "sha256": "b4a883d1baab9130c36bcf80c33f90c6c2a770bbc7dac18ce80793c23e3398b5"
+    },
+    "network/A04BR3StationPhase.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3StationPhase.h",
+      "sha256": "c4c50f1666d69bffb4d0403a738064326ac66eba30a72381d8fd63b3ef954675"
+    },
+    "network/A04BR3ScanObservation.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3ScanObservation.h",
+      "sha256": "a162f7bf54db54f461e39d312dea2d2d043baad7d3d3a5bd7dc06fbb695ba167"
+    },
+    "network/A04BR3NativePower.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativePower.h",
+      "sha256": "5ecf8ca31f30654d5ff4bc47b4772dc3f3b61de605482e161a27c935b422890e"
+    },
+    "network/A04BR3NativeCurrentNetwork.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeCurrentNetwork.h",
+      "sha256": "6b0c0fdf9cd4998eadeb284a80bfd0e2cb28a528cf329edd308f9950747ff0ab"
+    },
+    "network/A04BR3NativeRendezvous.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeRendezvous.h",
+      "sha256": "dfd00fa5ff8e9c16c8568da4e64498a28351c468e682dd437f70fbf80c9647c7"
+    },
+    "network/NativeSecuritySources.json": {
+      "source": "iokit/Kernel/arm/network/NativeSecuritySources.json",
+      "sha256": "d4154115aa006cb73255313b25345479ca710f92db53df590167ec51f672f39d"
+    },
+    "network/NativePeerIdentitySources.json": {
+      "source": "iokit/Kernel/arm/network/NativePeerIdentitySources.json",
+      "sha256": "608d3f79cae57213d6bf2ab75de65f4e3b3e2bbae9b679c53f742b20b7d16fee"
+    },
+    "network/A04BR3Apple80211SET.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3Apple80211SET.h",
+      "sha256": "1b6892b8a5427db2789bfff2ac188fb5b270b7b83b4a0dc47606a8601b93d231"
+    },
+    "network/A04BR3NativeGET.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeGET.h",
+      "sha256": "4f56885917618799e759c193d623c279712cec538a876487c9d7e29462e674ea"
+    },
+    "network/A04BR3NetworkBackend.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NetworkBackend.h",
+      "sha256": "b28a59293cecfa21075311be78bb0286a40ffb57408d068d299cae852af50ffa"
+    },
+    "network/A04BR3BSDNetwork.cpp": {
+      "source": "iokit/Kernel/arm/network/A04BR3BSDNetwork.cpp",
+      "sha256": "5a42bc8c629ae324e0899eec074d423732e19bf02218f090acd666b8c77c06cf"
+    },
+    "network/A04BR3NativePersonalAssociation.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativePersonalAssociation.h",
+      "sha256": "f9e04cac406d5bd06686f67a555a9f3742f3c65dbda911c221e169e907172844"
+    },
+    "network/A04BR3Apple80211IOCTL.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3Apple80211IOCTL.h",
+      "sha256": "5f71582442a5c306fc553625358be11e31ba552746886d0a30c2368924550ce0"
+    },
+    "network/SOURCES.json": {
+      "source": "iokit/Kernel/arm/network/SOURCES.json",
+      "sha256": "7b1bd4a50a3a439f430abe903526d6c4d7a8895377cd92793f6853ab80675c48"
+    },
+    "network/A04BR3NativeScanResults.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeScanResults.h",
+      "sha256": "126ac43deba400a9ef068ab45fea01776f34eac16d391b1c0f47aed8b53a2814"
+    },
+    "network/A04BR3NativePeerIdentity.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativePeerIdentity.h",
+      "sha256": "53c6732357de516c904015a22f525df8be63e9d14801a1e92c943763a3d29a55"
+    },
+    "network/A04BR3NativeAssociationCodec.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeAssociationCodec.h",
+      "sha256": "6e78b0aa520c050bc94711acb1cd8c75c3d2827eeed5728b2949565af43ee8bc"
+    },
+    "network/A04BR3NativeScanAdapter.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeScanAdapter.h",
+      "sha256": "e643d8bdf3c29f2f8b1ae90d25b14e3f55a549daf2561b00646fefbc1f48cbdf"
+    },
+    "network/README.md": {
+      "source": "iokit/Kernel/arm/network/README.md",
+      "sha256": "82865121241590302b8552030ff353683686f4ee4dcc989a05504ebb43e6d014"
+    },
+    "network/A04BR3NativeScanSources.json": {
+      "source": "iokit/Kernel/arm/network/A04BR3NativeScanSources.json",
+      "sha256": "2f4db360e090e9d740de9fd34b016da135b74bf6b7752b81cea63d840c1b9f1a"
+    },
+    "network/A04BR3Ethernet.cpp": {
+      "source": "iokit/Kernel/arm/network/A04BR3Ethernet.cpp",
+      "sha256": "08f7057eaaa7524e5c30d8818d7507de157e8904e0ce3213b15d0cde2766c8a0"
+    },
+    "network/A04BR3Ethernet.h": {
+      "source": "iokit/Kernel/arm/network/A04BR3Ethernet.h",
+      "sha256": "85f3117c770b1a517e1201c88d7c9591a71445b6574d6b943fe2563d779721f2"
+    },
+    "network/apple/IOEthernetStats.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOEthernetStats.h",
+      "sha256": "adea42c158a03f9106209d72150a64b11b7a19a2ea92deacb164e415ce18a955"
+    },
+    "network/apple/IOPacketQueue.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IOPacketQueue.cpp",
+      "sha256": "6bc0ea6547db4d907fc9fc577069c087652e24d76ccd3d25eedb01b8078a3316"
+    },
+    "network/apple/IONetworkInterface.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkInterface.cpp",
+      "sha256": "244de72d8bdaae1169f6f5390ab61f4f718d3be5bd1987f919828f5268cab1b3"
+    },
+    "network/apple/IONetworkControllerPrivate.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkControllerPrivate.h",
+      "sha256": "f8cc9ab3ea6b3620f1f1a7ff7ee8313023bac1e12c04d6cd4594347350f13c9e"
+    },
+    "network/apple/IONetworkTypesPrivate.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkTypesPrivate.h",
+      "sha256": "9447ec20b5c57bc007e79ff793a898fbf6d46e2e99bd025d5f1c6fd7f45d43b2"
+    },
+    "network/apple/IOEthernetInterface.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IOEthernetInterface.cpp",
+      "sha256": "b84420c5346be67a439eda56ba5d0a6a7ac144e29915b5dbe201249be818e826"
+    },
+    "network/apple/IONetworkInterface.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkInterface.h",
+      "sha256": "3e0c3a713df49281fb7bdd1bbbca334c2e0327f48e644f3f567ee6f67479d76a"
+    },
+    "network/apple/SOURCE.json": {
+      "source": "iokit/Kernel/arm/network/apple/SOURCE.json",
+      "sha256": "269134cbbf6548ba7ad84faa721f01a4805dec07fd6b67ba4f346d9ce93b590c"
+    },
+    "network/apple/IONetworkController.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkController.h",
+      "sha256": "0d5b2b9f5536146518ff5245bf0e481120e8047120075356cf07b86908ffced4"
+    },
+    "network/apple/IONetworkStats.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkStats.h",
+      "sha256": "a30f1267624dc4a76a7514541874481c9a48be7c00f34d7d440abb79b34a24e7"
+    },
+    "network/apple/A04BR3IONetworkBacking.inc": {
+      "source": "iokit/Kernel/arm/network/apple/A04BR3IONetworkBacking.inc",
+      "sha256": "90c66a211550ce8b3a846c6f245530d81e463682f32e4e020c2eedc53ea9ada8"
+    },
+    "network/apple/IOEthernetInterface.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOEthernetInterface.h",
+      "sha256": "76ac57f81a26a38d80d160c934fb8b89ef5edc71b18a4125eb95590e57dd5380"
+    },
+    "network/apple/IOEthernetController.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOEthernetController.h",
+      "sha256": "54553294d44f3fdd15f4474cd372c285f960d6e4c7067b6e070485754ba9b3f3"
+    },
+    "network/apple/IOMbufMemoryCursor.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOMbufMemoryCursor.h",
+      "sha256": "e6dee9cb9b46cd7ab821d220893208ac3796384cbdacd5b53253f7064bb33615"
+    },
+    "network/apple/IOKernelDebugger.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IOKernelDebugger.cpp",
+      "sha256": "8cd2c26efc1df550c8ddfd0874d3fbed21a7c572c8892a9d90c5aa5302a3ff5a"
+    },
+    "network/apple/IONetworkData.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkData.h",
+      "sha256": "1656097ef0c706d135b7e781a9aa516d29fca1064bf76f9bfe2de32c0ce67a33"
+    },
+    "network/apple/A04BR3StackAuthorization.h": {
+      "source": "iokit/Kernel/arm/network/apple/A04BR3StackAuthorization.h",
+      "sha256": "8ddeff49a15521b665914b79314eefd7891f7ceaaff2857105189b2f7c903481"
+    },
+    "network/apple/IOPacketQueue.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOPacketQueue.h",
+      "sha256": "da5de06d4e0a73f6161451650e89e4ad6428414387c367cf2f4ca692353c40c2"
+    },
+    "network/apple/IOOutputQueue.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IOOutputQueue.cpp",
+      "sha256": "1f3c4b693c8af16300c8c57fe2a695e46982cb63abda369ad71a35727d469fe9"
+    },
+    "network/apple/IONetworkData.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkData.cpp",
+      "sha256": "5895cf48e21f37dd16f0fb6055885775e7f680e47d560a64fecfe6568fca1000"
+    },
+    "network/apple/A04BR3FamilyTarget.h": {
+      "source": "iokit/Kernel/arm/network/apple/A04BR3FamilyTarget.h",
+      "sha256": "0c91ecd7c10a0d965ec826c0ae6ed02ca0a25c4801cfdd9c1474e655789757f4"
+    },
+    "network/apple/IOMbufQueue.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOMbufQueue.h",
+      "sha256": "b8a1e2ea4f958461cf9c95984a7093cabcfcc4beac308cb9620805ccc2f371e5"
+    },
+    "network/apple/IOMbufMemoryCursor.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IOMbufMemoryCursor.cpp",
+      "sha256": "0cccf37e60e844047f744eb0d86e3ba30fc14355c9c36738224c577438e86974"
+    },
+    "network/apple/APPLE_LICENSE": {
+      "source": "iokit/Kernel/arm/network/apple/APPLE_LICENSE",
+      "sha256": "212846e0145aa50fb3a5aef254a370311a93acf6c1e792e47e0068d64c8c3885"
+    },
+    "network/apple/IONetworkMedium.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkMedium.cpp",
+      "sha256": "fe89089d8a09ac18ee98e9ab0f7b1decec12aa82ddaeb73055bf6d7c15be5d0d"
+    },
+    "network/apple/IONetworkMedium.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkMedium.h",
+      "sha256": "49913cb89413562fc27243b18815ec31d9b55146c4139f214ba2cd44f833f0bd"
+    },
+    "network/apple/IONetworkStack.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkStack.h",
+      "sha256": "dc2c97c0d0c6ee3e71c4d3569f86cf7cd34fa12085fc6107f76824528e31e12c"
+    },
+    "network/apple/IOKernelDebugger.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOKernelDebugger.h",
+      "sha256": "898cf22dcb9a17225dc682c22f2102152e63992b009006191a05f8c201ba8929"
+    },
+    "network/apple/IOOutputQueue.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOOutputQueue.h",
+      "sha256": "8678c16e1f3e6d8dd159ad261ffd6230a6ef3473045ba5245a96758292afb4d7"
+    },
+    "network/apple/IONetworkController.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkController.cpp",
+      "sha256": "57c67074f479258147b09d1b1674f0eeb884a76406ff8a049d22e5cace4dad68"
+    },
+    "network/apple/IONetworkStack.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkStack.cpp",
+      "sha256": "006de2e5a6b1fb286ad60f758527a47143916185337db47c89bbb1d796256d8b"
+    },
+    "network/apple/IONetworkUserClient.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkUserClient.h",
+      "sha256": "04a10f473320d5b59c789dfca85c98b3d96ec0ef5a8afd0b832d7ae5c8e38a13"
+    },
+    "network/apple/IOBasicOutputQueue.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOBasicOutputQueue.h",
+      "sha256": "d8e2d2d977dcfea52aebe498774b80c16047f92f2dd9ed1ff18ccc8d2f884bd7"
+    },
+    "network/apple/IONetworkDebug.h": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkDebug.h",
+      "sha256": "23019a5f1e1092221ce9b372b9bd5c28fcee6ae00149ddd882e8c7ebeb92f045"
+    },
+    "network/apple/IONetworkUserClient.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IONetworkUserClient.cpp",
+      "sha256": "55d43df62e77d221cdeba6ff07ab731073564d1b2af1fae5beff28d8dd3ce283"
+    },
+    "network/apple/IOEthernetController.cpp": {
+      "source": "iokit/Kernel/arm/network/apple/IOEthernetController.cpp",
+      "sha256": "a45281eee4ce901d3737b29b82ec5518557e1d18b44cf5b1163e1a2d055a0b54"
+    },
+    "network/apple/IOGatedOutputQueue.h": {
+      "source": "iokit/Kernel/arm/network/apple/IOGatedOutputQueue.h",
+      "sha256": "d3af62a13b4dcc4d6e82fda351d35b125f671888d0bcdfdc66637ceb78c93944"
+    }
+  }
+}

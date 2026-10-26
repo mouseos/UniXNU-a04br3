@@ -1,0 +1,65 @@
+{
+  "scope": "Native SET22 observed empty carrier, real open deauth/TX_DONE, firmware channel/PM/BSS/STA teardown, host queue disposal, fresh context for next explicit scan/join. Source-built subset only.",
+  "native_evidence": {
+    "path": "ipad-worker/network-bridge/rea-native-setwithioctl.json",
+    "evidence_id": "ev_5e881c73cf48dcae4c9998d6b0cb1141d250ce703276ccea80c54972577503c5",
+    "original_sha256": "d7620894ad830fffd8f4a5489cc5a89564ce2b30b62ee90ca3e5bbe062eeb851",
+    "focused_sha256": "5ad1a0f267e55da17d4af357d19c10c23ac3893f03e2c1c7633d1e8c93062093",
+    "contract": "_Apple80211SetWithIOCTL empty request initializes raw req40 to zero, sets type22, case22 WAPIStop then NULL params jumps directly to original SET wrapper. Proven value0/length0/null pointer. Reason-dictionary8-byte variant unsupported; no macOS struct ABI substituted."
+  },
+  "primary_source": {
+    "repository": "local existing MediaTek Linux/DDK source port/gsi/kernel-4.14",
+    "revision": "eb47f42e1f84fe5716ef239620725f82718a620a",
+    "files": [
+      {
+        "path": "modules/connectivity/wlan/core/gen3/mgmt/ais_fsm.c",
+        "sha256": "6a4e7ba14cfa7e66c34d5ae65092458df299606d793111970410300ce05cb518"
+      },
+      {
+        "path": "modules/connectivity/wlan/core/gen3/mgmt/auth.c",
+        "sha256": "0543a98938dc4ea1656e5811c20cbdb9401f7a2edfc4d0d3bbb9cd21fd01ab57"
+      },
+      {
+        "path": "modules/connectivity/wlan/core/gen3/mgmt/cnm.c",
+        "sha256": "af2cb54f0ccdc926ff443eed42a9d86cbad7fd76709ea8680d423cad85e3f604"
+      },
+      {
+        "path": "modules/connectivity/wlan/core/gen3/mgmt/cnm_mem.c",
+        "sha256": "ff43b319a0f367bc7ef1cd67ab6d8e383ff20b7ffa0a8a74d0910a194aac6ed5"
+      },
+      {
+        "path": "modules/connectivity/wlan/core/gen3/nic/nic.c",
+        "sha256": "77eac7290c8b97889f5cc47c2900b90cf6b84ffbfc54a7a3335019467d53886d"
+      },
+      {
+        "path": "modules/connectivity/wlan/core/gen3/include/nic_cmd_event.h",
+        "sha256": "1df8708ffe64ad5a71b773551c8e646c9e1853e49573affabf340c90a361e4ff"
+      },
+      {
+        "path": "modules/connectivity/wlan/core/gen3/include/mgmt/cnm_mem.h",
+        "sha256": "421a0f3123ea22d34e7cea3078e918f6ba0bdd0cfe5e46621066360b4d7004e8"
+      },
+      {
+        "path": "modules/connectivity/wlan/core/gen3/include/nic/mac.h",
+        "sha256": "a2eaf8a182a50dbe87bb5cccc121a4953c84ff73c9c747b7aeafe6652ca8d02c"
+      }
+    ]
+  },
+  "source_contracts": [
+    "ais_fsm.c aisFsmStateAbort_JOIN: cancel SAA host state, release granted/requested channel, stop join timer. aisFsmReleaseCh identifies BSS/token; cnm.c cnmChMngrAbortPrivilege: CMD1c action1, no response; only BSS/token/action meaningful.",
+    "ais_fsm.c DISCONNECTING: actual authSendDeauthFrame(reason DEAUTH_LEAVING_BSS3) + TX callback, timer100ms when neither scan nor BSS-absent. Open associated/pending-assoc subset uses same management TXD policy as existing station backend + source-established MCU TX_DONE/PID fields from existing data path. No PMF/secure mode accepted.",
+    "aisDeauthXmitComplete normally proceeds for several statuses and timeout. Our subset is STRICTER: only exact PID/WTBL successful real TX_DONE proceeds; nonzero status/wrong event/timeout fail runtime closed and quarantine indices. No timeout claimed to be deauth success.",
+    "aisFsmDisconnect: nicPmIndicateBssAbort CID17 sizeof4 then disconnected BSS update CID12 sizeof88. nicDeactivateNetwork CID11 sizeof12 zeroes MAC on deactivation, then removes STA and disposes pending data/security queues. cnmStaSendRemoveCmd CID14 sizeof4 = action0 exactSTA/BSS/reserved0, fgNeedResp FALSE. No firmware ACK inferred for set commands.",
+    "Global allocator ownership retained; old BSS/own/STA/WTBL reserved forever in this bounded subset. Separate fresh context allocated before admission; never reuse a no-response-removed index to correlate late events. Retired channel/STA events attributed by actual BSS; retired TX_DONE by actual WTBL. Finite four-BSS total budget is explicit ENOSPC before side effects."
+  ],
+  "admission_and_state": "0 means accepted real command/deauth submission, not disconnected completion. Associated/assoc-on-air preserves old association until exact TX_DONE then teardown writes succeed; admission blocks new data/auth/assoc, GET21 is unknown and current103 EAGAIN while pending. Host plaintext queue zeroed on admission or poisoned transport. Fresh station has no selected peer/no scan complete/no association; only next explicit real scan+generation/identity validated SET20 can reconnect.",
+  "security_ownership": "No changes to A04BR3WLANSecurity.h, cipher/EAPOL carrier headers, key install/authorize API or credential gate. BackendAPI only adds dedicated disassociate(provider). Secure/key state EOPNOTSUPP intact; in-flight data and scan EBUSY intact. Key/firmware queue forced cancellation requires Turing/parent coordination and is not implemented.",
+  "limitations": [
+    "No hardware deauth/TX_DONE/teardown/reconnect verified; actual SDK link remains parent gate.",
+    "Four BSS contexts per radio lifetime; old contexts not recycled without a proven firmware flush/epoch barrier. ENOSPC may reject further teardown requiring replacement. This is a deliberate incomplete lifecycle budget.",
+    "Secure/key/EAPOL cancellation and in-flight Ethernet/scan cancellation unsupported, not silently dropped.",
+    "Only observed empty SET22 carrier. Reason payload variants rejected. No fabricated native disconnect completion events.",
+    "Prior EEXIST for ambiguous ESS, secure association unsupported, no IP connectivity verified. Full WiFi remains incomplete."
+  ],
+  "credit": "Original board-specific adapter implementation from source ABI/ordering observations. No Apple binary loaded/modified, no copied implementation code from GPL DDK or itlwm. Existing local primary source kept as provenance; no external source re-download."
+}

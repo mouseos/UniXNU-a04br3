@@ -1,0 +1,127 @@
+{
+  "implementation": "Original A04BR3 adapter/bridge plus pinned genuine Apple IONetworkingFamily in apple/. Apple license headers retained; adaptations recorded in apple/SOURCE.json.",
+  "api_source": {
+    "remote": "https://github.com/apple-oss-distributions/xnu",
+    "tag": "xnu-8796.141.3",
+    "files": [
+      {
+        "path": "bsd/net/kpi_interface.h",
+        "sha256": "4aac7ab3d15b963c8d189314cb60d574d157990174087d7991bc634d7c962f92"
+      },
+      {
+        "path": "bsd/net/if.h",
+        "sha256": "a9ff417cb71a862612834208638bf1fb563ebb41bcdf969e8873e6d282ab30ad"
+      },
+      {
+        "path": "bsd/net/if.c",
+        "sha256": "3d2dc13f9342d6130027f7b826da8ad9ba88c340427dc3f112d0d42a78a0583f"
+      },
+      {
+        "path": "bsd/net/if_ether.h",
+        "sha256": "a19d8b01f66c873fb0d910be1e388474a7b1fd842fbbfd01df7394e91f4ced0d"
+      },
+      {
+        "path": "bsd/net/ether_if_module.c",
+        "sha256": "c6515bcb0320f866e35c7a3034bef0f72ce051c822354145ad31aad344e35430"
+      },
+      {
+        "path": "bsd/net/dlil.c",
+        "sha256": "6dc64c837534e9f03da8d0c83191d359305cdc6c0ff81e78db24b3868b5d425d"
+      }
+    ]
+  },
+  "reference_source": {
+    "remote": "https://github.com/apple-oss-distributions/IONetworkingFamily",
+    "revision": "bb910e2b458939f6b1f53c0fa6907f258b431ea4",
+    "files": [
+      {
+        "name": "IONetworkInterface.cpp",
+        "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkInterface.cpp",
+        "bytes": 106419,
+        "sha256": "b2cf42f7c621e0709d679ac599a3778983de5c72e42afcd90bd4d4b6d93b500a"
+      },
+      {
+        "name": "IONetworkInterface.h",
+        "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkInterface.h",
+        "bytes": 72489,
+        "sha256": "5ceae4cb76560b39858fb695fe9b7ff215e54a2a24872198312f0b93c629204a"
+      },
+      {
+        "name": "IOEthernetInterface.cpp",
+        "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOEthernetInterface.cpp",
+        "bytes": 50217,
+        "sha256": "1339d99dbf4a7190a5b5afa0c433d0dc1eefa1e581fbfc821f085c66e2bf0a64"
+      },
+      {
+        "name": "IOEthernetInterface.h",
+        "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOEthernetInterface.h",
+        "bytes": 14169,
+        "sha256": "30aba0bcb1146fcf230c37f8f1e399cf9362074d203fd5e817fbcf8e1171edc6"
+      },
+      {
+        "name": "IONetworkController.h",
+        "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkController.h",
+        "bytes": 82989,
+        "sha256": "727c06d8f31d4e2c4c8efd4b2f3437d62f430dcaa19afe9649143d24867f0dc8"
+      },
+      {
+        "name": "APPLE_LICENSE",
+        "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/APPLE_LICENSE",
+        "bytes": 20108,
+        "sha256": "212846e0145aa50fb3a5aef254a370311a93acf6c1e792e47e0068d64c8c3885"
+      }
+    ]
+  },
+  "credit": "Apple Inc. authors of XNU and IONetworkingFamily. Reference code retains its original Apple Public Source License; new bridge uses SPDX BSD-2-Clause-Patent.",
+  "native_set_evidence": {
+    "source": "wifi-worker/rea-io80211-setwrapper.json",
+    "evidence_id": "ev_c248f36492c550125e8a6a34347abb41c4f826d026abad427664f16b77e806e5",
+    "procedure": "_Apple80211IOCTLSetWrapper",
+    "address": "0x1d3ec34f8",
+    "observed_call": "FUN_1d3ef5188(*puVar15,0x802869c8)",
+    "scope": "req64 offsets and SET command only; no operation payload or credential behavior inferred"
+  },
+  "configd_reference": {
+    "revision": "585b7f2fca293f4642d21d15c5daf187f63c4796",
+    "files": [
+      {
+        "path": "Plugins/InterfaceNamer/ifnamer.c",
+        "url": "https://raw.githubusercontent.com/apple-oss-distributions/configd/585b7f2fca293f4642d21d15c5daf187f63c4796/Plugins/InterfaceNamer/ifnamer.c",
+        "sha256": "24c7642c17d2f4410195699498d61aaa18d9ef5799b583d74785de8fa908c76d"
+      },
+      {
+        "path": "SystemConfiguration.fproj/SCNetworkInterface.c",
+        "url": "https://raw.githubusercontent.com/apple-oss-distributions/configd/585b7f2fca293f4642d21d15c5daf187f63c4796/SystemConfiguration.fproj/SCNetworkInterface.c",
+        "sha256": "71f773081e1df3b5d8f61dc99674fe513d9fdec52d444010c3c0783b608ba8ef"
+      }
+    ],
+    "scope": "reference source prerequisite, not proof of shipped iOS16 execution; not copied into runtime sources"
+  },
+  "apple_runtime_source": "apple/SOURCE.json",
+  "native_get_codecs": {
+    "target_wrapper_sha256": "5ad1a0f267e55da17d4af357d19c10c23ac3893f03e2c1c7633d1e8c93062093",
+    "procedures": {
+      "Apple80211GetPowerState": "0x1d3ebad38",
+      "Apple80211CopyValue": "0x1d3eba368",
+      "Apple80211GetWithIOCTL": "0x1d3ec3f64"
+    },
+    "evidence_ids": [
+      "ev_42495042ba8075dc43bfeaaee7bd5b035b7095f5d4887f328cc88a2c6ce8eb7b",
+      "ev_49013c6f80ab70678320d49fd47e6dda5212a41771c8f64cce63a82f2aa87ff6",
+      "ev_6e87fc12e1077c6c752bbb4e58b30ddca8df7a79fcfa3605e9dceb69d251cefe"
+    ],
+    "implemented": "type19 raw24 version/count/state from observed radio_enabled; type43 raw256 own driver identity; type12 raw13 zero optional-capability advertisement; no fabricated scan/RSSI/link",
+    "scope": "static shipped userspace layout proof; runtime binding not yet verified"
+  },
+  "wireless_classes": {
+    "implementation": "Original functional IO80211Controller and IO80211Interface over vendored Ethernet classes; native bounded BSD ioctl fallback",
+    "private_apple_abi_compatible": false,
+    "proprietary_family_coload_supported": false,
+    "runtime_get_types": [
+      19,
+      43,
+      12
+    ],
+    "runtime_set_scan_implemented": false
+  }
+}

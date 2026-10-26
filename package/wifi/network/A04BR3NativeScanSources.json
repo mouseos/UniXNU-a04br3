@@ -1,0 +1,60 @@
+{
+  "implementation": "Original source native scan codec/dispatch/SDIO observation contract; no itlwm or Apple implementation code copied.",
+  "reference_source": {
+    "remote": "https://github.com/OpenIntelWireless/itlwm",
+    "revision": "53c51c2cdd6e4b69beb91f310d74c53422b0f8bd",
+    "credit": "OpenIntelWireless/itlwm contributors; original reference license retained with reference artifacts.",
+    "files": [
+      {
+        "path": "AirportItlwm/AirportSTAIOCTL.cpp",
+        "url": "https://raw.githubusercontent.com/OpenIntelWireless/itlwm/53c51c2cdd6e4b69beb91f310d74c53422b0f8bd/AirportItlwm/AirportSTAIOCTL.cpp",
+        "sha256": "2811ed1ef3b54eebc46350b7183b8635f7158ddb1b6ac7ff4f6501406173db93"
+      },
+      {
+        "path": "include/Airport/apple80211_ioctl.h",
+        "url": "https://raw.githubusercontent.com/OpenIntelWireless/itlwm/53c51c2cdd6e4b69beb91f310d74c53422b0f8bd/include/Airport/apple80211_ioctl.h",
+        "sha256": "df2a67cf0df19fe1bef2de5f30b0f4c25f26f8aa8781093f70167060710f6e0a"
+      },
+      {
+        "path": "include/Airport/apple80211_var.h",
+        "url": "https://raw.githubusercontent.com/OpenIntelWireless/itlwm/53c51c2cdd6e4b69beb91f310d74c53422b0f8bd/include/Airport/apple80211_var.h",
+        "sha256": "4af5e3dbb54d12a694f7be5997d208212260e7b265aedf617f9c9122f4a36db5"
+      },
+      {
+        "path": "LICENSE",
+        "url": "https://raw.githubusercontent.com/OpenIntelWireless/itlwm/53c51c2cdd6e4b69beb91f310d74c53422b0f8bd/LICENSE",
+        "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+      }
+    ],
+    "scope": "Third-party native producer/source corroboration; not a standalone claim of iOS private ABI compatibility."
+  },
+  "ios_evidence": {
+    "artifact_sha256": "d7620894ad830fffd8f4a5489cc5a89564ce2b30b62ee90ca3e5bbe062eeb851",
+    "scan": "ev_b9c18a1c2b0fd086a404e9a5e5983d2f63254c702d741d4c854d126c578bf7b8",
+    "helper": "ev_a250abba8853b15f80f39b56fd03170e795fd288c364a68e3585c5ec6d303266",
+    "policy": "ev_371521687beae85eb7e32175bef34ad1e5b80173f752700d8b64896957bbe0d9",
+    "crosscheck": "Direct SET10/5456 GET11/1164; exact result offsets match mac12+ inlineIE1024. Donor REA proves consumer offsets/end/event; source corroborates scan enum, nested channel version1, band0x8, age ms. Rates copy loop precedes count assignment and does NOT prove rate conversion.",
+    "request_dictionary_default": {
+      "evidence": "ev_371521687beae85eb7e32175bef34ad1e5b80173f752700d8b64896957bbe0d9",
+      "offset": "0x1310",
+      "values": [
+        "0x00000000 (NULL options carrier)",
+        "0x80000000 (non-NULL options dictionary, no override)"
+      ],
+      "contract": "Accept only the two observed defaults; identity of CFString option key not assumed. Other bits/filters still rejected. Backend modes/generation/result/complete unchanged.",
+      "current_boot": "kernel7d3/device565 has real14AP then SET10/5456 errno102; request payload not observed, no sole-cause assertion.",
+      "tests": "test_native_scan_results.py donor defaults + 261510 carriers; actual dispatch callbacks/errors/generation and no cached RF"
+    }
+  },
+  "notes": [
+    "Production A04BR3NativeRendezvous uses A04BR3NativeScanAdapter -> actual SDIO snapshot/copy_record and scan_mode(service,active,&acceptedGeneration); API1 required at compile time, no fallback.",
+    "Optional native ratecount0 until integerMbps conversion is proven; received raw rate IEs retained byte-for-byte and crosschecked with actual AP metadata. No fabricated rate values.",
+    "Only observed 2GHz flag0x8. Nested channel version1. No inferred bandwidth/ACTIVE/DFS flags. Noise/SNR gate0 (not measured); RSSI requires real valid RCPI, never zero substituted.",
+    "Full actual IEs retained; >1024 returns EMSGSIZE with no truncation. Actual observation time to current same-clock us determines AGE milliseconds. Missing/invalid observation returns error.",
+    "Normal type1 active and type2 passive call distinct real mode requests with generation accepted under SDIO lock; type3 cached never starts RF. Actual backend AIS/regulatory policy and errno remain authoritative.",
+    "Actual producer record allocated off kernel stack; generation rechecked around copy. Iterator EAGAIN/ESTALE/EIO semantics preserve outputs on errors; no repeated AP0.",
+    "Real completion uses observed complete generation, reserve/ack around DLIL posting; fresh SET returns EBUSY during publication to avoid old completion satisfying new request.",
+    "Native BSD gate logs at most32 requests boot-wide using real OSAtomic CAS saturating budget. Only type/value/request-length/errno; no payload/address/password/MAC.",
+    "Actual SDK/hardware classification/scan/socket delivery unverified for this patch; parent owns builds/flash."
+  ]
+}

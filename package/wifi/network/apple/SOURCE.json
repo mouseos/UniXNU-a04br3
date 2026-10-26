@@ -1,0 +1,229 @@
+{
+  "remote": "https://github.com/apple-oss-distributions/IONetworkingFamily",
+  "revision": "bb910e2b458939f6b1f53c0fa6907f258b431ea4",
+  "files": [
+    {
+      "path": "APPLE_LICENSE",
+      "sha256": "212846e0145aa50fb3a5aef254a370311a93acf6c1e792e47e0068d64c8c3885",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/APPLE_LICENSE",
+      "vendored_sha256": "212846e0145aa50fb3a5aef254a370311a93acf6c1e792e47e0068d64c8c3885"
+    },
+    {
+      "path": "IOBasicOutputQueue.h",
+      "sha256": "07a42f76271212b40bbf8eea31b445524dcbbcc66ce48ec542bd4c5043970bc7",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOBasicOutputQueue.h",
+      "vendored_sha256": "d8e2d2d977dcfea52aebe498774b80c16047f92f2dd9ed1ff18ccc8d2f884bd7"
+    },
+    {
+      "path": "IOEthernetController.cpp",
+      "sha256": "51a2931ddd221d2c3b948ecdc41a5875a460b00ffeda3bf9e998b8226c6e5b4b",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOEthernetController.cpp",
+      "vendored_sha256": "a45281eee4ce901d3737b29b82ec5518557e1d18b44cf5b1163e1a2d055a0b54"
+    },
+    {
+      "path": "IOEthernetController.h",
+      "sha256": "4c3d67c38619abfb1df39d9b85f38152b6536f0c24716ea5862a7c540169e51b",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOEthernetController.h",
+      "vendored_sha256": "54553294d44f3fdd15f4474cd372c285f960d6e4c7067b6e070485754ba9b3f3"
+    },
+    {
+      "path": "IOEthernetInterface.cpp",
+      "sha256": "1339d99dbf4a7190a5b5afa0c433d0dc1eefa1e581fbfc821f085c66e2bf0a64",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOEthernetInterface.cpp",
+      "vendored_sha256": "b84420c5346be67a439eda56ba5d0a6a7ac144e29915b5dbe201249be818e826"
+    },
+    {
+      "path": "IOEthernetInterface.h",
+      "sha256": "30aba0bcb1146fcf230c37f8f1e399cf9362074d203fd5e817fbcf8e1171edc6",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOEthernetInterface.h",
+      "vendored_sha256": "76ac57f81a26a38d80d160c934fb8b89ef5edc71b18a4125eb95590e57dd5380"
+    },
+    {
+      "path": "IOEthernetStats.h",
+      "sha256": "adea42c158a03f9106209d72150a64b11b7a19a2ea92deacb164e415ce18a955",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOEthernetStats.h",
+      "vendored_sha256": "adea42c158a03f9106209d72150a64b11b7a19a2ea92deacb164e415ce18a955"
+    },
+    {
+      "path": "IOGatedOutputQueue.h",
+      "sha256": "e60339ca9ace807cf5e255eff80ed40b6b19a651da13da3fc38fc90576bef66d",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOGatedOutputQueue.h",
+      "vendored_sha256": "d3af62a13b4dcc4d6e82fda351d35b125f671888d0bcdfdc66637ceb78c93944"
+    },
+    {
+      "path": "IOKernelDebugger.cpp",
+      "sha256": "bbac801acc6b02279db1635235dbc7500742111a40cf83ca9b96a27ea87064d8",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOKernelDebugger.cpp",
+      "vendored_sha256": "8cd2c26efc1df550c8ddfd0874d3fbed21a7c572c8892a9d90c5aa5302a3ff5a"
+    },
+    {
+      "path": "IOKernelDebugger.h",
+      "sha256": "898cf22dcb9a17225dc682c22f2102152e63992b009006191a05f8c201ba8929",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOKernelDebugger.h",
+      "vendored_sha256": "898cf22dcb9a17225dc682c22f2102152e63992b009006191a05f8c201ba8929"
+    },
+    {
+      "path": "IOMbufMemoryCursor.cpp",
+      "sha256": "0a74e504c7c22b906d0f4ce87a45605377320145c8daab3ea5b9219ab3de0c58",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOMbufMemoryCursor.cpp",
+      "vendored_sha256": "0cccf37e60e844047f744eb0d86e3ba30fc14355c9c36738224c577438e86974"
+    },
+    {
+      "path": "IOMbufMemoryCursor.h",
+      "sha256": "e6dee9cb9b46cd7ab821d220893208ac3796384cbdacd5b53253f7064bb33615",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOMbufMemoryCursor.h",
+      "vendored_sha256": "e6dee9cb9b46cd7ab821d220893208ac3796384cbdacd5b53253f7064bb33615"
+    },
+    {
+      "path": "IOMbufQueue.h",
+      "sha256": "bb08188cbbc5b18e0379bd226343634bb18c841bdf6b1001db27fc4892a45afa",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOMbufQueue.h",
+      "vendored_sha256": "b8a1e2ea4f958461cf9c95984a7093cabcfcc4beac308cb9620805ccc2f371e5"
+    },
+    {
+      "path": "IONetworkController.cpp",
+      "sha256": "39ecaaec08c69661df2cab58868d750275d515113de1f455e690a5ac11640f6d",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkController.cpp",
+      "vendored_sha256": "57c67074f479258147b09d1b1674f0eeb884a76406ff8a049d22e5cace4dad68"
+    },
+    {
+      "path": "IONetworkController.h",
+      "sha256": "727c06d8f31d4e2c4c8efd4b2f3437d62f430dcaa19afe9649143d24867f0dc8",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkController.h",
+      "vendored_sha256": "0d5b2b9f5536146518ff5245bf0e481120e8047120075356cf07b86908ffced4"
+    },
+    {
+      "path": "IONetworkControllerPrivate.h",
+      "sha256": "f8cc9ab3ea6b3620f1f1a7ff7ee8313023bac1e12c04d6cd4594347350f13c9e",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkControllerPrivate.h",
+      "vendored_sha256": "f8cc9ab3ea6b3620f1f1a7ff7ee8313023bac1e12c04d6cd4594347350f13c9e"
+    },
+    {
+      "path": "IONetworkData.cpp",
+      "sha256": "ad87ffd8e0b1244a59da182fd5ef97568259690a647a049a712482a4b390a1f2",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkData.cpp",
+      "vendored_sha256": "5895cf48e21f37dd16f0fb6055885775e7f680e47d560a64fecfe6568fca1000"
+    },
+    {
+      "path": "IONetworkData.h",
+      "sha256": "1656097ef0c706d135b7e781a9aa516d29fca1064bf76f9bfe2de32c0ce67a33",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkData.h",
+      "vendored_sha256": "1656097ef0c706d135b7e781a9aa516d29fca1064bf76f9bfe2de32c0ce67a33"
+    },
+    {
+      "path": "IONetworkDebug.h",
+      "sha256": "23019a5f1e1092221ce9b372b9bd5c28fcee6ae00149ddd882e8c7ebeb92f045",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkDebug.h",
+      "vendored_sha256": "23019a5f1e1092221ce9b372b9bd5c28fcee6ae00149ddd882e8c7ebeb92f045"
+    },
+    {
+      "path": "IONetworkInterface.cpp",
+      "sha256": "b2cf42f7c621e0709d679ac599a3778983de5c72e42afcd90bd4d4b6d93b500a",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkInterface.cpp",
+      "vendored_sha256": "244de72d8bdaae1169f6f5390ab61f4f718d3be5bd1987f919828f5268cab1b3"
+    },
+    {
+      "path": "IONetworkInterface.h",
+      "sha256": "5ceae4cb76560b39858fb695fe9b7ff215e54a2a24872198312f0b93c629204a",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkInterface.h",
+      "vendored_sha256": "3e0c3a713df49281fb7bdd1bbbca334c2e0327f48e644f3f567ee6f67479d76a"
+    },
+    {
+      "path": "IONetworkMedium.cpp",
+      "sha256": "7f0dc09de819b9a36f48f7e0109339a6fc847cc3a9e9f39ef68c1c17d2de3ab2",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkMedium.cpp",
+      "vendored_sha256": "fe89089d8a09ac18ee98e9ab0f7b1decec12aa82ddaeb73055bf6d7c15be5d0d"
+    },
+    {
+      "path": "IONetworkMedium.h",
+      "sha256": "410dda5126d0cd4be960557abb3a7ffd689f9a37fe3cdac8520e6e623565aa2b",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkMedium.h",
+      "vendored_sha256": "49913cb89413562fc27243b18815ec31d9b55146c4139f214ba2cd44f833f0bd"
+    },
+    {
+      "path": "IONetworkStack.cpp",
+      "sha256": "a2b5d2302fdb7fceed1060e8ddcef9f4379a71ee229ad277f8ca56fd11b2da6c",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkStack.cpp",
+      "vendored_sha256": "006de2e5a6b1fb286ad60f758527a47143916185337db47c89bbb1d796256d8b"
+    },
+    {
+      "path": "IONetworkStack.h",
+      "sha256": "a074333b96a6847b818aa1888451e0ad6e2d2effaf295fef0261b8d11398d327",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkStack.h",
+      "vendored_sha256": "dc2c97c0d0c6ee3e71c4d3569f86cf7cd34fa12085fc6107f76824528e31e12c"
+    },
+    {
+      "path": "IONetworkStats.h",
+      "sha256": "a30f1267624dc4a76a7514541874481c9a48be7c00f34d7d440abb79b34a24e7",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkStats.h",
+      "vendored_sha256": "a30f1267624dc4a76a7514541874481c9a48be7c00f34d7d440abb79b34a24e7"
+    },
+    {
+      "path": "IONetworkTypesPrivate.h",
+      "sha256": "9447ec20b5c57bc007e79ff793a898fbf6d46e2e99bd025d5f1c6fd7f45d43b2",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkTypesPrivate.h",
+      "vendored_sha256": "9447ec20b5c57bc007e79ff793a898fbf6d46e2e99bd025d5f1c6fd7f45d43b2"
+    },
+    {
+      "path": "IONetworkUserClient.cpp",
+      "sha256": "e18e58f89286f00fe3c0964e769e84028998081a47d2370eb98c0a6881eec7c6",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkUserClient.cpp",
+      "vendored_sha256": "55d43df62e77d221cdeba6ff07ab731073564d1b2af1fae5beff28d8dd3ce283"
+    },
+    {
+      "path": "IONetworkUserClient.h",
+      "sha256": "04a10f473320d5b59c789dfca85c98b3d96ec0ef5a8afd0b832d7ae5c8e38a13",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkUserClient.h",
+      "vendored_sha256": "04a10f473320d5b59c789dfca85c98b3d96ec0ef5a8afd0b832d7ae5c8e38a13"
+    },
+    {
+      "path": "IOOutputQueue.cpp",
+      "sha256": "dd6997db37216573ac82a97309d8891b8f651160b8b3a82b3aa9c976e2d27166",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOOutputQueue.cpp",
+      "vendored_sha256": "1f3c4b693c8af16300c8c57fe2a695e46982cb63abda369ad71a35727d469fe9"
+    },
+    {
+      "path": "IOOutputQueue.h",
+      "sha256": "3e681a7a1ef5c4ecff3eed9c4385b8769c3916f3a90634ed6b88869d3c2ea6a1",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOOutputQueue.h",
+      "vendored_sha256": "8678c16e1f3e6d8dd159ad261ffd6230a6ef3473045ba5245a96758292afb4d7"
+    },
+    {
+      "path": "IOPacketQueue.cpp",
+      "sha256": "bb7da51725116f3065ee1c8f75049a8311101158899b0fd56fcc4267b939f22b",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOPacketQueue.cpp",
+      "vendored_sha256": "6bc0ea6547db4d907fc9fc577069c087652e24d76ccd3d25eedb01b8078a3316"
+    },
+    {
+      "path": "IOPacketQueue.h",
+      "sha256": "f2192a69dc33cdcac2e025fd545b92e1499e058bd5343a668c3a7ed0f44a6b0d",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOPacketQueue.h",
+      "vendored_sha256": "da5de06d4e0a73f6161451650e89e4ad6428414387c367cf2f4ca692353c40c2"
+    }
+  ],
+  "modifications": "Local quoted header includes; replace unused private net/dlil.h dependency with existing KPI include and IFNET_MODIDLEN/IFNET_MODARGLEN public aliases (same sizes20/12). Original licenses retained.; IOMbufMemoryCursor limits explicit C linkage to m_getpackets declaration, leaving XNU C++ template-bearing includes outside.; IONetworkInterface explicitly imports real OSMetaClass ownership annotations before BSD bpf/skywalk.",
+  "build_adaptations": {
+    "family_private_spi": "Parent-owned Makefile must define __PRIVATE_SPI__=1 for every network object; matches original pinned project GCC_PREPROCESSOR_DEFINITIONS, no declarations or enum values fabricated.",
+    "target_conditionals": "IONetworkInterface.cpp and IOKernelDebugger.cpp include source-owned A04BR3FamilyTarget.h; only consumed TARGET_OS_IPHONE derived from explicit target or board/XNU defines. No SDK system header dependency.",
+    "xnu8796_header_linkage": "Removed blanket extern-C around BSD/header-only types; real XNU headers own linkage and may import kern/startup C++ templates. Explicit C function declarations in IOMbufMemoryCursor/IOKernelDebugger preserved.",
+    "ownership_annotations": "IONetworkInterface/IONetworkStack load real IOKit/IOLib before BSD headers, so OSMetaClass LIBKERN_CONSUMED exists before bpf/skywalk.",
+    "bpf_mode_names": "if_set_bpf_tap switch now uses exact exported kpi_interface.h BPF_MODE_DISABLED/INPUT/OUTPUT/INPUT_OUTPUT values (0/1/2/3) rather than private dlil aliases.",
+    "shared_backing_lifecycle": "Protected nonvirtual adopt/clear seam adds independent ifnet_reference to actual base private _backingIfnet; adopts before bridge ifnet_attach, clears and releases after actual bridge detach completes. Default allocation not called; genuine base free is fallback reference cleanup. No parent IOEthernetInterface.cpp changes.",
+    "ios16_stack_authorization": "A04BR3-only compatibility: retain superclass init and actual administrator check. Dedicated com.apple.networking.ionetworkstack.user-client, if present, must be canonical true; false/malformed denies without fallback. Only if absent, accept an actual owning-task signed com.apple.security.iokit-user-client-class array containing exact IONetworkStackUserClient; malformed arrays and root-only callers denied. Observed donor configd signed XML supplies that exact class grant. No task-name, process-name or fabricated entitlement. Runtime IOServiceOpen errno remains unobserved."
+  },
+  "local_files": [
+    {
+      "path": "A04BR3FamilyTarget.h",
+      "sha256": "0c91ecd7c10a0d965ec826c0ae6ed02ca0a25c4801cfdd9c1474e655789757f4"
+    },
+    {
+      "path": "A04BR3IONetworkBacking.inc",
+      "sha256": "90c66a211550ce8b3a846c6f245530d81e463682f32e4e020c2eedc53ea9ada8"
+    },
+    {
+      "path": "A04BR3StackAuthorization.h",
+      "sha256": "8ddeff49a15521b665914b79314eefd7891f7ceaaff2857105189b2f7c903481"
+    }
+  ],
+  "a04_kernel_registration": "Original nonvirtual registerKernelInterface reuses interfacePublished then registerNetworkInterface (reserve/open/name/BSDattach). Board controller delays nub publication until this synchronous path. No second ifnet or IOClass/BSDname property substitution; no private ABI emulation."
+}

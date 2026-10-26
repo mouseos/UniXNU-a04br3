@@ -1,0 +1,45 @@
+{
+  "scope": "Observed native GET1/GET9 identity for actually associated open peer. No secure metadata or controlled-port/authentication success changes.",
+  "raw_wire": {
+    "GET1": "GetWithIOCTL case1 requests raw capacity32, no version or length prefix; common block LAB_1d3ec5510 appends returned req.length bytes to CFData. Codec returns real SSID byte length in req.length, not padded CFString content. Requires observed request capacity>=32.",
+    "GET9": "GetWithIOCTL case9 requests raw6, local_80 points to first BSSID byte; param4==6 path directly copies first4+last2. No version/length prefix. Byte value not inferred merely from public API six-byte output."
+  },
+  "native_proof": [
+    {
+      "file": "wifi-worker/rea-native-getwithioctl.json",
+      "evidence_id": "ev_6e87fc12e1077c6c752bbb4e58b30ddca8df7a79fcfa3605e9dceb69d251cefe",
+      "procedure": "_Apple80211GetWithIOCTL at0x1d3ec3f64",
+      "excerpt": "ipad-worker/network-bridge/native-peer-wire-evidence.txt",
+      "pseudo_sha256": "2dc10434682594645491a2006d06b2ccb52d43978433654a654a6b38ad6fcd06"
+    },
+    {
+      "file": "wifi-worker/native-security/native-wifi-ssid.json",
+      "evidence_id": "ev_65c6bafd7ca2288785478f6d9b6c545510153b5ca399be1c2ffdc19e55716fe9",
+      "procedure": "native eapolclient FUN10000fd08",
+      "observed": "Apple80211Get(type1,0,CFMutableData,0), CFDataGetBytePtr/GetLength then CFStringCreateWithBytes using EXACT data length. Padding zeros into a short SSID would alter identity."
+    },
+    {
+      "file": "wifi-worker/native-security/native-wifi-bssid.json",
+      "evidence_id": "ev_ddb2103ef5c59384b0c5266a053502e716ce6ffb3d0786817cf7e9f65b831ef4",
+      "procedure": "native eapolclient FUN10000f768",
+      "observed": "Apple80211Get(type9,0,out,6), false if getter fails or all6zero."
+    }
+  ],
+  "artifact": {
+    "original_io80211_sha256": "d7620894ad830fffd8f4a5489cc5a89564ce2b30b62ee90ca3e5bbe062eeb851",
+    "focused_elf_sha256": "5ad1a0f267e55da17d4af357d19c10c23ac3893f03e2c1c7633d1e8c93062093",
+    "source": "Retained original REA evidence; no shared MCP target changes or repeated whole analysis."
+  },
+  "producer": "Existing a04br3_wlan_current_record: transport-locked actual selected station, sta_active, join.phase4/AID, no pending activation/channel, exact captured current-peer identity/generation. Existing open/privacy/RSN restriction UNCHANGED. Snapshot associated alone never manufactures identity or picks scan0. Errors expose no partial payload.",
+  "provider": "A04BR3NativeRendezvous GET1/9 -> a04_assoc_provider_peer -> acquire/state/current_record -> pure codec. One temporary provider retain/release, heap record owns all copied bytes; state/current_record locks released before codec. No SDIO/Runtime edits. GET103 codec untouched; identity does not need optional RSSI or IE<=1024 because no such data is returned.",
+  "wire_implementation_note": "Request capacity32 is observed. Actual SSID length output derives from recorded peer length and existing source-built IOWR req.length copyout contract consumed by original CFData/CFString path; not a claimed disassembly of an unavailable Apple driver implementation.",
+  "validation": "Standalone C11/C++14 -pedantic-errors -Werror ASan/UBSan codec; binary SSID including NUL/full32 length, exact bytes/returned length/canaries, all short capacities, unknown selector/value, null pointers, zero/multicast BSSID, invalid SSID bounds. Actual production BSD/Get/Rendezvous/provider tests for both mock event layouts24/28, one retain/release, allocation/state/acquire/current-producer errors with no output mutation. Existing real join fixture advances actual source auth/assoc/STA event before positive identity encode.",
+  "limitations": [
+    "SDK compile/link and actual hardware native GET1/9 remain parent gates.",
+    "Secure peer currentRecord remains EOPNOTSUPP. This is NOT yet sufficient for secure preauth EAPOL TX. Future real associated metadata must be separated from controlled-port authorization with security/runtime owners.",
+    "CopyValue2 AUTH_UPPER not implemented here; native EAPOL ingress/TX/Personal/crypto integration and real completion endpoint remain separate tasks.",
+    "No fake SSID/BSSID/link/auth flags; ambiguous ESS EEXIST and secure association limits unchanged."
+  ],
+  "ownership": "Only network GET/provider+tests/provenance. Parent-authorized Turing field/ownership coordination via thread01a15f1c-2525-7b00-877d-7f9edd9041ac. No edits to his security/Personal/cipher/EAPOL headers, SDIO/Runtime, key/authorize APIs, sources.lock, root SOURCES or kernel metadata.",
+  "credit": "Original source-built board codec/provider; original shipped Apple artifacts inspected only as retained REA evidence. No Apple executable patched/loaded; no third-party implementation copied."
+}

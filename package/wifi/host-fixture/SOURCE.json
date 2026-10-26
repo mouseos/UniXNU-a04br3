@@ -1,0 +1,36 @@
+{
+  "XNU": "https://github.com/apple-oss-distributions/xnu",
+  "revision": "d8b80295118ef25ac3a784134bcf95cd8e88109f",
+  "files": {
+    "if_private.h": "4889e1d6822bd31e6d0cc2e16ffc3ae0e902dc957612e83ab4d4365cf996a394",
+    "ndrv.c": "86ccfe89701be1514154c5d70ee60786586280865aaccea5a3825c9cfabb879e"
+  },
+  "purpose": "Primary declarations read by host ABI tests only, not compiled into board archive. Copyright/license retained in files.",
+  "port_test_sources": {
+    "repository": "https://github.com/mouseos/xnu_kernel_benesse_a04br3",
+    "commit": "f5d43bf1677955e7e367545b9bbbd6449776cdda",
+    "files": [
+      {
+        "path": "build-support/tests/test_wlan_backend.py",
+        "source": "build-support/tests/test_wlan_backend.py",
+        "sha256": "9de1871c62e3b0e06e326d5ca60d0b880da7d5265543ca6fcbead7cdc5eca1c6"
+      },
+      {
+        "path": "build-support/tests/test_wlan_host.py",
+        "source": "build-support/tests/test_wlan_host.py",
+        "sha256": "897183868c33856be4f822c9eced57a8d6140002bd1c2fdc0031139832a20f63"
+      },
+      {
+        "path": "build-support/tests/test_wmt_protocol.py",
+        "source": "build-support/tests/test_wmt_protocol.py",
+        "sha256": "d5804e807b84c4a8c003cdd7ffc57f4c9904f91be096e8d09e8b1af0507e6442"
+      }
+    ],
+    "license": {
+      "source": "LICENSE.port",
+      "vendored_path": "LICENSE.port",
+      "sha256": "223edc952a5d761298c99fad52e53c28114bd2ed7b52c4467f6ba647f759f815",
+      "scope": "MIT host fixture test files above; original text and notices retained. Apple XNU fixture declarations retain their own Apple source notices."
+    }
+  }
+}

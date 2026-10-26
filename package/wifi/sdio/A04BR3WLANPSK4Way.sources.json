@@ -1,0 +1,76 @@
+{
+  "implementation": "Original bounded state code; no upstream implementation copied",
+  "license": "BSD-2-Clause-Patent",
+  "reference": {
+    "repo": "https://android.googlesource.com/platform/external/wpa_supplicant_8",
+    "commit": "ab49c33aef291e4d9cabe9a16f535bca40569a10",
+    "files": [
+      {
+        "path": "src/rsn_supp/wpa.c",
+        "sha256": "7c05c109497ad3f3d8d9488828317170497c14451949e37e79e0ea7b1586cee1"
+      },
+      {
+        "path": "src/rsn_supp/wpa_i.h",
+        "sha256": "a5f74682521942d6accfaf9cd4af7cd4c790f34cf502856bafffb6a2e63eb996"
+      },
+      {
+        "path": "src/common/wpa_common.h",
+        "sha256": "9982a5574e5dc8e9ac6139d72c3bbb5b9a7b8dcfbc08530f03bee2a028efadd7"
+      },
+      {
+        "path": "COPYING",
+        "sha256": "a87ac4e333d0f120408a9d814e40c3672cd27f365af89b4f2f6631f7a9338953"
+      }
+    ],
+    "state_contract": {
+      "wpa.c:1229": "installed PTK no reinstall; RSN pairwise starts zero RSC",
+      "wpa.c:1379": "same GTK no reinstall",
+      "wpa.c:2839": "M1/M3 ANonce equality",
+      "wpa.c:2908": "same SNonce reused for retransmitted M3",
+      "wpa.c:3551-3578": "AES wrap multiple8, unwrap integrity required",
+      "wpa.c:3923": "accepted replay counter strictly increases"
+    }
+  },
+  "native_personal_producer": {
+    "artifact": "iOS16.7.16 IO80211",
+    "sha256": "d7620894ad830fffd8f4a5489cc5a89564ce2b30b62ee90ca3e5bbe062eeb851",
+    "rea_evidence": "45252d12b57e35e7517b86d8fabd6e8c0c7937e59b9f25f8d0b8bb8c315bb2cd",
+    "fields": "root592:mode2@4,lower1@6,upper8@8; ordinary RSN-PSK flags504=0/4; embedded key148@56 cipher6PMK32/cipher10passphrase; passphrase branch can also carry derivedPMK32@472 with length@468 and generated RSN IE starting206 (not yet whole-carrier-admitted)"
+  },
+  "runtime_status": "Runtime source integrated with native Personal admission, actual locked profile and PSK/HIF/PTK event bridge; SDK/HW proof pending",
+  "scope_limits": [
+    "WPA2-Personal/CCMP128/descriptor2 only",
+    "No PMF/SAE/FT/TKIP/rekey/group-rekey",
+    "M1 PMKID keydata unsupported by existing strict parser",
+    "Strict512-byte encryptedM3 keydata bound; unknown KDE unsupported",
+    "Actual per-association generation, serialization, cancellation required",
+    "No GTK acknowledgement may be inferred from FIFO queue success"
+  ],
+  "api_version": 2,
+  "preassociation": "prepare PMK outside SDIO/spin/storage/pump locks before association; begin_prepared consumes once with exactSSID binding; low-level begin rejects passphrase",
+  "binding": "A04BR3WLANPSKBinding.h thin wrappers call real9cce49a PersonalCrypto and read_random only inKERNEL/A04BR3 build",
+  "entropy_source_audit": {
+    "bootshim": "rng.c MT8167 TRNG boundedstuck/failurechecks; handoff.c270 aborts onfailed64byte seed beforeADT; noseedlogging",
+    "kernel": "pexpert/gen/pe_gen.c141 consumes/chosen/random-seed; osfmk/prng/prng_random.c264 EARLY_BOOT FIRST registers realHMACSHA256DRBG and generation/reseedmutex; sys/random.h47 voidread_random(void*,u_int)",
+    "readiness_contract": "IOKit/worker afterearlyboot startup, outside SDIO/spin/IRQ locks; read_randompanics oncryptofailure; nodegradedfallback",
+    "build": "existing osfmk/conf/files348,351-354,357-363 providers alreadyregistered; sourceSDKdepsunchanged",
+    "limits": "Sourceaudit andARM64signature/codegen only; nohardware orwholekernellink byworker"
+  },
+  "completion_policy_review": "Superseded: matching gen3 noNeedResp CID7 completes set_key after actual synchronous successful HIF write; independent GTK firmware ACK is not required. gtk_accepted names that transfer contract, never hardware install acknowledgment. Initial-only driver owner requires validated M3, actual PTK EID24, same epoch/cookie, GTK full HIF success and actual M4 TX_DONE before authorization. Software enqueue, failed/short transfer and timeout cannot advance. Radio Protected/cipher M3 and rekey are unsupported; standard EAPOL encrypted-key-data/KEK unwrap remains supported.",
+  "runtime_sources": [
+    "A04BR3WLANPersonalRuntime.h",
+    "A04BR3WLANNetworkProfile.h",
+    "../network/A04BR3NativePersonalAssociation.h"
+  ],
+  "gtk_host_contract": {
+    "revision": "eb47f42e1f84fe5716ef239620725f82718a620a",
+    "paths": {
+      "os/linux/gl_cfg80211.c:218-223": "kalIoctl set_key success returns0",
+      "os/linux/gl_kal.c:2299-2306": "wait OID completion",
+      "common/wlan_oid.c:2252-2270,2591-2599": "CID7 noNeedResp enqueued pending",
+      "common/wlan_lib.c:1695-1720,1774-1797": "actual HIF send then completion callback",
+      "nic/nic_cmd_event.c:2167-2172": "host OID success",
+      "nic/nic_rx.c:2377-2400": "PTK perSTA EID24"
+    }
+  }
+}
