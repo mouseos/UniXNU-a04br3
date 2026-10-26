@@ -12,6 +12,19 @@
 #include <string.h>
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
+#include <vm/vm_page.h>
+
+// Nontransactional page counters, as in host_statistics64. Called only by
+// the board's explicitly enabled stack diagnostics, with no VM lock held.
+void boot_memory_snapshot(uint64_t out[7]) {
+ out[0]=PAGE_SIZE;
+ out[1]=vm_page_free_count;
+ out[2]=vm_page_active_count;
+ out[3]=vm_page_inactive_count;
+ out[4]=vm_page_wire_count;
+ out[5]=compressor_object ? VM_PAGE_COMPRESSOR_COUNT : 0;
+ out[6]=vm_page_speculative_count;
+}
 // Exact private process ABI from this source revision's proc.h/proc_internal.h.
 // Do not mix BSD and Mach-private header type universes in one translation unit.
 struct proc;typedef struct proc *proc_t;

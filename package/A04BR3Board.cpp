@@ -25,6 +25,7 @@
 extern "C" {
 void a04br3_autoreset_init(void);
 void a04br3_gpu_init(void);
+void boot_memory_snapshot(uint64_t out[7]);
 void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
 int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
@@ -95,6 +96,10 @@ static void a04br3_thread_report(void)
     stacks = enabled != 0;
   }
   if (!stacks) return;
+  uint64_t memory[7];
+  boot_memory_snapshot(memory);
+  IOLog("a04br3 memory: approx pagesz=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu\n",
+        memory[0], memory[1], memory[2], memory[3], memory[4], memory[5], memory[6]);
   boot_process_capture();
   boot_process_snapshot();
   for (unsigned i = 0; i < 10; ++i)
