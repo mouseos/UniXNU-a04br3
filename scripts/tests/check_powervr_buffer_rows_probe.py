@@ -140,7 +140,7 @@ int main(int argc,char **argv){
                 print(executed.stderr,end='')
                 raise SystemExit(executed.returncode)
             for marker in ('vk buffer-rows single-shot host-us: record=', 'clock=1',
-                           'vk buffer-rows host-us: flush=', ' invalidate='):
+                           'vk buffer-rows single-shot cache-us: flush=', ' invalidate='):
                 if marker not in executed.stdout:
                     raise SystemExit('missing timing marker: '+marker)
             run([tmp/'lifecycle',args.lavapipe.resolve()],env=env,timeout=90)

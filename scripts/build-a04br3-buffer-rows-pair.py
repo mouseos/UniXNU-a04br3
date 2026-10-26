@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tomllib
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -23,6 +24,8 @@ def name(argument):
     return argument.partition('=')[0]
 
 def paired_arguments(reference, defaults, mhz):
+    if not isinstance(defaults,list) or not all(isinstance(t,str) for t in defaults):
+        raise ValueError('board kernel_args must be a list of strings')
     tokens=shlex.split(reference)
     keys=[name(token) for token in tokens]
     if len(set(keys))!=len(keys): raise ValueError('duplicate reference boot argument')
@@ -40,6 +43,7 @@ def verify_pair(left,right):
         if not left.get(field) or left.get(field)!=right.get(field):
             raise ValueError('pair input differs or missing: '+field)
     for data,clock in ((left,0),(right,380)):
+        if len(data['kernel_args'].encode())>1000: raise ValueError('generated bootargs exceed1000 bytes')
         tokens=shlex.split(data['kernel_args'])
         if tokens.count(f'{CLOCK}={clock}')!=1 or sum(name(t)==CLOCK for t in tokens)!=1:
             raise ValueError('unexpected clock argument')
@@ -75,15 +79,24 @@ def main():
         for arg in arguments: command+=['--kernel-arg='+arg]
         for arg in omitted: command+=['--omit-kernel-arg',arg]
         subprocess.run(command,check=True,cwd=a.unixnu_dir)
-        reports.append(json.loads((out/'payload.json').read_text()))
+        report=json.loads((out/'payload.json').read_text())
+        if report['kernel_args']!=' '.join(arguments): raise SystemExit('generated bootargs differ from plan')
+        reports.append(report)
     verify_pair(*reports)
     if before!={str(x.resolve()):sha(x) for x in inputs}: raise SystemExit('signed inputs changed')
     manifest={'source_commit':subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
-              'signed_inputs_sha256':before,'clocks':[0,380],'same_probe_binary':True,
+              'signed_inputs_sha256':before,'conditions':[{'directory':'clock26','requested_bootarg':0,'expected_core_hz':26000000,
+                             'kernel_args':reports[0]['kernel_args']},
+                            {'directory':'clock380','requested_bootarg':380,'expected_core_hz':'verify inherited MMPLL actualHz',
+                             'kernel_args':reports[1]['kernel_args']}],
+              'same_probe_binary_between_conditions':True,
+              'reference_role':'kernel/Data and reduced bootargs only; new timing probe/addon/trust intentionally differ from old reference',
+              'reference_payload_sha256':sha(a.reference_payload),
+              'source_dirty':bool(subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True)),
               'same_kernel_data_addon_trust':True,'only_bootarg_difference':CLOCK,
               'adt_hashes':[r['adt_sha256'] for r in reports],
               'adt_semantic_comparison':'not performed here; independently verify only random-seed differs',
-              'hardware_tested':False,'macos_generation_success':True}
+              'hardware_tested':False,'packaging_commands_success':True,'generation_platform':sys.platform}
     (a.out/'pair.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print('PASS fixed-input pair; actual active clocks, ADT semantic diff and GPU correctness still require verification')
 

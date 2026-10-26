@@ -25,3 +25,15 @@ for ref in ('-v',reference+' sheng-gpu-addon=1',reference+' '+('x'*1001)):
     except ValueError:pass
     else:raise RuntimeError('missed invalid reference')
 print('PASS actual pair planning,1000-byte cap, duplicate/nonclock drift and5 artifact hashes')
+
+# Reference intentionally contributes only kernel/Data/args, not prior untimed probe.
+no_clock=reference.replace(' a04br3-gpu-clock=380','')
+assert m['paired_arguments'](no_clock,[],380)[0][-1]=='a04br3-gpu-clock=380'
+for bad in (dict(r,kernel_args=no_clock),dict(r,kernel_args=l['kernel_args']),
+            dict(r,kernel_args=reference+' x='+('a'*1001))):
+    try:m['verify_pair'](l,bad)
+    except ValueError:pass
+    else:raise RuntimeError('missed missing/swapped/overlength generated clock')
+try:m['paired_arguments'](reference,'bad string',0)
+except ValueError:pass
+else:raise RuntimeError('missed invalid board args type')

@@ -127,9 +127,9 @@ static int bufferRowsProbe(VkDevice device, VkQueue queue, uint32_t family,
     (unsigned long long)brElapsedUs(submitStart,submitEnd),
     (unsigned long long)brElapsedUs(waitStart,waitEnd),
     (unsigned long long)brElapsedUs(validateStart,validateEnd),clockOK);
-  probe_line("vk buffer-rows host-us: flush=%llu invalidate=%llu; phases exclude allocation/pool/fence/setup/log gaps",
+  probe_line("vk buffer-rows single-shot cache-us: flush=%llu invalidate=%llu clock=%d; excludes setup/log gaps",
     (unsigned long long)brElapsedUs(flushStart,flushEnd),
-    (unsigned long long)brElapsedUs(invalidateStart,invalidateEnd));
+    (unsigned long long)brElapsedUs(invalidateStart,invalidateEnd),clockOK);
 done:
   if(fence)p_vkDestroyFence(device,fence,NULL);
   if(pool)p_vkDestroyCommandPool(device,pool,NULL);
