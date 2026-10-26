@@ -88,7 +88,7 @@ for round in $(seq 1 "$ROUNDS"); do
     local log=$RUN/uart.log stage=none
     [ -s "$log" ] || { echo "stage: no UART output" > "$RUN/stage.txt"; return; }
     grep -aqE 'A04BR3 SEC: (test cycle|RTC fastboot)' "$log" && stage=sec
-    grep -aqE 'A04BR3TestCycleDxe: fastboot flag|A04BR3 recovery: (RTC verified;|DXE RTC unverified)' "$log" && stage=dxe
+    grep -aqE '^Loading driver at 0x[[:xdigit:]]+ EntryPoint=0x[[:xdigit:]]+ |A04BR3TestCycleDxe: fastboot flag|A04BR3 recovery: (RTC verified;|DXE RTC unverified)' "$log" && stage=dxe
     grep -aqE 'no ExitBootServices within|A04BR3 recovery: [0-9]+ s firmware deadline; WDT feeding stopped' "$log" && stage=firmware-timeout
     grep -aqE 'A04BR3TestCycleDxe: ExitBootServices|A04BR3 recovery: EBS,' "$log" && stage=exit-boot-services
     grep -aq 'a04br3-autoreset: fastboot flag' "$log" && stage=bsd_init
@@ -98,6 +98,7 @@ for round in $(seq 1 "$ROUNDS"); do
       # Return to fastboot is recorded separately by the actual polling loop.
       grep -am1 'A04BR3 RECOVERY SMOKE:' "$log" | sed 's/^/smoke observed: /'
       grep -a 'A04BR3 recovery:' "$log" | tail -5 | sed 's/^/recovery log: /'
+      grep -am1 -E '^Synchronous Exception at|^ASSERT \[ArmCpuDxe\]' "$log" | sed 's/^/first firmware fault: /'
       grep -am1 -E 'panic\(|Panicked|PANIC|Kernel panic' "$log" | sed 's/^/first panic: /'
       grep -a -i 'boot_reason\|reboot to boot loader' "$log" | tail -3 | sed 's/^/lk: /'
     } > "$RUN/stage.txt"
