@@ -22,6 +22,7 @@
 //    drivers/watchdog/mtk_wdt.c and the restart contract of github.com/mouseos/xnu_kernel_benesse_a04br3
 //    (iokit/Kernel/arm/A04BR3Restart.h), which ran on this tablet.
 #include <IOKit/IOLib.h>
+#include <IOKit/IOPlatformExpert.h>
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
@@ -33,6 +34,8 @@ extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), vo
 extern "C" void thread_deallocate(thread_t);
 // Not exported to the IOKit compile context (as in BootReset.c of UniXNU-sheng, which declares ml_io_map_unmappable).
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+// XNU 10063 kern/debug.h (KERNEL_PRIVATE), config/Private.exports.
+extern "C" unsigned panic_active(void);
 // The first bootstrap kernel links a display stub without NativeHidInput.
 extern "C" volatile uint32_t native_hid_input_command __attribute__((weak));
 
@@ -155,16 +158,62 @@ void watchdogArm(unsigned seconds)
   wr(gToprgu, kWdtMode, mode);
 }
 
-void watchdogKick(void) { wr(gToprgu, kWdtRestart, 0x1971); }
+// BEGIN panic-aware watchdog (actual-function host fixture).
+static unsigned gPanicLatched;
+using HaltRestart = int (*)(unsigned);
+static HaltRestart gPreviousHaltRestart;
+
+bool panicObserved(void)
+{
+  if (__atomic_load_n(&gPanicLatched, __ATOMIC_ACQUIRE)) return true;
+  if (!panic_active()) return false;
+  __atomic_store_n(&gPanicLatched, 1u, __ATOMIC_RELEASE);
+  return true;
+}
+
+void watchdogKick(void)
+{
+  if (!panicObserved()) wr(gToprgu, kWdtRestart, 0x1971);
+}
 
 void resetNow(void)
 {
   wr(gToprgu, kWdtRestart, 0x1971);
-  wr(gToprgu, kWdtMode, (rd(gToprgu, kWdtMode) & 0x00ffffa6U) | 0x22000014U);
+  // Keep the armed WDT as a fallback if a panic's software reset fails.
+  // This is one explicit reset request, not a resumption of periodic feeding.
+  const uint32_t fallback = panicObserved() ? 1U : 0U;
+  wr(gToprgu, kWdtMode, (rd(gToprgu, kWdtMode) & 0x00ffffa6U) | 0x22000014U | fallback);
   IODelay(100);
   wr(gToprgu, kWdtSwrst, 0x1209);
   for (;;) { __asm__ volatile("wfi"); }
 }
+
+int boardHaltRestart(unsigned type)
+{
+  // Existing XNU notifications, synchronously before the ordinary panic text.
+  // This branch does no MMIO, allocation, locking, logging or sleeping. Latch
+  // before forwarding: even a stuck previous handler cannot keep us feeding.
+  if (type == kPEPanicBegin || type == kPEPanicEnd ||
+      type == kPEPanicDiagnosticsDone || type == kPEPanicDiagnosticsInProgress ||
+      type == kPEPanicRestartCPU || type == kPEPanicRestartCPUNoCallouts)
+    __atomic_store_n(&gPanicLatched, 1u, __ATOMIC_RELEASE);
+  if (type == kPERestartCPU || type == kPEPanicRestartCPU || type == kPEPanicRestartCPUNoCallouts) {
+    if (gToprgu) resetNow();
+  }
+  HaltRestart previous = __atomic_load_n(&gPreviousHaltRestart, __ATOMIC_ACQUIRE);
+  return previous ? previous(type) : -1;
+}
+
+void installHaltRestart(void)
+{
+  // The board hook runs once; this resident archive is never unloaded. Keep
+  // unrelated platform operations with the handler already registered by XNU.
+  HaltRestart previous = __atomic_load_n(&PE_halt_restart, __ATOMIC_ACQUIRE);
+  if (previous == boardHaltRestart) return;
+  __atomic_store_n(&gPreviousHaltRestart, previous, __ATOMIC_RELEASE);
+  __atomic_store_n(&PE_halt_restart, &boardHaltRestart, __ATOMIC_RELEASE);
+}
+// END panic-aware watchdog
 
 // Screenshot over UART (bring-up): after "A04BR3!SHOT" the frame buffer goes out on UART0 as text lines, one per row:
 // "A04BR3SHOT <row> <crc32 of the row number and the row's raw bytes, hex> <base64 of the run-length coded row>", framed by "A04BR3SHOT BEGIN
@@ -283,6 +332,7 @@ extern "C" void a04br3_autoreset_init(void)
   IOLog("a04br3-autoreset: fastboot flag %s, reset after %u s, watchdog %u s\n", flag ? "set" : "NOT set", seconds,
         kWatchdogSeconds);
   watchdogArm(kWatchdogSeconds);
+  installHaltRestart(); // opt-in only, after TOPRGU/RTC setup; existing XNU panic notifications
   thread_t thread = nullptr;
   if (kernel_thread_start(cycleThread, nullptr, &thread) == KERN_SUCCESS) {
     thread_deallocate(thread);
