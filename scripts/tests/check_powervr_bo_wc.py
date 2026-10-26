@@ -27,6 +27,7 @@ h = r'''
 #include <cerrno>
 #include <initializer_list>
 #include "native_powervr_pte.h"
+#include "native_powervr_bo_stats.h"
 using IOOptionBits=unsigned;using IOByteCount=uint64_t;using vm_offset_t=uintptr_t;
 constexpr unsigned kIODirectionInOut=3,kIOMapWriteCombineCache=4u<<8,
  kIOWriteCombineCache=4,kIOMemoryBufferCacheShift=28,kIOMemoryTypePhysical64=0x20,kIOMemoryMapperNone=1;
@@ -90,7 +91,7 @@ struct Host{int complete(){return 0;}void release(){assert(false);}};
 struct HostMap{void release(){assert(false);}};
 struct native_powervr_bo{
  uint32_t refs;uint64_t size,flags;IOBufferMemoryDescriptor*md;void*cpu;native_powervr_sg*sg;
- uint32_t nents,sgCapacity;NativePowerVRBoView*view;Host*host;bool hostPrepared;HostMap*hostMap;
+ uint32_t nents,sgCapacity;NativePowerVRBoView*view;Host*host;bool hostPrepared;bool liveAccounted,liveHostImport;HostMap*hostMap;
 };
 bool gBoPolicyCaptureEnabled;
 bool gBoMapEnabled;
@@ -108,6 +109,9 @@ h += function('IOReturn NativePowerVRUserClient::clientMemoryForType(') + '\n'
 h += function('class BoDescriptorFlags') + ';\n'
 h += 'native_powervr_bo_policy_record gFirstBoPolicy; uint32_t gFirstBoPolicyState;\n'
 for signature in ('void recordBoAllocation(', 'void copyBoAllocationPolicy('):
+    h += function(signature) + '\n'
+h += 'bool gBoLiveEnabled; native_powervr_bo_live_class gBoLiveNormal, gBoLiveHost;\n'
+for signature in ('void boLivePeak(', 'void boLiveAdd(', 'void boLiveRemove('):
     h += function(signature) + '\n'
 for signature in ('void initBoWcPolicy()',
                   'NativePowerVRBoView *NativePowerVRBoView::withBacking(',

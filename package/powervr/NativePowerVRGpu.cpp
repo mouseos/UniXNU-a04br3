@@ -77,6 +77,7 @@
 #include "stub/devinfo/pvr_device.h"
 #include "native_powervr_internal.h"
 #include "native_powervr_pte.h"
+#include "native_powervr_bo_stats.h"
 #define NATIVE_POWERVR_JOBS_API __attribute__((weak))
 #include "native_powervr_jobs.h"
 #undef min
@@ -592,6 +593,7 @@ struct native_powervr_bo {
   // has no md, no kernel view (cpu is null, so the job layer refuses it as a firmware object) and no user view.
   IOMemoryDescriptor *host;
   bool hostPrepared;
+  bool liveAccounted, liveHostImport; // immutable category once successfully accounted
   IOMemoryMap *hostMap;            // existing, uncached firmware scanout mapping; never wired as normal RAM
 };
 
@@ -630,6 +632,48 @@ void copyBoAllocationPolicy(native_powervr_bo_policy_record *out)
   if (__atomic_load_n(&gFirstBoPolicyState, __ATOMIC_ACQUIRE) == 2) *out = gFirstBoPolicy;
 }
 
+// Diagnostic atomics only: no lock nesting, allocation, I/O, or logging.
+// Publish the gate once before clients can create BOs; never reset live totals.
+bool gBoLiveEnabled;
+native_powervr_bo_live_class gBoLiveNormal, gBoLiveHost;
+void initBoLivePolicy()
+{
+  uint32_t requested = 0;
+  const bool enabled = PE_parse_boot_argn("a04br3-stacklog", &requested, sizeof(requested)) && requested == 1;
+  __atomic_store_n(&gBoLiveEnabled, enabled, __ATOMIC_RELEASE);
+}
+void boLivePeak(uint64_t *peak, uint64_t value)
+{
+  uint64_t old = __atomic_load_n(peak, __ATOMIC_RELAXED);
+  while (old < value && !__atomic_compare_exchange_n(peak, &old, value, true, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+}
+void boLiveAdd(native_powervr_bo *bo, bool hostImport)
+{
+  if (!__atomic_load_n(&gBoLiveEnabled, __ATOMIC_ACQUIRE) || bo->liveAccounted) return;
+  auto *totals = hostImport ? &gBoLiveHost : &gBoLiveNormal;
+  const uint64_t count = __atomic_add_fetch(&totals->count, 1ULL, __ATOMIC_RELAXED);
+  const uint64_t bytes = __atomic_add_fetch(&totals->bytes, bo->size, __ATOMIC_RELAXED);
+  boLivePeak(&totals->peak_count, count);
+  boLivePeak(&totals->peak_bytes, bytes);
+  bo->liveHostImport = hostImport;
+  bo->liveAccounted = true;
+}
+void boLiveRemove(native_powervr_bo *bo)
+{
+  if (!bo->liveAccounted) return; // includes every partially allocated failure
+  auto *totals = bo->liveHostImport ? &gBoLiveHost : &gBoLiveNormal;
+  __atomic_fetch_sub(&totals->bytes, bo->size, __ATOMIC_RELAXED);
+  __atomic_fetch_sub(&totals->count, 1ULL, __ATOMIC_RELAXED);
+  bo->liveAccounted = false;
+}
+void boLiveCopy(native_powervr_bo_live_class *out, const native_powervr_bo_live_class *in)
+{
+  out->count = __atomic_load_n(&in->count, __ATOMIC_RELAXED);
+  out->bytes = __atomic_load_n(&in->bytes, __ATOMIC_RELAXED);
+  out->peak_count = __atomic_load_n(&in->peak_count, __ATOMIC_RELAXED);
+  out->peak_bytes = __atomic_load_n(&in->peak_bytes, __ATOMIC_RELAXED);
+}
+
 void boDestroy(native_powervr_bo *bo)
 {
   if (bo->hostMap) bo->hostMap->release();
@@ -642,6 +686,7 @@ void boDestroy(native_powervr_bo *bo)
     bo->host->release();
   }
   kfreeBytes(bo->sg, sizeof(native_powervr_sg) * bo->sgCapacity);
+  boLiveRemove(bo); // mappings may still retain the descriptor after this object dies
   kfreeBytes(bo, sizeof(*bo));
 }
 // pvr_gem_object_create(): flags are checked by the caller.
@@ -691,6 +736,7 @@ int boCreate(uint64_t size, uint64_t flags, native_powervr_bo **out)
       flush_dcache(static_cast<vm_offset_t>(bo->sg[i].phys + done), static_cast<unsigned>(n), 1);
     }
   __asm__ volatile("dsb sy" ::: "memory");
+  boLiveAdd(bo, false);
   *out = bo;
   return 0;
 }
@@ -829,10 +875,21 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
     offset += length;
   }
   if (report && bo->hostMap) IOLog("powervr: known scanout import: physical segments ready %u\n", bo->nents);
+  boLiveAdd(bo, true);
   *out = bo;
   return 0;
 }
 }  // namespace
+
+extern "C" void native_powervr_bo_live_snapshot(native_powervr_bo_live_record *out)
+{
+  if (!out) return;
+  *out = {};
+  if (!__atomic_load_n(&gBoLiveEnabled, __ATOMIC_ACQUIRE)) return;
+  out->enabled = 1;
+  boLiveCopy(&out->normal, &gBoLiveNormal);
+  boLiveCopy(&out->host_import, &gBoLiveHost);
+}
 
 extern "C" struct native_powervr_bo *native_powervr_bo_get(struct native_powervr_bo *bo)
 {
@@ -1961,6 +2018,7 @@ extern "C" int native_powervr_publish(void)
   }
   initTqLowPolicy();
   initBoWcPolicy();
+  initBoLivePolicy();
   IOLog("powervr: device info: gpu_id %llx, phantoms %u, quirks 47217:%d 48545:%d 49927:%d 51764:%d 62269:%d 63142:%d, "
         "enhancements 35421:%d 42064:%d, VA bits %llu, free list min pages %u, max coeffs %u, CDM local mem %u%s\n",
         static_cast<unsigned long long>(gGpuId), rogue_get_num_phantoms(&gDev), gDev.quirks.has_brn47217, gDev.quirks.has_brn48545,
