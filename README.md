@@ -286,6 +286,35 @@ The exporter includes the complete signed Metal bundle (including its resource s
 bundle at their existing union-mount paths. It refuses output overwrites and validates the original trust-cache pin.
 Check payload capacity and run `scripts/check-a04br3-bootimg.py` after packaging; the boot partition limit is 128 MiB.
 
+### prepared Data を保持する GPU 増分更新
+
+初回は上記のソースビルドで policy・設定・モード sidecar を含む Data を生成します。
+初回 payload の `scratch-data.img` に使われた **準備済みの Data** を固定入力として保存してください。
+`--skip-setup` を使った場合は、その処理後の seed が対象です。端末バックアップの抽出は不要です。
+UUID が同じでも seed の内容が変わると永続 overlay は破棄されるため、増分更新では Data を再ステージしません。
+
+UniXNU checkout から、ソースビルド済み kernel と新しい署名済み probe・Metal 出力を指定します。
+元の pinned trust bundle を使い、前回の結合済み owner trust を渡さないでください。
+
+```sh
+bash device/scripts/a04br3-build-gpu-update.sh \
+  --prepared-data "$STABLE_PREPARED_DATA" --data-volume-uuid "$DATA_VOLUME_UUID" \
+  --kernel "$BUILT_KERNEL" --unique-chip-id "$CHIP_ID" \
+  --probe-dir "$RUNNER_TEMP/powervr-probe" --metal-plugin "$RUNNER_TEMP/powervr-metal" \
+  --trust-base "$RUNNER_TEMP/trustcache-original" --out "$RUNNER_TEMP/gpu-update"
+```
+
+boot 引数は現在の `board.toml` を既定とし、必要なら公式 CLI と同じ
+`--kernel-arg=NAME=VALUE`・`--omit-kernel-arg NAME` を繰り返し指定します。
+旧 payload の引数は FAT 内 `EFI/UniXNU/unixnu.toml` で確認できます。
+`payload.json` は FAT に埋め込まれていないため、紛失した report の再作成や指定は要求しません。
+helper は Data を読み取り専用で mount して実 UUID を照合し、addon/trust の生成と公式
+`unixnu build payload` のみを実行します。kernel の再ビルド、Data への設定再適用、書込みは行いません。
+入力は公式 payload 出力ディレクトリの外に保存し、既存の更新出力は上書きしません。
+出力 `update.json` は指定入力の hash と seed identity の記録であり、過去のビルド報告書や
+バイナリ完全再現性の証明ではありません。公式容量検証後、boot.img の 128 MiB 検証も別途必要です。
+Data に保持する policy・sidecar の変更が必要な場合は新しい初回 seed として扱います。
+
 ### GE8300 の順序保証を再現する
 
 以下は既定オフの実験機能です。通常のクリーンビルドと上の GPU 更新手順を使い、

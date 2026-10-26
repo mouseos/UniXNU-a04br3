@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import re
 import stat
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,6 +34,33 @@ def collect(probe, metal):
     return files
 
 
+def verified_hashes(probe, metal):
+    """Trust current signed inputs, never an unchecked previous build's metadata."""
+    bundle = metal / 'NativePowerVRMetal.bundle'
+    drivers = (probe / 'lib/libvulkan_powervr_mesa.dylib', bundle / 'libvulkan_powervr_mesa.dylib')
+    if drivers[0].read_bytes() != drivers[1].read_bytes():
+        raise SystemExit('Probe and Metal Vulkan copies differ')
+    hashes = set()
+    for directory, entries in (
+            (probe, (('daemon_cdhash', probe / 'powervrprobed'), ('vulkan_cdhash', drivers[0]))),
+            (metal, (('cdhash', bundle / 'NativePowerVRMetal'), ('driver_cdhash', drivers[1])))):
+        metadata = json.loads((directory / 'trust.json').read_text())
+        for key, path in entries:
+            expected = metadata.get(key)
+            if not isinstance(expected, str) or not re.fullmatch('[0-9a-fA-F]{40}', expected):
+                raise SystemExit('Missing or invalid %s in %s/trust.json' % (key, directory))
+            subprocess.run(['codesign', '--verify', '--strict', str(path)], check=True)
+            detail = subprocess.run(['codesign', '--display', '--verbose=4', str(path)],
+                                    capture_output=True, text=True, check=True).stderr
+            actual = re.findall(r'^CDHash=([0-9a-fA-F]{40})$', detail, re.M)
+            if len(actual) != 1 or actual[0].lower() != expected.lower():
+                raise SystemExit('Signed CDHash does not match %s in %s/trust.json' % (key, directory))
+            hashes.add(actual[0].lower())
+    # Verifying only the executable does not check the bundle resource seal.
+    subprocess.run(['codesign', '--verify', '--strict', str(bundle)], check=True)
+    return sorted(hashes)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--probe-dir', type=Path, required=True)
@@ -49,18 +77,10 @@ def main():
     spec = importlib.util.spec_from_file_location('powervr_probe_build', ROOT / 'scripts/build-a04br3-powervr-probe.py')
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
+    hashes = verified_hashes(args.probe_dir, args.metal_plugin)
     files = collect(args.probe_dir, args.metal_plugin)
     blob = helper.pack_addon(files)
     helper.unpack_addon(blob)
-    hashes = set()
-    for directory, keys in ((args.probe_dir, ('daemon_cdhash', 'vulkan_cdhash')),
-                            (args.metal_plugin, ('cdhash', 'driver_cdhash'))):
-        metadata = json.loads((directory / 'trust.json').read_text())
-        for key in keys:
-            value = metadata.get(key)
-            if not isinstance(value, str) or not re.fullmatch('[0-9a-fA-F]{40}', value):
-                parser.error('Missing or invalid %s in %s/trust.json' % (key, directory))
-            hashes.add(value.lower())
     helper.write_trust(args, sorted(hashes))
     args.out.write_bytes(blob)
     print('PASS: GPU addon %s: %d files, %d compressed bytes; Data seed unchanged' % (args.out, len(files), len(blob)))
