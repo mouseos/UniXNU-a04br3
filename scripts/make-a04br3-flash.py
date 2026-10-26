@@ -61,6 +61,9 @@ def main():
         report['inputs']['userdata'] = {'path': str(args.userdata.resolve()), 'sha256': sha256(args.userdata)}
     if args.root_policy:
         policy = json.loads((args.root_policy / 'rootpolicy.json').read_text())
+        policy_offset = policy['userdata_offset']
+        if type(policy_offset) is not int or policy_offset < 0 or policy_offset % sector:
+            raise SystemExit('root policy offset must be a nonnegative sector-aligned integer')
         image = args.root_policy / 'rootpolicy.img'
         if sha256(image) != policy['sha256'] or image.stat().st_size != policy['bytes']:
             raise SystemExit(f'{image} does not match rootpolicy.json')

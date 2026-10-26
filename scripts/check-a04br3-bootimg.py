@@ -24,6 +24,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('image', type=Path)
     data = parser.parse_args().image.read_bytes()
+    if len(data) < 2048:
+        fail('truncated Android boot header')
     if len(data) > LIMIT:
         fail(f'{len(data)} bytes exceed 128 MiB')
     if data[:8] != b'ANDROID!':
@@ -33,6 +35,8 @@ def main():
         fail(f'header page {page} kernel {kernel_addr:#x} ramdisk {ramdisk_addr:#x} tags {tags_addr:#x}')
     if not data[64:64 + 512].startswith(b'bootopt=64S3,32N2,64N2'):
         fail('command line does not start with bootopt=64S3,32N2,64N2')
+    if kernel_size < 512 or page + kernel_size > len(data):
+        fail('truncated kernel payload')
     kernel = data[page:page + kernel_size]
     magic, size = struct.unpack_from('<II', kernel, 0)
     if magic != MTK_MAGIC or kernel[8:14] != b'KERNEL' or size + 512 != kernel_size:
@@ -44,6 +48,8 @@ def main():
     if b'\xd0\x0d\xfe\xed' not in stream.unused_data[:4096]:
         fail('no device tree after the gzip stream')
     ramdisk_offset = page + (kernel_size + page - 1) // page * page
+    if ramdisk_size < 512 or ramdisk_offset + ramdisk_size > len(data):
+        fail('truncated ramdisk payload')
     ramdisk = data[ramdisk_offset:ramdisk_offset + ramdisk_size]
     magic, size = struct.unpack_from('<II', ramdisk, 0)
     if magic != MTK_MAGIC or ramdisk[8:14] != b'ROOTFS' or size + 512 != ramdisk_size or size > 0x08000000:
