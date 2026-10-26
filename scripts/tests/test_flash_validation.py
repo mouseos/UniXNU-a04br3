@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 
@@ -20,7 +21,7 @@ def boot_fixture():
         header[8:8 + len(name)] = name
         return bytes(header) + payload
 
-    kernel = mtk(b'KERNEL', gzip.compress(b'firmware-fixture') + b'\xd0\x0d\xfe\xed')
+    kernel = mtk(b'KERNEL', gzip.compress(b'firmware-fixture', mtime=0) + b'\xd0\x0d\xfe\xed')
     ramdisk = mtk(b'ROOTFS', b'payload-fixture' * 80)
     header = bytearray(2048)
     header[:8] = b'ANDROID!'
@@ -33,6 +34,13 @@ def boot_fixture():
 
 
 class FlashValidationTest(unittest.TestCase):
+    def test_boot_fixture_is_independent_of_wall_time(self):
+        with patch('gzip.time.time', return_value=1700000000):
+            before = boot_fixture()
+        with patch('gzip.time.time', return_value=1900000000):
+            after = boot_fixture()
+        self.assertEqual(before, after)
+
     def run_script(self, name, *args):
         return subprocess.run([sys.executable, str(SCRIPTS / name), *map(str, args)],
                               capture_output=True, text=True)
