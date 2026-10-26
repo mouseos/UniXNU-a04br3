@@ -320,6 +320,16 @@ Rust bridge を変更した場合は `--skip-bridge` を使わず再ビルドし
 Apple3 の互換性 waiver を外し、backend 本来の対応と Apple2 は保持します。
 診断時の `IM main` / `slide` は、backboardd 本体の実際のロード位置です。
 
+メモリpoolの別試験は、plugin生成に `--pool-block-mib 16` を追加します。
+未指定時はpoolサイズを上書きせず、環境変数も未指定なら既定64 MiBです。
+指定できる値は4・8・16・32・64 MiBで、constructorが `NMB_POOL_BLOCK_MIB` を設定します。
+初回はNativeMetalの `0008-optional-memory-pool-size.patch` を含むRust bridgeが必要です。
+実際のblockサイズはdeviceの割当上限にも制限されます。小さいblockはpoolの余剰領域を減らせる一方、
+blockの半分を超える要求をdedicated allocationにする閾値も下がります（64 MiBでは32 MiB超、
+16 MiBでは8 MiB超）。そのため専用割当の個数や管理コストが増える可能性があります。
+これは独立した既定未変更の試験であり、実機のメモリ削減やUI改善は未確認です。
+builder検証は `python3 scripts/tests/check_powervr_metal_diagnostics.py` で実行できます。
+
 R32_UINT の単体試験通過は、Metal UI や XR 二平面形式の動作成功を意味しません。
 画面の確認は framebuffer と実際の present/retire を使い、shader 作成成功だけで完了扱いしません。
 この機種では CPU 描画の最初の画面まで起動後約13分かかった例があるため、

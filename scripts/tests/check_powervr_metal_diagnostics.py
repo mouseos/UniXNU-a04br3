@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Actual Metal wrapper command/constructor lifecycle; no Apple build or GPU."""
 from pathlib import Path
-import itertools, os, runpy, shutil, subprocess, sys, tempfile
+import contextlib, io, itertools, os, runpy, shutil, subprocess, sys, tempfile
 from unittest.mock import patch
 R=Path(__file__).resolve().parents[2]
 module=runpy.run_path(str(R/'scripts/build-a04br3-metal-plugin.py'))
@@ -27,13 +27,30 @@ with tempfile.TemporaryDirectory(prefix='pvr-metal-flags-') as t:
  board=root/'package/powervr/user/NativePowerVRMetalBoard.mm';board.parent.mkdir(parents=True);board.write_text('// board unchanged\n')
  library=root/'driver.dylib';library.write_bytes(b'fixture')
  out=root/'out'/'plugin';main.__globals__['ROOT']=root
- for bits in itertools.product((False,True),repeat=len(flags)):
+ # Keep the full independent flag matrix with no pool override. Then exercise
+ # every accepted pool size both alone and with all flags, including exact 16.
+ cases=[(bits,None) for bits in itertools.product((False,True),repeat=len(flags))]
+ cases += [(bits,pool) for bits in ((False,)*len(flags),(True,)*len(flags)) for pool in (4,8,16,32,64)]
+ cases += [((False,)*(len(flags)-1)+(True,),16)] # async + pool16 + skip-bridge
+ cases += [((False,)*len(flags),None)] # stale pool constructor must not be reused
+ for bits,pool in cases:
   skip=bool(sum(bits)%2);seen=[]
   argv=['metal','--vulkan',str(library),'--out',str(out),*[f for f,b in zip(flags,bits) if b],*(['--skip-bridge'] if skip else [])]
+  if pool is not None:argv += ['--pool-block-mib',str(pool)]
   def generic(command,check):
    assert check;seen.append(command)
    sources=[Path(command[i+1]) for i,v in enumerate(command) if v=='--board-source']
-   assert sources[0]==board and len(sources)==1+sum(bits)
+   assert sources[0]==board and len(sources)==1+sum(bits)+int(pool is not None)
+   policy=[p for p in sources if p.name.endswith('.pool-size-enable.mm')]
+   if pool is None:
+    assert not policy and all('NMB_POOL_BLOCK_MIB' not in p.read_text() for p in sources)
+   else:
+    assert len(policy)==1
+    assert policy[0].read_text()==(
+     '#include <stdlib.h>\n'
+     '__attribute__((constructor)) static void a04br3_pool_size_enable(void) {\n'
+     f'  setenv("NMB_POOL_BLOCK_MIB", "{pool}", 1);\n'
+     '}\n')
    assert command.count('--skip-bridge')==int(skip)
    assert command[command.index('--vulkan-driver')+1]==str(library.resolve())
    assert '--portable-sha2' in command
@@ -46,11 +63,33 @@ with tempfile.TemporaryDirectory(prefix='pvr-metal-flags-') as t:
    text='\n'.join(p.read_text() for p in sources[1:])+'\n#include <assert.h>\n#include <string.h>\nint main(void){\n'
    for var,on in zip(variables,bits):
     text+=f'assert(!strcmp(getenv("{var}"),"'+('1' if on else 'external')+'"));\n'
+   if pool is None:
+    text+='if(getenv("EXPECT_POOL_INHERITED"))assert(!strcmp(getenv("NMB_POOL_BLOCK_MIB"),"external"));else assert(!getenv("NMB_POOL_BLOCK_MIB"));\n'
+   else:
+    text+=f'assert(!strcmp(getenv("NMB_POOL_BLOCK_MIB"),"{pool}"));\n'
    text+='}\n';src=root/'constructors.c';src.write_text('#include <stdlib.h>\n'+text)
    real_run(['cc','-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror',str(src),'-o',str(root/'ctor')],check=True)
    env=dict(os.environ);env.update({v:'external' for v in variables})
+   env.pop('EXPECT_POOL_INHERITED',None)
+   if pool is None:env.pop('NMB_POOL_BLOCK_MIB',None)
+   else:env['NMB_POOL_BLOCK_MIB']='external' # explicit constructor overwrites it
    real_run([str(root/'ctor')],check=True,env=env)
+   if pool is None:
+    env.update(NMB_POOL_BLOCK_MIB='external',EXPECT_POOL_INHERITED='1')
+    real_run([str(root/'ctor')],check=True,env=env)
   with patch.object(sys,'argv',argv),patch('subprocess.run',side_effect=generic):main()
   assert len(seen)==1
+ # Reject at argument parsing, before generated inputs or the generic build.
+ invalid=([],['0'],['-1'],['3'],['12'],['128'],['16x'],['16.0'],[''],['18446744073709551616'])
+ for value in invalid:
+  before={p.name:p.read_bytes() for p in out.parent.glob('*.mm')}
+  errors=io.StringIO()
+  with patch.object(sys,'argv',['metal','--vulkan',str(library),'--out',str(out),'--pool-block-mib',*value]),patch('subprocess.run') as build,contextlib.redirect_stderr(errors):
+   try:main()
+   except SystemExit as error:assert error.code==2
+   else:raise AssertionError(f'invalid pool value accepted: {value}')
+   build.assert_not_called()
+  assert '--pool-block-mib' in errors.getvalue()
+  assert before=={p.name:p.read_bytes() for p in out.parent.glob('*.mm')}
  assert board.read_text()=='// board unchanged\n'
-print('PASS actual Metal command preparation: 256 independent flag combinations, exact constructors/env=1 only when selected, OUT cleanup survival, stale siblings unused, skip-bridge preserved, strict board async gate; no GPU/build execution')
+print('PASS actual Metal command preparation: 256 independent flag combinations; all 5 pool sizes alone/combined, exact pool16 constructor, pool16+async+skip-bridge, default absent/inherited unchanged, stale pool input unused, 10 invalid pool forms rejected before generation/build; OUT cleanup survival, skip-bridge preserved, strict board async gate; no GPU/build execution')
