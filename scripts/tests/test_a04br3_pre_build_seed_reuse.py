@@ -20,13 +20,16 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None):
+def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None, schema=2):
     with tempfile.TemporaryDirectory(prefix='pre-build-reuse-') as directory:
         root = Path(directory)
         work, temporary, device, tools = [root / p for p in ('work', 'temp', 'device', 'bin')]
         for path in (work, temporary, device, tools):
             path.mkdir()
-        tree = work / 'out/a04br3/tree'
+        output = work / 'custom output/a04br3'
+        if schema == 2:
+            output /= 'ipados-17.7.11-21H461/a04br3'
+        tree = output / 'tree'
         (tree / 'scripts/data').mkdir(parents=True)
         (tree / 'scripts/data/gpu-metal-vulkan-inputs.json').write_text(json.dumps({'translator': {'commit': 'test-pin'}}))
         (tree / '.cache/gpu-reference/metal2vulkan/.git').mkdir(parents=True)
@@ -51,6 +54,7 @@ def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_gr
         executable(work / 'unixnu', '''#!/bin/bash
 set -eu
 printf 'unixnu %s uuid=%s\n' "$*" "${XNU_OWNER_DATA_VOLUME_UUID:-unset}" >> "$MOCK_LOG"
+if [ "$1" = status ]; then "$MOCK_PYTHON" -c 'import json,os;print(json.dumps({"output":os.environ["MOCK_OUTPUT"]}))'; fi
 if [ "$1" = ipsw ]; then echo "$MOCK_DMG"; fi
 if [ "$1" = build ]; then test "$XNU_OWNER_DATA_VOLUME_UUID" = "$MOCK_UUID"; fi
 ''')
@@ -101,7 +105,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
 ''')
         env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
                    DEVICE_DIR=str(device), RUNNER_TEMP=str(temporary), MOCK_LOG=str(log),
-                   MOCK_DMG=str(dmg), MOCK_UUID=UUID, MOCK_ACTUAL_UUID='87654321-1234-5678-9ABC-123456789ABC' if mismatch else UUID, MOCK_PYTHON=sys.executable,
+                   MOCK_OUTPUT=str(output), MOCK_DMG=str(dmg), MOCK_UUID=UUID, MOCK_ACTUAL_UUID='87654321-1234-5678-9ABC-123456789ABC' if mismatch else UUID, MOCK_PYTHON=sys.executable,
                    GITHUB_ENV=str(root / 'github-env'), A04BR3_POWERVR_PROBE='1' if probe else '0',
                    A04BR3_POWERVR_VULKAN='1', A04BR3_POWERVR_METAL='1' if metal else '0',
                    MOCK_FAIL_SEED='1' if fail_seed else '0', MOCK_FAIL_GROW='1' if fail_grow else '0', XNU_OWNER_DATA_VOLUME_UUID='stale')
@@ -156,7 +160,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
                     assert (temporary / 'data-32.dbr').read_bytes() == previous_baseline
             else:
                 assert calls.count('unixnu build kernel') == 1, calls
-                assert 'unixnu build kernel uuid=' + UUID in calls, calls
+                assert 'unixnu build kernel -D ' + str(device) + ' uuid=' + UUID in calls, calls
                 for required in ('build-a04br3-trust-cache.py', 'build-pvr-darwin.py',
                                  'build-a04br3-powervr-probe.py', 'a04br3-seed-powervr-probe.py'):
                     assert required in calls, calls
@@ -261,6 +265,7 @@ def test_actual_staging_identity():
 
 def main():
     test_actual_staging_identity()
+    run_case(False, schema=1)
     run_case(False, roa_color='1')
     run_case(True, roa_color='1')
     run_case(True, roa_color='0')

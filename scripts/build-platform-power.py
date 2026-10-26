@@ -12,6 +12,7 @@ reads is linked from the IPSW cache of the unixnu driver.
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -51,7 +52,9 @@ if not reference.is_file():
 # The contract audit reads the original kernelcache from .cache/firmware; take it from the IPSW cache of the driver.
 original = ROOT / '.cache/firmware/kernelcache.macho/kernelcache.release.ipad7.decompressed'
 if not original.exists():
-    cached = [path for path in ROOT.parents[1].glob('ipsw/*/kernelcache.decompressed')
+    # The kernel driver exports its resolved --out root, independent of schema depth.
+    cache_root = Path(os.environ['UNIXNU_OUT']) if os.environ.get('UNIXNU_OUT') else ROOT.parents[1]
+    cached = [path for path in cache_root.glob('ipsw/*/kernelcache.decompressed')
               if hashlib.sha256(path.read_bytes()).hexdigest() == ORIGINAL_KERNELCACHE_SHA256]
     require(cached, 'The original kernelcache is not in the IPSW cache; run "unixnu ipsw fetch"')
     original.parent.mkdir(parents=True, exist_ok=True)

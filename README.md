@@ -1,3 +1,34 @@
+## Schema2 migration WIP
+
+This branch uses the official schema2 resolver with the pinned MT8167 common feed,
+DTS hardware description and `porting.toml`. See `migration/inputs.toml` for the
+paired tools revision and retained source inputs. The historical instructions
+below describe schema1 checkpoints; use this sequence for this WIP:
+
+```sh
+# Run from the paired UniXNU checkout, after recursively checking out this device.
+export DEVICE_DIR=/absolute/path/to/UniXNU-a04br3
+export UNIXNU_DEVICE="$DEVICE_DIR"
+export UNIXNU_OUT=/absolute/path/to/build-output
+./unixnu defconfig a04br3_defconfig
+./unixnu fetch
+# macOS with the Xcode iPhoneOS SDK and documented build prerequisites:
+export RUNNER_TEMP=/absolute/path/to/build-inputs
+mkdir -p "$RUNNER_TEMP"
+bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
+./unixnu build kernel
+./unixnu build payload --trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr"
+```
+
+The payload requires the existing `UNIXNU_UNIQUE_CHIP_ID` input. No device backup
+or calibration files are used. GPU publication remains a separate opt-in profile.
+Prebuild's first kernel pass/prelink is required on a clean tree: the subsequent
+kernel step builds the original PMGR/display bindings from that reference. Do not
+remove either pass based on compile-record availability alone. CLI status selects
+the namespaced tree, and archive builders use the resolved `UNIXNU_OUT` cache root.
+Controller/host checks do not establish SDK link or hardware qualification. Firmware
+and boot-image generation retain the pinned UEFI and board settings documented below.
+
 # UniXNU-a04br3
 
 UniXNU device support for the Benesse TAB-A04-BR3 (a04br3), a tablet with the MediaTek MT8167 SoC

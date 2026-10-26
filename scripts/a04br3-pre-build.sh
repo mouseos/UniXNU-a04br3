@@ -84,7 +84,9 @@ case "${A04BR3_REUSE_DATA_SEED:-0}" in
 esac
 python3 "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$PWD" --out "$RUNNER_TEMP/trustcache"
 ./unixnu tree -D "$DEVICE_DIR"
-TREE=$PWD/out/a04br3/tree
+# The CLI owns the schema1/schema2 output layout and honors UNIXNU_OUT.
+TREE=$(./unixnu status --json -D "$DEVICE_DIR" | python3 -c 'import json,sys;from pathlib import Path;print(Path(json.load(sys.stdin)["output"])/"tree")')
+test -d "$TREE/scripts"
 MOUNT=
 SEED_SCRATCH=
 SEED_INPUT="$RUNNER_TEMP/data.dbr"
@@ -178,4 +180,4 @@ if [ -n "$SEED_SCRATCH" ]; then
   rm -rf "$SEED_SCRATCH"
   trap - EXIT
 fi
-./unixnu build kernel
+./unixnu build kernel -D "$DEVICE_DIR"

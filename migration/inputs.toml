@@ -1,9 +1,9 @@
 schema_version = 1
 canonical_base = "b33e353"
-canonical_device = "c93bf77"
+canonical_device = "27dbe616219fbcb0b816de170b9032d6aaf1da3f"
 metal_revision = "f1623c35d29ce0236ea4dfeae1f3c44a096cde89"
 hid_revision = "8fc6d05403207795b48940d0514cf594219e71d6"
 uefi_recovery_revision = "8dbdd50713b8fbb79a5f5837a032b46a4a939723"
 qualification = "host migration candidate; no schema2 runtime qualification"
-paired_tools_revision = "706128f085513f1d438e03a25cf4e092f132d665"
+paired_tools_revision = "b76746395b55206c28c91f5097bf52be5891d2f4"
 legacy_helper_source_commit = "b33e35393f7b9ff69971e5327488a6e5307524c1"
