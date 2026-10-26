@@ -319,7 +319,9 @@ struct PacketRecord {
 };
 // Four UI mip clears are followed by four copies; retain both halves.
 // Still bounded and gated by the default-off a04br3-gpu-packet option.
-constexpr uint32_t kPacketRecords = 8;
+// The Vulkan probe consumes eight packets before backboardd starts. Keep a
+// bounded window that also includes the first compositor submissions.
+constexpr uint32_t kPacketRecords = 32;
 PacketRecord gPackets[kPacketRecords];
 uint32_t gPacketCount, gPacketPrinted; // gJobs.lock
 static_assert(sizeof(((rogue_fwif_frag_regs *)nullptr)->pbe_word) == 8 * 3 * sizeof(uint64_t), "FRAG PBE bounds");
