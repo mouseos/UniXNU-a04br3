@@ -73,6 +73,10 @@ DATA_UUID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["vol
 test -n "$DATA_UUID"
 echo "XNU_OWNER_DATA_VOLUME_UUID=$DATA_UUID" >> "${GITHUB_ENV:-/dev/null}"
 export XNU_OWNER_DATA_VOLUME_UUID=$DATA_UUID
+# Also write it to a file that SSH rebuild scripts source, because a kept-alive SSH runner
+# does not inherit GITHUB_ENV exports from the original pre_build step.
+mkdir -p "$RUNNER_TEMP"
+echo "export XNU_OWNER_DATA_VOLUME_UUID=$DATA_UUID" > "$RUNNER_TEMP/a04br3-data.env"
 echo "Data seed volume UUID $DATA_UUID"
 ls -l "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/data.dbr"
 # First kernel pass: the PMGR bridge (scripts/build-platform-power.py) and the display (scripts/build-a04br3-legacy-display.py)
