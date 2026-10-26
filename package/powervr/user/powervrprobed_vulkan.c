@@ -137,13 +137,49 @@ static void triangleCoverageGrid(const volatile uint8_t *pixels, const uint8_t f
   }
 }
 
+// Shared strict coverage verdict for direct and copied pixels; neither result replaces the other.
+static int triangleReadbackCheck(const volatile uint8_t *pixels, const char *mode)
+{
+  const uint8_t foreground[4] = {255, 0, 255, 255};
+  const uint8_t backgroundColor[4] = {0x22, 0x44, 0x66, 0xff};
+  char detail[256];
+  uint32_t checked[2] = {0, 0}, matched[2] = {0, 0}, first = UINT32_MAX;
+  // Pixel centers: (x+.5,y+.5). Only the diagonal x+y=63 lies exactly
+  // on an edge; skip its 48 pixels to avoid dependence on edge tie-breaking.
+  for (uint32_t y = 0; y < kHeight; y++) {
+    for (uint32_t x = 0; x < kWidth; x++) {
+      if (x >= 8 && y >= 8 && x + y == 63) continue;
+      const int inside = x >= 8 && y >= 8 && x + y < 63;
+      const uint8_t *expected = inside ? foreground : backgroundColor;
+      const uint32_t i = y * kWidth + x;
+      int same = 1;
+      for (uint32_t c = 0; c < 4; c++) same &= pixels[4 * i + c] == expected[c];
+      checked[inside]++;
+      matched[inside] += same;
+      if (!same && first == UINT32_MAX) first = i;
+    }
+  }
+  if (first != UINT32_MAX) {
+    const uint32_t x = first % kWidth, y = first / kWidth;
+    const uint8_t *expected = x >= 8 && y >= 8 && x + y < 63 ? foreground : backgroundColor;
+    probe_line("vk %s triangle mismatch (%u,%u): %02x%02x%02x%02x expected %02x%02x%02x%02x", mode, x, y,
+        pixels[4 * first], pixels[4 * first + 1], pixels[4 * first + 2], pixels[4 * first + 3],
+        expected[0], expected[1], expected[2], expected[3]);
+  }
+  snprintf(detail, sizeof detail, "%s %u/%u pixels = ff00ffff", mode, matched[1], checked[1]);
+  const int insideOK = vkCheck("triangle interior readback", checked[1] != 0 && matched[1] == checked[1], detail);
+  snprintf(detail, sizeof detail, "%s %u/%u pixels = 224466ff; 48 edge pixels excluded", mode, matched[0], checked[0]);
+  const int backgroundOK = vkCheck("triangle background readback", checked[0] != 0 && matched[0] == checked[0], detail);
+  return insideOK && backgroundOK;
+}
+
 // Vertex + fragment execution, separate from transfer-only clear/copy.
 // Geometry has no vertex buffers or descriptors; direct readback does not use TQ.
-struct TriangleDirectReadback { VkDeviceSize offset, rowPitch; int clearOnly; };
+struct TriangleDirectReadback { VkDeviceSize offset, rowPitch; int clearOnly; int completed; };
 
 static int triangleProbeReadback(VkDevice device, VkQueue queue, VkCommandPool pool, VkImage image, VkBuffer buffer,
                                  VkDeviceMemory bufferMemory, void *mapped, int coherent,
-                                 const struct TriangleDirectReadback *direct)
+                                 struct TriangleDirectReadback *direct)
 {
   const int clearOnly = direct && direct->clearOnly;
   const char *mode = clearOnly ? "linear-clear-direct" : direct ? "linear-direct" : "optimal-copy";
@@ -274,6 +310,7 @@ static int triangleProbeReadback(VkDevice device, VkQueue queue, VkCommandPool p
   const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cmd};
   TRI_STEP("vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
   TRI_STEP("vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  if (direct) direct->completed = 1;
   if (direct || !coherent) {
     const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
         .memory = bufferMemory, .offset = 0, .size = VK_WHOLE_SIZE};
@@ -300,34 +337,7 @@ static int triangleProbeReadback(VkDevice device, VkQueue queue, VkCommandPool p
     ok = vkCheck("linear-clear-direct readback", matched == kWidth * kHeight, detail);
     goto cleanup;
   }
-  uint32_t checked[2] = {0, 0}, matched[2] = {0, 0}, first = UINT32_MAX;
-  // Pixel centers: (x+.5,y+.5). Only the diagonal x+y=63 lies exactly
-  // on an edge; skip its 48 pixels to avoid dependence on edge tie-breaking.
-  for (uint32_t y = 0; y < kHeight; y++) {
-    for (uint32_t x = 0; x < kWidth; x++) {
-      if (x >= 8 && y >= 8 && x + y == 63) continue;
-      const int inside = x >= 8 && y >= 8 && x + y < 63;
-      const uint8_t *expected = inside ? foreground : backgroundColor;
-      const uint32_t i = y * kWidth + x;
-      int same = 1;
-      for (uint32_t c = 0; c < 4; c++) same &= pixels[4 * i + c] == expected[c];
-      checked[inside]++;
-      matched[inside] += same;
-      if (!same && first == UINT32_MAX) first = i;
-    }
-  }
-  if (first != UINT32_MAX) {
-    const uint32_t x = first % kWidth, y = first / kWidth;
-    const uint8_t *expected = x >= 8 && y >= 8 && x + y < 63 ? foreground : backgroundColor;
-    probe_line("vk triangle mismatch (%u,%u): %02x%02x%02x%02x expected %02x%02x%02x%02x", x, y,
-        pixels[4 * first], pixels[4 * first + 1], pixels[4 * first + 2], pixels[4 * first + 3],
-        expected[0], expected[1], expected[2], expected[3]);
-  }
-  snprintf(detail, sizeof detail, "%u/%u pixels = ff00ffff", matched[1], checked[1]);
-  const int insideOK = vkCheck("triangle interior readback", checked[1] != 0 && matched[1] == checked[1], detail);
-  snprintf(detail, sizeof detail, "%u/%u pixels = 224466ff; 48 edge pixels excluded", matched[0], checked[0]);
-  const int backgroundOK = vkCheck("triangle background readback", checked[0] != 0 && matched[0] == checked[0], detail);
-  ok = insideOK && backgroundOK;
+  ok = triangleReadbackCheck(pixels, mode);
 cleanup:
   // As in the transfer probe, ensure pending commands no longer use resources on error.
   p_vkDeviceWaitIdle(device);
@@ -350,7 +360,81 @@ static int triangleProbe(VkDevice device, VkQueue queue, VkCommandPool pool, VkI
   return triangleProbeReadback(device, queue, pool, image, buffer, bufferMemory, mapped, coherent, NULL);
 }
 
-// Optional isolation of rendering from TQ readback: no GPU clear or image-to-buffer copy on this image.
+// The source is GENERAL after the direct submission. No clear or draw is recorded here.
+static int linearTriangleCopyReadback(VkDevice device, VkQueue queue, VkCommandPool pool, VkImage image,
+                                      const VkPhysicalDeviceMemoryProperties *memory)
+{
+  VkBuffer buffer = VK_NULL_HANDLE;
+  VkDeviceMemory allocation = VK_NULL_HANDLE;
+  VkFence fence = VK_NULL_HANDLE;
+  void *mapped = NULL;
+  int ok = 0;
+  probe_line("vk triangle mode linear-copy begin (same linear draw)");
+#define COPY_STEP(name, expression) do { \
+  if (!vkStep("linear-copy " name, (expression), NULL)) goto cleanup; \
+} while (0)
+  const VkBufferCreateInfo info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+      .size = kWidth * kHeight * 4, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+  COPY_STEP("vkCreateBuffer", p_vkCreateBuffer(device, &info, NULL, &buffer));
+  VkMemoryRequirements need;
+  p_vkGetBufferMemoryRequirements(device, buffer, &need);
+  uint32_t type = memoryType(memory, need.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  const int coherent = type != UINT32_MAX;
+  if (!coherent) type = memoryType(memory, need.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+  if (!vkCheck("linear-copy host-visible memory", type != UINT32_MAX, NULL)) goto cleanup;
+  const VkMemoryAllocateInfo allocate = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .allocationSize = need.size, .memoryTypeIndex = type};
+  COPY_STEP("vkAllocateMemory", p_vkAllocateMemory(device, &allocate, NULL, &allocation));
+  COPY_STEP("vkBindBufferMemory", p_vkBindBufferMemory(device, buffer, allocation, 0));
+  COPY_STEP("vkMapMemory", p_vkMapMemory(device, allocation, 0, VK_WHOLE_SIZE, 0, &mapped));
+  VkCommandBuffer cmd = VK_NULL_HANDLE;
+  const VkCommandBufferAllocateInfo cmdInfo = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
+  COPY_STEP("vkAllocateCommandBuffers", p_vkAllocateCommandBuffers(device, &cmdInfo, &cmd));
+  const VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+      .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+  COPY_STEP("vkBeginCommandBuffer", p_vkBeginCommandBuffer(cmd, &begin));
+  // Retain the original color-write dependency across submissions, after the CPU read.
+  imageBarrier(cmd, image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_HOST_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+               VK_PIPELINE_STAGE_TRANSFER_BIT);
+  const VkBufferImageCopy region = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+      .imageExtent = {kWidth, kHeight, 1}};
+  p_vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+  const VkBufferMemoryBarrier toHost = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+      .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .buffer = buffer, .offset = 0, .size = VK_WHOLE_SIZE};
+  p_vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                        0, 0, NULL, 1, &toHost, 0, NULL);
+  COPY_STEP("vkEndCommandBuffer", p_vkEndCommandBuffer(cmd));
+  const VkFenceCreateInfo fenceInfo = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  COPY_STEP("vkCreateFence", p_vkCreateFence(device, &fenceInfo, NULL, &fence));
+  const VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+      .commandBufferCount = 1, .pCommandBuffers = &cmd};
+  COPY_STEP("vkQueueSubmit", p_vkQueueSubmit(queue, 1, &submit, fence));
+  COPY_STEP("vkWaitForFences", p_vkWaitForFences(device, 1, &fence, VK_TRUE, 10000000000ull));
+  if (!coherent) {
+    const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+        .memory = allocation, .offset = 0, .size = VK_WHOLE_SIZE};
+    COPY_STEP("vkInvalidateMappedMemoryRanges", p_vkInvalidateMappedMemoryRanges(device, 1, &whole));
+  }
+  ok = triangleReadbackCheck(mapped, "linear-copy");
+cleanup:
+  p_vkDeviceWaitIdle(device);
+  if (fence) p_vkDestroyFence(device, fence, NULL);
+  if (mapped) p_vkUnmapMemory(device, allocation);
+  if (buffer) p_vkDestroyBuffer(device, buffer, NULL);
+  if (allocation) p_vkFreeMemory(device, allocation, NULL);
+#undef COPY_STEP
+  probe_line("vk triangle mode linear-copy end %s", ok ? "PASS" : "FAIL");
+  return ok;
+}
+
+// Direct readback is checked first; a separate copy then reads the same completed draw without rendering again.
 static int linearTriangleProbe(VkDevice device, VkQueue queue, VkCommandPool pool,
                                const VkPhysicalDeviceMemoryProperties *memory, VkFormatFeatureFlags features, int clearOnly)
 {
@@ -365,7 +449,8 @@ static int linearTriangleProbe(VkDevice device, VkQueue queue, VkCommandPool poo
   int ok = 0;
   const VkImageCreateInfo info = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
       .format = VK_FORMAT_R8G8B8A8_UNORM, .extent = {kWidth, kHeight, 1}, .mipLevels = 1, .arrayLayers = 1,
-      .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_LINEAR, .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+      .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_LINEAR, .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+          (clearOnly ? 0 : VK_IMAGE_USAGE_TRANSFER_SRC_BIT),
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED};
   if (!vkStep("linear vkCreateImage", p_vkCreateImage(device, &info, NULL, &image), NULL)) goto cleanup;
   VkMemoryRequirements need;
@@ -401,8 +486,15 @@ static int linearTriangleProbe(VkDevice device, VkQueue queue, VkCommandPool poo
   const VkMappedMemoryRange whole = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
       .memory = allocation, .offset = 0, .size = VK_WHOLE_SIZE};
   if (!vkStep("linear vkFlushMappedMemoryRanges", p_vkFlushMappedMemoryRanges(device, 1, &whole), NULL)) goto cleanup;
-  const struct TriangleDirectReadback direct = {layout.offset, layout.rowPitch, clearOnly};
+  struct TriangleDirectReadback direct = {layout.offset, layout.rowPitch, clearOnly, 0};
   ok = triangleProbeReadback(device, queue, pool, image, VK_NULL_HANDLE, allocation, mapped, coherent, &direct);
+  if (!clearOnly && direct.completed) {
+    // Always run after a completed draw, including a failed direct pixel verdict.
+    const int copyOK = linearTriangleCopyReadback(device, queue, pool, image, memory);
+    probe_line("vk same linear draw comparison: linear-direct %s; linear-copy %s (diagnostic, not a fix)",
+               ok ? "PASS" : "FAIL", copyOK ? "PASS" : "FAIL");
+    ok = ok && copyOK;
+  }
 cleanup:
   if (!ok) probe_line("vk mode %s setup/render FAIL", mode);
   if (mapped) p_vkUnmapMemory(device, allocation);
