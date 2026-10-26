@@ -1482,6 +1482,8 @@ void complete_job_hosts(Job *job)
 
 // Reset notifications (gJobs.lock held): the named job fails and its context becomes faulty when the context is
 // guilty of the reset.
+static bool gFirmwareDumpedAfterReset;
+
 void applyResets(const ResetNote *notes, uint32_t count)
 {
   for (uint32_t n = 0; n < count; n++) {
@@ -1554,6 +1556,11 @@ void completionThread(void *, wait_result_t)
                                   notes[i].reason, notes[i].flags);
     drainPackets();
     drainPtes(dump || nnotes != 0);
+    if (nnotes != 0 && !gFirmwareDumpedAfterReset) {
+      // A reset path without a firmware snapshot leaves the first broken context unidentified: capture once.
+      gFirmwareDumpedAfterReset = true;
+      native_powervr_dump_firmware("after a firmware reset", 1500);
+    }
     list_for_each_entry_safe(j, n, &done, dev_link) {
       list_del(&j->dev_link);
       pvr_job_release(j);

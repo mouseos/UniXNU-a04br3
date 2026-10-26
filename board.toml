@@ -246,6 +246,9 @@ kernel_args = [
   # The PowerVR Metal accelerator (package/powervr/NativePowerVRMetal.cpp): loads IOGPUFamily and publishes the accelerator; the
   # plugin runs its self-test unless the seed selects publish (scripts/a04br3-pre-build.sh A04BR3_POWERVR_METAL_MODE).
   "a04br3-gpu-metal=1",
+  # Bring-up diagnostics: record the CCCB packets and the PTE stream of the first fragments (package/powervr/
+  # NativePowerVRJobs.cpp); a first context fragment drops with fault address=0 while later ones succeed.
+  "a04br3-gpu-packet=1",
   "a04br3-input=1",
   # NativeHidInput registers its touch sink and digitizer collection only with this (UniXNU-tb128fu, UniXNU-qemu).
   "sheng-touch-hid=1",
