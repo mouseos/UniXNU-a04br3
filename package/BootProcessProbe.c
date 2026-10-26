@@ -78,20 +78,29 @@ static int followed_slot(proc_t p) {
  if(follow_pid[1]>0 && pid==follow_pid[1])return 1;
  return 10;
 }
+// A duplicate focus name must not hide its traced slot behind an earlier
+// untraced summary row (e.g. focus4=launchd). Equal trace priorities retain
+// the original first-match order; each process is still captured only once.
+static unsigned capture_slot(proc_t p) {
+ const char *name=proc_best_name(p);unsigned index=10;
+ for(unsigned i=0;i<10;++i) {
+  if(strcmp(name,targets[i]))continue;
+  // Followed pids own these slots. A duplicate name may still use another row.
+  if((i==4 && follow_pid[0]>0) || (i==1 && follow_pid[1]>0))continue;
+  if(index==10 || (!trace_slot[index] && trace_slot[i]))index=i;
+ }
+ if(proc_pid(p)==0)index=9;
+ int followed=followed_slot(p);
+ if(followed<10)index=(unsigned)followed;
+ return index;
+}
 static int selected(proc_t p,void *arg) {
  (void)arg;
- const char *name=proc_best_name(p);
- for(unsigned i=0;i<10;++i)if(!strcmp(name,targets[i]))return 1;
- return proc_pid(p)==0 || followed_slot(p)<10;
+ return capture_slot(p)<10;
 }
 static int capture(proc_t p,void *arg) {
  (void)arg;
- const char *name=proc_best_name(p);unsigned index=10;
- for(unsigned i=0;i<10;++i)if(!strcmp(name,targets[i])){index=i;break;}
- if(proc_pid(p)==0)index=9;
- if(followed_slot(p)<10)index=followed_slot(p);
- // A slot the chain uses belongs to the followed process only (runningboardd/PreBoard would mix their threads into its trace).
- else if((index==4 && follow_pid[0]>0) || (index==1 && follow_pid[1]>0))index=10;
+ const char *name=proc_best_name(p);unsigned index=capture_slot(p);
  if(index==10)return PROC_RETURNED;
  task_t task=proc_task(p);
  if(!task || !task_lock_try(task)) {
