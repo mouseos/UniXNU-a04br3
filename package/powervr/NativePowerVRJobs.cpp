@@ -156,6 +156,8 @@ struct ResetNote {
   uint64_t fault_address, pc_address;
 };
 
+void applyResets(const ResetNote *notes, uint32_t count);
+
 struct JobsDevice {
   pvr_device dev;
   IOLock *lock;          // queued jobs, CCCB writes, HWRT tracking, files, fences
@@ -169,7 +171,10 @@ struct JobsDevice {
   rogue_fwif_fwccb_cmd *fwccb;
   uint32_t fwccbSlots;
   ResetNote resets[kResetNotes];
-  uint32_t resetCount;   // under fwccbLock
+  uint32_t resetCount;   // pending error updates, under fwccbLock
+  ResetNote resetReports[kResetNotes];
+  uint32_t resetReportCount; // bounded diagnostic copies; independent of error delivery
+  uint32_t fwccbActive; // callbacks outside fwccbLock; success must wait for all of them
   uint64_t timeoutAbs;
 };
 JobsDevice gJobs;
@@ -188,9 +193,19 @@ struct pvr_queue {
     pvr_fw_object *fw_obj;
     uint32_t *value;
   } timeline_ufo;
+  uint64_t generation; // host-only queue incarnation; never reused by a later context
   uint32_t seqno;   // job_fence_ctx.seqno: the last done-fence seqno handed out
   bool killed;      // pvr_queue_kill()
 };
+
+namespace {
+uint64_t gQueueGeneration;
+struct RetiredFence {
+  uint64_t fence, generation;
+  uint32_t ctx, job, dm;
+  bool eligible;
+};
+}
 
 // The job part of struct pvr_file (native_powervr_jobs.h).
 struct native_powervr_jobs_file {
@@ -201,6 +216,8 @@ struct native_powervr_jobs_file {
   uint64_t nextFence;
   uint64_t failed[kFailedFences];
   uint32_t failedNext;
+  RetiredFence retired[kFailedFences];
+  uint32_t retiredNext;
 };
 
 // A context of the user-client layer: the context and the handle pvr_context_create() gave it in this file's pvr_file.
@@ -964,6 +981,7 @@ extern "C" struct pvr_queue *pvr_queue_create(struct pvr_context *ctx, enum drm_
   if (ctx_state_size < 0) return static_cast<pvr_queue *>(ERR_PTR(ctx_state_size));
   pvr_queue *queue = static_cast<pvr_queue *>(kzalloc(sizeof(*queue), GFP_KERNEL));
   if (!queue) return static_cast<pvr_queue *>(ERR_PTR(-ENOMEM));
+  queue->generation = __atomic_add_fetch(&gQueueGeneration, 1ULL, __ATOMIC_RELAXED);
   queue->type = type;
   queue->ctx_offset = get_ctx_offset(type);
   queue->ctx = ctx;
@@ -1045,12 +1063,13 @@ void process_fwccb_command(struct pvr_device *pvr_dev, struct rogue_fwif_fwccb_c
   case ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_NOTIFICATION: {
     rogue_fwif_fwccb_cmd_context_reset_data *d = &cmd->cmd_data.cmd_context_reset_notification;
     pvr_dump_context_reset_notification(pvr_dev, d);
-    // Applied to the queued jobs by the completion thread (it takes gJobs.lock, which a submission can hold while it
-    // waits for the KCCB).
+    const ResetNote note = {d->server_common_context_id, d->reset_job_ref, d->reset_reason, d->flags,
+                            d->dm, d->fault_address, d->pc_address};
+    // Submission may hold jobs lock while waiting for KCCB. Callbacks only
+    // publish notes; the verdict arbiter applies them after callbacks return.
     IOLockLock(gJobs.fwccbLock);
-    if (gJobs.resetCount < kResetNotes)
-      gJobs.resets[gJobs.resetCount++] = {d->server_common_context_id, d->reset_job_ref, d->reset_reason, d->flags,
-                                                 d->dm, d->fault_address, d->pc_address};
+    // pvr_fwccb_process reserves one note slot for every in-flight callback.
+    gJobs.resets[gJobs.resetCount++] = note;
     IOLockUnlock(gJobs.fwccbLock);
     break;
   }
@@ -1068,7 +1087,11 @@ extern "C" void pvr_fwccb_process(struct pvr_device *pvr_dev)
   if (!ctrl) return;
   IOLockLock(gJobs.fwccbLock);
   u32 read_offset;
-  while ((read_offset = READ_ONCE(ctrl->read_offset)) != READ_ONCE(ctrl->write_offset)) {
+  uint32_t budget = kResetNotes; // a replenished ring cannot starve completion timeouts
+  while (budget-- && (read_offset = READ_ONCE(ctrl->read_offset)) != READ_ONCE(ctrl->write_offset)) {
+    // Reserve worst-case reset storage before taking a command off the ring.
+    // Leave commands for the arbiter to drain after applying a full batch.
+    if (gJobs.resetCount + gJobs.fwccbActive >= kResetNotes) break;
     if (read_offset >= gJobs.fwccbSlots) {
       native_powervr_log("powervr: jobs: FWCCB read offset %u out of range\n", read_offset);
       break;
@@ -1077,10 +1100,12 @@ extern "C" void pvr_fwccb_process(struct pvr_device *pvr_dev)
     memcpy(&cmd, &gJobs.fwccb[read_offset], sizeof(cmd));
     WRITE_ONCE(ctrl->read_offset, (read_offset + 1) & READ_ONCE(ctrl->wrap_mask));
     wmb();
-    // Drop FWCCB lock while we process command.
+    ++gJobs.fwccbActive;
+    // Drop FWCCB lock while we process command. Success arbitration observes fwccbActive.
     IOLockUnlock(gJobs.fwccbLock);
     process_fwccb_command(pvr_dev, &cmd);
     IOLockLock(gJobs.fwccbLock);
+    --gJobs.fwccbActive;
   }
   IOLockUnlock(gJobs.fwccbLock);
 }
@@ -1247,6 +1272,12 @@ int create_job(native_powervr_jobs_file *file, const native_powervr_job_submit *
     job->id = 0;
     goto err_put_job;
   }
+  IOLockLock(gJobs.lock);
+  native_powervr_jobs_file *owner;
+  list_for_each_entry(owner, &gJobs.files, link)
+    for (auto &r : owner->retired)
+      if (r.job == job->id) r.eligible = false;
+  IOLockUnlock(gJobs.lock);
   job->ctx = pvr_context_lookup(&file->pf, s->ctx->handle);
   if (!job->ctx) {
     err = -EINVAL;
@@ -1454,6 +1485,7 @@ void run_job(Job *job, HwrtTrack *track)
 
 void recordFailed(native_powervr_jobs_file *f, uint64_t fence)
 {
+  for (const auto saved : f->failed) if (saved == fence) return;
   f->failed[f->failedNext % kFailedFences] = fence;
   f->failedNext++;
 }
@@ -1462,6 +1494,25 @@ bool wasFailed(const native_powervr_jobs_file *f, uint64_t fence)
   for (uint32_t i = 0; i < kFailedFences; i++)
     if (f->failed[i] == fence) return true;
   return false;
+}
+
+// The primary queue identifies a live context incarnation without retaining pointers in history.
+uint64_t contextGeneration(const pvr_context *ctx)
+{
+  switch (ctx->type) {
+  case DRM_PVR_CTX_TYPE_RENDER: return ctx->queues.geometry ? ctx->queues.geometry->generation : 0;
+  case DRM_PVR_CTX_TYPE_COMPUTE: return ctx->queues.compute ? ctx->queues.compute->generation : 0;
+  case DRM_PVR_CTX_TYPE_TRANSFER_FRAG: return ctx->queues.transfer ? ctx->queues.transfer->generation : 0;
+  }
+  return 0;
+}
+void rememberRetired(Job *job)
+{
+  auto *f = job->file;
+  if (!f) return;
+  f->retired[f->retiredNext++ % kFailedFences] =
+      {job->fence, contextGeneration(job->ctx), job->ctx->ctx_id, job->id, get_dm_type(job->queue), true};
+  if (job->failed || atomic_read(&job->ctx->faulty)) recordFailed(f, job->fence);
 }
 
 // Both the completion worker and WaitFence can observe a retired UFO. Cache maintenance must happen exactly once,
@@ -1500,7 +1551,16 @@ void applyResets(const ResetNote *notes, uint32_t count)
     // Holding ctx_ids protects against erase/free; no context reference is kept.
     xa_lock(&gJobs.dev.ctx_ids);
     pvr_context *ctx = static_cast<pvr_context *>(xa_load(&gJobs.dev.ctx_ids, r.ctx_id));
+    const uint64_t generation = ctx ? contextGeneration(ctx) : 0;
     if (ctx) atomic_set(&ctx->faulty, 1);
+    // Only an exact, still-unambiguous receipt in this live incarnation is evidence.
+    // A context already destroyed, overwritten history or a reused job ID cannot be attributed.
+    native_powervr_jobs_file *f;
+    list_for_each_entry(f, &gJobs.files, link)
+      for (const auto &receipt : f->retired)
+        if (generation && receipt.eligible && receipt.generation == generation &&
+            receipt.ctx == r.ctx_id && receipt.job == r.job_ref && receipt.dm == r.dm)
+          recordFailed(f, receipt.fence);
     xa_unlock(&gJobs.dev.ctx_ids);
     Job *j;
     list_for_each_entry(j, &gJobs.jobs, dev_link) {
@@ -1511,31 +1571,63 @@ void applyResets(const ResetNote *notes, uint32_t count)
   }
 }
 
+// Lock order: fwccbLock -> jobs try-lock (never wait holding FWCCB). Callbacks (including recursive freelist cleanup)
+// run with neither lock held. A consumer that already removed a FW command remains
+// visible through fwccbActive until its callback has published the reset note.
+// Linux pvr_queue_start() CPU-signals the timeline during recovery to unblock
+// dependencies; UFO arrival alone therefore cannot establish successful execution.
+bool fwccbPendingLocked()
+{
+  return gJobs.fwccbActive ||
+      READ_ONCE(gJobs.fwccbCtl->read_offset) != READ_ONCE(gJobs.fwccbCtl->write_offset);
+}
+// Nonwaiting: WaitFence must never execute a freelist/KCCB callback, nor wait
+// for a callback or lock on a zero-timeout poll. Pending work is not success.
+bool tryLockJobsAfterResets(bool *ready)
+{
+  if (!IOLockTryLock(gJobs.fwccbLock)) return false;
+  if (!IOLockTryLock(gJobs.lock)) {
+    IOLockUnlock(gJobs.fwccbLock);
+    return false;
+  }
+  applyResets(gJobs.resets, gJobs.resetCount);
+  for (uint32_t i = 0; i < gJobs.resetCount && gJobs.resetReportCount < kResetNotes; ++i)
+    gJobs.resetReports[gJobs.resetReportCount++] = gJobs.resets[i];
+  gJobs.resetCount = 0;
+  *ready = !fwccbPendingLocked();
+  return true; // both locks held; even !ready permits timeout/error processing
+}
+void unlockJobsAfterResets()
+{
+  IOLockUnlock(gJobs.lock);
+  IOLockUnlock(gJobs.fwccbLock);
+}
+
 // The completion thread: pvr_queue_signal_done_fences(), the drm_sched timeout and the FWCCB.
 void completionThread(void *, wait_result_t)
 {
   for (;;) {
     pvr_fwccb_process(&gJobs.dev);
     ResetNote notes[kResetNotes];
-    IOLockLock(gJobs.fwccbLock);
-    const uint32_t nnotes = gJobs.resetCount;
-    memcpy(notes, gJobs.resets, nnotes * sizeof(notes[0]));
-    gJobs.resetCount = 0;
-    IOLockUnlock(gJobs.fwccbLock);
+    bool ready;
+    if (!tryLockJobsAfterResets(&ready)) { IOSleep(1); continue; }
+    const uint32_t nnotes = gJobs.resetReportCount;
+    memcpy(notes, gJobs.resetReports, nnotes * sizeof(notes[0]));
+    gJobs.resetReportCount = 0;
     list_head done;
     INIT_LIST_HEAD(&done);
     bool dump = false;
-    IOLockLock(gJobs.lock);
-    applyResets(notes, nnotes);
     const uint64_t now = nowAbs();
     Job *j, *n;
     list_for_each_entry_safe(j, n, &gJobs.jobs, dev_link) {
-      if (queueReached(j->queue, j->seqno)) {
+      if (ready && queueReached(j->queue, j->seqno)) {
         complete_job_hosts(j);
+        // FW can append a reset during the UFO/cache reads. Do not retire it ahead of that note.
+        if (fwccbPendingLocked()) { ready = false; continue; }
+        rememberRetired(j);
         list_del(&j->dev_link);
         if (j->file) {
           list_del(&j->file_link);
-          if (j->failed) recordFailed(j->file, j->fence);
         }
         list_add_tail(&j->dev_link, &done);
       } else if (!j->timed_out && now - j->kicked > gJobs.timeoutAbs) {
@@ -1551,6 +1643,7 @@ void completionThread(void *, wait_result_t)
     }
     const bool active = !list_empty(&gJobs.jobs);
     IOLockUnlock(gJobs.lock);
+    IOLockUnlock(gJobs.fwccbLock);
     if (native_powervr_packet_enabled())
       for (uint32_t i = 0; i < nnotes; ++i)
         native_powervr_packet_hwr(notes[i].ctx_id, notes[i].job_ref, notes[i].dm,
@@ -1899,7 +1992,12 @@ extern "C" int native_powervr_fence_wait(struct native_powervr_jobs_file *file, 
   }
   for (;;) {
     int status = 1;
-    IOLockLock(gJobs.lock);
+    bool ready;
+    if (!tryLockJobsAfterResets(&ready)) {
+      if (!timeout_ns || nowAbs() >= deadline) return -ETIMEDOUT;
+      IOSleep(1);
+      continue;
+    }
     if (fence >= file->nextFence) {
       status = -EINVAL;
     } else {
@@ -1912,12 +2010,15 @@ extern "C" int native_powervr_fence_wait(struct native_powervr_jobs_file *file, 
       }
       if (!found) status = wasFailed(file, fence) ? -EIO : 0;
       else if (found->failed || atomic_read(&found->ctx->faulty)) status = -EIO;
-      else if (queueReached(found->queue, found->seqno)) {
+      else if (ready && queueReached(found->queue, found->seqno)) {
         complete_job_hosts(found);
         status = found->failed ? -EIO : 0;
       }
     }
-    IOLockUnlock(gJobs.lock);
+    // This is the success publication boundary. Firmware notes published later
+    // cannot revoke a success already returned to the caller.
+    if (status == 0 && (!ready || fwccbPendingLocked())) status = 1;
+    unlockJobsAfterResets();
     if (status != 1) return status;
     if (!timeout_ns || nowAbs() >= deadline) return -ETIMEDOUT;
     IOSleep(1);
