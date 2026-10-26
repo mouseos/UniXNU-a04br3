@@ -78,6 +78,11 @@ class SourceIdentityTests(unittest.TestCase):
         self.roots = {name: self.base / name for name in ('tools', 'device', 'soc')}
         for root in self.roots.values():
             subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            # Only the disposable fixture repositories need a commit identity.
+            # Fresh CI hosts have no global identity; never modify that scope.
+            subprocess.run(['git', '-C', str(root), 'config', '--local', 'user.name', 'yuma shimizu'], check=True)
+            subprocess.run(['git', '-C', str(root), 'config', '--local', 'user.email',
+                            '46545607+mouseos@users.noreply.github.com'], check=True)
             email = subprocess.check_output(['git', '-C', str(root), 'config', 'user.email'], text=True).strip()
             self.assertTrue(email.endswith('@users.noreply.github.com'))
             (root / 'tracked.txt').write_text('original\n')
