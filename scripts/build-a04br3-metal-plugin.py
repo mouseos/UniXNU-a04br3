@@ -64,6 +64,8 @@ def main():
                         help='opt in to experimental Darwin GE8300 COLOR ROA in this bundle (default off)')
     parser.add_argument('--async-creation', action='store_true',
                         help='opt in to frontend asynchronous creation with separate completion delivery (default off)')
+    parser.add_argument('--pool-block-mib', type=int, choices=(4, 8, 16, 32, 64),
+                        help='opt in to a Metal runtime pool block size in MiB (default: upstream 64)')
     args = parser.parse_args()
     builder = ROOT / 'scripts/build-vulkan-metal-plugin.py'
     if not builder.is_file():
@@ -104,6 +106,15 @@ def main():
             '  setenv("' + variable + '", "1", 1);\n'
             '}\n')
         command += ['--board-source', str(diagnostic)]
+    if args.pool_block_mib is not None:
+        args.out.resolve().parent.mkdir(parents=True, exist_ok=True)
+        policy = args.out.resolve().with_name(args.out.name + '.pool-size-enable.mm')
+        policy.write_text(
+            '#include <stdlib.h>\n'
+            '__attribute__((constructor)) static void a04br3_pool_size_enable(void) {\n'
+            '  setenv("NMB_POOL_BLOCK_MIB", "' + str(args.pool_block_mib) + '", 1);\n'
+            '}\n')
+        command += ['--board-source', str(policy)]
     # MT8167's optional SHA2 instruction support is not assumed from Apple's target triple.
     if args.skip_bridge:
         command.append('--skip-bridge')
