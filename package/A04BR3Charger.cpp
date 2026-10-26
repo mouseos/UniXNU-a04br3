@@ -10,12 +10,14 @@
 #include <stdint.h>
 #include "A04BR3RegisterLock.h"
 #include "A04BR3ChargerCore.h"
+#include "A04BR3GaugeCore.h"
 #include "A04BR3ChargerHandoff.h"
 #include "A04BR3ChargerBoardCore.h"
 extern "C" vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 namespace {
 volatile uint8_t *i2c, *gpio, *top, *infra, *apmixed;
 IOLock *bus;
+bool gaugeVoltage;
 a04charger::Owner owner;
 uint32_t rd32(volatile uint8_t *b, unsigned o) {
   uint32_t v = *reinterpret_cast<volatile uint32_t *>(b + o);
@@ -83,6 +85,17 @@ void service(void *, wait_result_t) {
     }
     Ops ops; a04charger::Result result = a04charger::step(owner, ops);
     report(result);
+    // Optional measurement client; no additional transaction when OFF or when
+    // the charger owner has stopped. Never another I2C2 thread/private lock.
+    if(gaugeVoltage && result==a04charger::Maintained){
+      const auto g=a04gauge::sample(ops);
+      if(g.valid)
+        IOLog("a04br3 gauge: t=%llu valid=1 mode=%04x raw=%02x,%02x,%02x mV=%u current=unknown\n",
+              (unsigned long long)g.at,g.mode.value,g.voltage.raw[0],g.voltage.raw[1],g.voltage.raw[2],unsigned(g.voltage.value));
+      else
+        IOLog("a04br3 gauge: t=%llu valid=0 result=%u mode=%04x mr=%u raw=%02x,%02x,%02x vr=%u mV=unknown current=unknown\n",
+              (unsigned long long)g.at,unsigned(g.result),g.mode.value,unsigned(g.mode.result),g.voltage.raw[0],g.voltage.raw[1],g.voltage.raw[2],unsigned(g.voltage.result));
+    }
     IOLockUnlock(bus);
     if (result != a04charger::Maintained) {
       IOLog("a04br3 charger: owner stopped; no policy repair/retry; 30 s WDT fallback may alter inherited settings\n");
@@ -116,6 +129,8 @@ extern "C" void a04br3_charger_init(void) {
         (unsigned long long)a04charger::get64(fw+24),(unsigned long long)a04charger::get64(fw+40),
         (unsigned long long)counter,(unsigned long long)frequency,
         (unsigned long long)a04charger::get64(fw+72),(unsigned long long)a04charger::get64(fw+56));
+  unsigned sampleVoltage=0;
+  gaugeVoltage=PE_parse_boot_argn("a04br3-gauge-voltage",&sampleVoltage,sizeof sampleVoltage)&&sampleVoltage==1;
   bus = IOLockAlloc();
   if (!bus) { IOLog("a04br3 charger: no owner lock; no I2C access\n"); return; }
   i2c = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1100b000, 0x1000));
