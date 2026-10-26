@@ -295,6 +295,8 @@ Check payload capacity and run `scripts/check-a04br3-bootimg.py` after packaging
 
 カーネルには `a04br3-gpu-bo-wc=1 a04br3-gpu-bo-map=1` を指定します。
 元の IOBuffer を WC で確保し、その所有 descriptor をユーザー空間へ直接 map する組合せです。
+board.toml の機種固有引数もこの組合せと `a04br3-gpu-tq-low=1` を選択します。
+これは過去の ROA 成功条件を復元する設定で、Metal UI や host-import の動作保証ではありません。
 `a04br3-gpu-bo-sync=1`、SIPF1 dump/touch、強制 TQ Clip はこの試験には使いません。
 
 GPU 単体の順序保証試験は、上の probe 生成コマンドへ `--roa-color` を追加し、

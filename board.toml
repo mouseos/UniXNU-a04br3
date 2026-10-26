@@ -249,6 +249,11 @@ kernel_args = [
   # Bring-up diagnostics: record the CCCB packets and the PTE stream of the first fragments (package/powervr/
   # NativePowerVRJobs.cpp); a first context fragment drops with fault address=0 while later ones succeed.
   "a04br3-gpu-packet=1",
+  # Restore the BO mapping and TQ heap policy of the qualified GE8300 ROA run.
+  # This is a board bring-up selection, not proof of Metal UI correctness.
+  "a04br3-gpu-bo-wc=1",
+  "a04br3-gpu-bo-map=1",
+  "a04br3-gpu-tq-low=1",
   "a04br3-input=1",
   # NativeHidInput registers its touch sink and digitizer collection only with this (UniXNU-tb128fu, UniXNU-qemu).
   "sheng-touch-hid=1",
