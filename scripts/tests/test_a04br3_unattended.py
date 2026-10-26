@@ -60,6 +60,7 @@ os.execvp(sys.argv[2], sys.argv[2:])
         ('A04BR3 SEC: test cycle: fastboot flag set\nA04BR3 RECOVERY SMOKE: SEC armed/RTC verified; deadloop without feeding\n', 'sec'),
         ('A04BR3 recovery: RTC verified; WDT 31 s, feeding deadline 120 s\nA04BR3 RECOVERY SMOKE: DXE deadloop with timer live\npanic(first)\npanic(second)\nBOOT_REASON=2\n', 'dxe'),
     ]
+    fixtures.append(('A04BR3 SEC: test cycle: fastboot flag set\nLoading driver at 0x00051549000 EntryPoint=0x0005154A050 A04BR3ChargerDxe.efi\nSynchronous Exception at 0x000000005154B934\n', 'dxe'))
     for log, expected in fixtures:
         (run / 'uart.log').write_text(log)
         subprocess.run(['/bin/bash', '-c', 'classify() {\n' + classify + '\n}\nclassify'],
