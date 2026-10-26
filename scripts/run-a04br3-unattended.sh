@@ -25,8 +25,15 @@ LIMIT=${2:-1200}
 MODE=${MODE:-flash}
 ROUNDS=${ROUNDS:-1}
 listed() { fastboot devices 2>/dev/null | awk '{print $1}' | grep -qx "$SERIAL"; }
-echo "waiting for a fastboot device"
-until fastboot devices 2>/dev/null | grep -q .; do sleep 2; done
+DEVICE_WAIT=${DEVICE_WAIT:-900}
+echo "waiting for a fastboot device (up to ${DEVICE_WAIT}s)"
+until fastboot devices 2>/dev/null | grep -q .; do
+  if (( SECONDS >= DEVICE_WAIT )); then echo "no fastboot device within ${DEVICE_WAIT}s" >&2; exit 4; fi
+  sleep 2
+done
+# A wedged USB device can hang fastboot forever; the timeout keeps the cycle reporting
+# (observed D-state fastboot during the PMGR relaunch round).
+FB() { if command -v timeout >/dev/null; then timeout ${FB_TIMEOUT:-300} fastboot $"@"; else fastboot $"@"; fi; }
 SERIAL=${SERIAL:-$(fastboot devices | awk 'NR==1{print $1}')}
 RUNS=$ROOT/out/a04br3/unattended/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$RUNS"
@@ -39,7 +46,7 @@ for round in $(seq 1 "$ROUNDS"); do
   sha256sum "$IMG" > "$RUN/inputs.sha256"
   if [ "$round" -eq 1 ] && [ -n "${USERDATA:-}" ]; then
     sha256sum "$USERDATA" >> "$RUN/inputs.sha256"
-    fastboot -s "$SERIAL" flash userdata "$USERDATA" > "$RUN/fastboot-userdata.log" 2>&1 || { echo "userdata flash failed" | tee "$RUN/result.txt"; exit 1; }
+    FB -s "$SERIAL" flash userdata "$USERDATA" > "$RUN/fastboot-userdata.log" 2>&1 || { echo "userdata flash failed" | tee "$RUN/result.txt"; exit 1; }
   fi
   CAPTURE=
   if [ -n "${UART:-}" ]; then
@@ -51,18 +58,18 @@ for round in $(seq 1 "$ROUNDS"); do
   python3 "$ROOT/scripts/check-a04br3-bootimg.py" "$IMG" > "$RUN/check.log" 2>&1 \
     || { cat "$RUN/check.log"; echo "boot image check failed" | tee "$RUN/result.txt"; exit 1; }
   if [ "$MODE" = auto ]; then
-    if fastboot -s "$SERIAL" boot "$IMG" > "$RUN/fastboot.log" 2>&1; then
+    if FB -s "$SERIAL" boot "$IMG" > "$RUN/fastboot.log" 2>&1; then
       echo "mode: boot" >> "$RUN/fastboot.log"
     else
       echo "fastboot boot refused; writing the boot partition" >> "$RUN/fastboot.log"
-      { fastboot -s "$SERIAL" flash boot "$IMG" && fastboot -s "$SERIAL" reboot; } >> "$RUN/fastboot.log" 2>&1 \
+      { FB -s "$SERIAL" flash boot "$IMG" && FB -s "$SERIAL" reboot; } >> "$RUN/fastboot.log" 2>&1 \
         || { echo "fastboot flash failed" | tee "$RUN/result.txt"; exit 1; }
       echo "mode: flash" >> "$RUN/fastboot.log"
     fi
   else
   case "$MODE" in
-    flash) fastboot -s "$SERIAL" flash boot "$IMG" > "$RUN/fastboot.log" 2>&1 && fastboot -s "$SERIAL" reboot >> "$RUN/fastboot.log" 2>&1 ;;
-    boot)  fastboot -s "$SERIAL" boot "$IMG" > "$RUN/fastboot.log" 2>&1 ;;
+    flash) FB -s "$SERIAL" flash boot "$IMG" > "$RUN/fastboot.log" 2>&1 && FB -s "$SERIAL" reboot >> "$RUN/fastboot.log" 2>&1 ;;
+    boot)  FB -s "$SERIAL" boot "$IMG" > "$RUN/fastboot.log" 2>&1 ;;
     *) echo "MODE must be auto, boot or flash"; exit 1 ;;
   esac || { echo "fastboot $MODE failed" | tee "$RUN/result.txt"; exit 1; }
   fi
