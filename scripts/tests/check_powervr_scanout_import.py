@@ -35,13 +35,17 @@ template<class T> using OSPtr=T*;
 using task_t=unsigned;using IOOptionBits=unsigned;using IOByteCount=uint64_t;using IODirection=unsigned;using IOReturn=int;
 using mach_vm_address_t=uint64_t;using mach_vm_size_t=uint64_t;
 constexpr unsigned kIOMapReference=1,kIOMapInhibitCache=2,kIOMapAnywhere=4,kIOMapReadOnly=8,kIOMapGuardedMask=16,kIOMapCacheMask=34,kIOMapDefaultCache=0,kIOMemoryMapperNone=0,kIODirectionInOut=3,kIOMemoryPersistent=4;
-constexpr int kIOReturnSuccess=0;
+constexpr int kIOReturnSuccess=0,KERN_PROTECTION_FAILURE=2;
+constexpr unsigned kIODirectionOut=2;
 constexpr uint64_t DRM_PVR_BO_BYPASS_DEVICE_CACHE=1,kDevicePageSize=4096,kDevicePageMask=~4095ULL;
 static unsigned prepared,completed,mapsCreated,fixtures,liveMaps,allocs,failAlloc,mapAttempts,failMapAttempt;static bool nullDescriptor=false,failPhysical=false;
 static bool gBoLiveEnabled, failRange, wrongLength;
-static int prepareStatus;
+static int prepareStatus,roPrepareStatus;
+static bool protectHostRange,failReadOnlyRange;
+static uint64_t requestedAddress,requestedSize;
+static std::vector<unsigned> requestedDirections;
 static uint64_t ramPhys=0x60000000;
-static std::vector<std::string> failureLines;
+static std::vector<std::string> failureLines,roLines;
 static unsigned pidReads;
 static int proc_selfpid(){++pidReads;return 56;}
 static unsigned get_task_map(task_t t){return t;}
@@ -52,12 +56,12 @@ struct IOMemoryMap {unsigned refs=1;task_t task=1;uint64_t fAddress=0,fOffset=0,
  IOMemoryDescriptor *getMemoryDescriptor(){return nullDescriptor?nullptr:md;}void retain(){++refs;}void release();
  uint64_t getPhysicalSegment(uint64_t off,uint64_t *len,unsigned);IOMemoryMap *copyCompatible(IOMemoryMap*);
 };
-struct IOMemoryDescriptor {unsigned refs=1;bool device=true;uint64_t len=16384,phys=0xbe9c0000;std::vector<IOMemoryMap*> registry;
+struct IOMemoryDescriptor {unsigned refs=1;bool device=true;uint64_t len=16384,phys=0xbe9c0000;unsigned direction=0;std::vector<IOMemoryMap*> registry;
  void retain(){++refs;}void release(){assert(refs);--refs;}uint64_t getLength(){return len+(wrongLength?4096:0);}
- IOReturn prepare(){++prepared;assert(!device);return prepareStatus;}IOReturn complete(){++completed;assert(!device);return 0;}
+ IOReturn prepare(){++prepared;assert(!device);return direction==kIODirectionOut?roPrepareStatus:(protectHostRange?KERN_PROTECTION_FAILURE:prepareStatus);}IOReturn complete(){++completed;assert(!device);return 0;}
  uint64_t getPhysicalSegment(uint64_t off,uint64_t *n,unsigned){*n=len-off;return failPhysical?0:phys+off;}
  OSPtr<IOMemoryMap> createMappingInTask(task_t intoTask,mach_vm_address_t atAddress,IOOptionBits options,mach_vm_size_t offset=0,mach_vm_size_t length=0);
- static IOMemoryDescriptor *withAddressRange(uint64_t,uint64_t n,unsigned,task_t){if(failRange)return nullptr;static IOMemoryDescriptor ram;ram.device=false;ram.len=n;ram.phys=ramPhys;ram.retain();return &ram;}
+ static IOMemoryDescriptor *withAddressRange(uint64_t address,uint64_t n,unsigned options,task_t){requestedDirections.push_back(options&3);requestedAddress=address;requestedSize=n;if(failRange||((options&3)==kIODirectionOut&&failReadOnlyRange))return nullptr;static IOMemoryDescriptor ram;ram.device=false;ram.len=n;ram.phys=ramPhys;ram.direction=options&3;ram.retain();return &ram;}
 };
 void Ref::reset(IOMemoryMap *q,int){p=q;p->retain();}
 void IOMemoryMap::release(){assert(refs);if(!--refs){if(fSuperMap.p)fSuperMap.p->release();if(md)md->release();--liveMaps;delete this;}}
@@ -95,11 +99,13 @@ struct NativePowerVRBoView {void release(){assert(false);}};
 using IOBufferMemoryDescriptor=IOMemoryDescriptor;
 static void *kzallocBytes(size_t n){++allocs;return failAlloc==allocs?nullptr:calloc(1,n);}static void kfreeBytes(void *p,size_t){free(p);}
 static void IOLog(const char *format,...){
- if(!strstr(format,"host import FAIL"))return;
+ bool ro=strstr(format,"host import RO prepare_out")!=nullptr;
+ if(!ro&&!strstr(format,"host import FAIL"))return;
  char line[320];va_list args;va_start(args,format);vsnprintf(line,sizeof line,format,args);va_end(args);
- failureLines.emplace_back(line);
+ (ro?roLines:failureLines).emplace_back(line);
 }
 '''
+h+=(root/'package/powervr/native_powervr_bo_flags.h').read_text()+'\n'
 h+=fn(s,'struct native_powervr_bo {')+';\n'
 h+='void boLiveRemove(native_powervr_bo *) {}\nvoid boLiveAdd(native_powervr_bo *, bool) {}\n'
 for signature in ('void boDestroy(', 'IOMemoryDescriptor *hostRange(', 'int scanoutHostRange(', 'int hostImportFailure(', 'int boImportHost('):h+=fn(s,signature)+'\n'
@@ -137,6 +143,24 @@ int main(){
  native_powervr_bo *ram=nullptr;assert(!boImportHost(1,0x300000,4096,0,&ram));assert(ram->hostPrepared&&!ram->hostMap&&prepared==1);boDestroy(ram);assert(completed==1);++fixtures;
  // The BO keeps the issued map/descriptor alive after the original owner releases it.
  native_powervr_bo *last=nullptr;assert(!boImportHost(1,0x101000,4096,0,&last));scan.registry.clear();whole->release();assert(liveMaps==2);boDestroy(last);assert(scan.refs==1&&!liveMaps);++fixtures;
+ // Exact RO fallback preserves the caller range and makes BO policy intrinsic.
+ protectHostRange=true;requestedDirections.clear();native_powervr_bo *readonly=nullptr;
+ unsigned prepareBefore=prepared,completeBefore=completed;
+ assert(!boImportHost(1,0x105e6d000,0xf000,0,&readonly));
+ assert((requestedDirections==std::vector<unsigned>{kIODirectionInOut,kIODirectionOut}));
+ assert(requestedAddress==0x105e6d000 && requestedSize==0xf000);
+ assert(readonly->hostPrepared && (readonly->flags&NATIVE_POWERVR_BO_READ_ONLY));
+ assert(prepared==prepareBefore+2 && completed==completeBefore);
+ boDestroy(readonly);assert(completed==completeBefore+1);++fixtures;
+ roPrepareStatus=KERN_PROTECTION_FAILURE;readonly=nullptr;prepareBefore=prepared;completeBefore=completed;
+ assert(boImportHost(1,0x300000,4096,0,&readonly)==-EFAULT&&!readonly);
+ assert(prepared==prepareBefore+2&&completed==completeBefore);++fixtures;
+ roPrepareStatus=0;failReadOnlyRange=true;readonly=nullptr;
+ assert(boImportHost(1,0x300000,4096,0,&readonly)==-ENOMEM&&!readonly);++fixtures;
+ failReadOnlyRange=false;protectHostRange=false;
+ prepareStatus=0xe00002c7;requestedDirections.clear();readonly=nullptr;
+ assert(boImportHost(1,0x300000,4096,0,&readonly)==-EFAULT&&!readonly);
+ assert((requestedDirections==std::vector<unsigned>{kIODirectionInOut}));prepareStatus=0;++fixtures;
  assert(!mapsCreated && failureLines.empty() && !pidReads); // Default-off, even for exercised failures.
  gBoLiveEnabled=true;
  auto failed=[&](const char *stage,int expected){
@@ -160,6 +184,13 @@ int main(){
  assert(failureLines.back().find("pa 100000000 len 1000")!=std::string::npos);
  for(unsigned i=0;i<40;++i)assert(hostImportFailure("bound",0x55,0x66,-EINVAL)==-EINVAL);
  assert(failureLines.size()==16 && pidReads==16); // Fixed bound, independent of number of callers.
+ protectHostRange=true;
+ for(unsigned i=0;i<9;++i){native_powervr_bo *b=nullptr;assert(!boImportHost(1,0x105e6d000,0xf000,0,&b));assert(b->flags&NATIVE_POWERVR_BO_READ_ONLY);boDestroy(b);}
+ assert(roLines.size()==4&&pidReads==20);
+ assert(roLines[0].find("RO prepare_out pid 56 addr 105e6d000 size f000")!=std::string::npos);
+ protectHostRange=false;native_powervr_bo *rw=nullptr;
+ assert(!boImportHost(1,0x300000,4096,0,&rw));assert(!(rw->flags&NATIVE_POWERVR_BO_READ_ONLY));boDestroy(rw);
+ assert(roLines.size()==4&&pidReads==20);++fixtures;
  assert(!mapsCreated);
  printf("PASS %u cases: actual 3-state helper/import/destroy, full/interior SG, no prepare on known-GOP rejection, RAM fallback, failures and retained lifetimes\n",fixtures);
 }

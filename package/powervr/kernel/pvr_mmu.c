@@ -2,6 +2,7 @@
 /* Copyright (c) 2023 Imagination Technologies Ltd. */
 
 #include "pvr_mmu.h"
+#include "../native_powervr_bo_flags.h"
 
 #include "pvr_ccb.h"
 #include "pvr_device.h"
@@ -2598,7 +2599,7 @@ int pvr_mmu_map(struct pvr_mmu_op_context *op_ctx, u64 size, u64 flags,
 
 	memcpy(&ptr_copy, &op_ctx->curr_page, sizeof(ptr_copy));
 
-	flags_raw = pvr_page_flags_raw_create(false, false,
+	flags_raw = pvr_page_flags_raw_create(flags & NATIVE_POWERVR_BO_READ_ONLY, false,
 					      flags & DRM_PVR_BO_BYPASS_DEVICE_CACHE,
 					      flags & DRM_PVR_BO_PM_FW_PROTECT);
 

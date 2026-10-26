@@ -50,6 +50,8 @@
 #include <pexpert/pexpert.h>
 #include <string.h>
 #include <sys/errno.h>
+#include <mach/kern_return.h>
+#include "native_powervr_bo_flags.h"
 #include "compat/native_powervr_linux_compat.h"
 // include/linux/sizes.h and include/linux/math.h values that the compat shim leaves out (pvr_rogue_heap_config.h,
 // pvr_rogue_fwif_client.h and the pvr_drv.c code below use them).
@@ -583,6 +585,8 @@ void NativePowerVRBoView::free()
   IOGeneralMemoryDescriptor::free();
 }
 
+static_assert(!(NATIVE_POWERVR_BO_READ_ONLY & DRM_PVR_BO_FLAGS_MASK), "internal RO is not a user BO flag");
+
 struct native_powervr_bo {
   uint32_t refs;
   uint64_t size, flags;
@@ -752,8 +756,9 @@ IOMemoryDescriptor *hostRange(task_t task, uint64_t address, uint64_t size, IODi
   IOMemoryDescriptor *range = IOMemoryDescriptor::withAddressRange(address, size, options | kIOMemoryPersistent, task);
   return range ? range : IOMemoryDescriptor::withAddressRange(address, size, options, task);
 }
-// A BO over [address, address + size) of task, pinned for writing. Read-only imports are refused: the current GPU mapping
-// path has no per-BO write protection. Jobs snapshot these BOs and maintain their caches before submission and completion.
+// A BO over the caller's exact range. A protection failure when pinning for
+// writing permits read-only pinning only with immutable, hardware-enforced GPU RO.
+// Jobs retain the BO and maintain caches through GPU completion.
 // Only reference an existing writable, uncached mapping of the descriptor
 // supplied by NativeGOPPresenter. kIOMapReference cannot create a new mapping
 // (XNU IOMemoryDescriptor::makeMapping); copyCompatible checks task/cache/access.
@@ -871,6 +876,16 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
     if (__atomic_fetch_add(&prepareTraces, 1, __ATOMIC_RELAXED) < 4)
       IOLog("powervr: ordinary host import: prepare addr %llx size %llx\n", (unsigned long long)address, (unsigned long long)size);
     IOReturn status = bo->host->prepare();
+    if (status == KERN_PROTECTION_FAILURE) {
+      // Match NativeAdrenoMemory::importTask: discard the failed write pin,
+      // then ask only for DMA reads. No CPU mapping or protection is changed.
+      bo->host->release();
+      bo->host = hostRange(task, address, size, kIODirectionOut);
+      if (!bo->host) return fail("host_range_ro", -ENOMEM);
+      status = bo->host->prepare();
+      if (status != kIOReturnSuccess) return fail("prepare_ro", -EFAULT, static_cast<uint32_t>(status));
+      bo->flags |= NATIVE_POWERVR_BO_READ_ONLY;
+    }
     if (status != kIOReturnSuccess) return fail("prepare", -EFAULT, static_cast<uint32_t>(status));
     bo->hostPrepared = true;
     if (bo->host->getLength() != size) return fail("host_length", -EINVAL, bo->host->getLength());
@@ -899,6 +914,12 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
   }
   if (report && bo->hostMap) IOLog("powervr: known scanout import: physical segments ready %u\n", bo->nents);
   boLiveAdd(bo, true);
+  if ((bo->flags & NATIVE_POWERVR_BO_READ_ONLY) && __atomic_load_n(&gBoLiveEnabled, __ATOMIC_ACQUIRE)) {
+    static unsigned readonlyTraces;
+    if (__atomic_fetch_add(&readonlyTraces, 1u, __ATOMIC_RELAXED) < 4)
+      IOLog("powervr: host import RO prepare_out pid %d addr %llx size %llx\n", proc_selfpid(),
+            (unsigned long long)address, (unsigned long long)size);
+  }
   *out = bo;
   return 0;
 }
@@ -1798,7 +1819,7 @@ int NativePowerVRUserClient::importHost(NativePowerVRAbiImportHost *args)
   err = handleInsert(bos_, bo, &handle);
   if (err) { native_powervr_bo_put(bo); return hostImportFailure("handle", args->address, args->size, err); }
   args->handle = handle;
-  args->read_only = 0;   // read-only backing is rejected by boImportHost()
+  args->read_only = (bo->flags & NATIVE_POWERVR_BO_READ_ONLY) != 0; // kernel-owned, never an input override
   return 0;
 }
 
