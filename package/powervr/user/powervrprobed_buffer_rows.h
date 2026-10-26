@@ -1,5 +1,18 @@
 /* SPDX-License-Identifier: MIT
  * Owner-only GPU row-copy qualification. No CPU destination payload copy. */
+#include <time.h>
+/* Host wall time only: submit can itself wait for preceding GPU work in winsys.
+ * These values are not GPU timestamps and must not be presented as GPU duration. */
+static uint64_t brClockUs(void)
+{
+  struct timespec t;
+  if(clock_gettime(CLOCK_MONOTONIC,&t)!=0)return UINT64_MAX;
+  return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u;
+}
+static uint64_t brElapsedUs(uint64_t start,uint64_t end)
+{
+  return start!=UINT64_MAX && end!=UINT64_MAX && end>=start ? end-start : 0;
+}
 enum { brRows=1280, brWidth=3152, brSrcPitch=3328, brDstPitch=3200, brPrefix=4096 };
 static uint8_t brPattern(size_t i) { return (uint8_t)((i*73u) ^ (i>>8) ^ (i>>16) ^ 0x3du); }
 static int brPayload(size_t i, size_t *source)
@@ -63,6 +76,7 @@ static int bufferRowsProbe(VkDevice device, VkQueue queue, uint32_t family,
   BR_STEP("rows command",p_vkAllocateCommandBuffers(device,&ai,&cmd));
   VkCommandBufferBeginInfo bi={.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
   BR_STEP("rows begin",p_vkBeginCommandBuffer(cmd,&bi));
+  const uint64_t recordStart=brClockUs();
   VkBufferMemoryBarrier barriers[2];
   for(unsigned i=0;i<2;i++)barriers[i]=(VkBufferMemoryBarrier){.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
     .srcAccessMask=VK_ACCESS_HOST_WRITE_BIT,.dstAccessMask=i?VK_ACCESS_TRANSFER_WRITE_BIT:VK_ACCESS_TRANSFER_READ_BIT,
@@ -73,20 +87,38 @@ static int bufferRowsProbe(VkDevice device, VkQueue queue, uint32_t family,
   p_vkCmdCopyBuffer(cmd,buffers[0],buffers[1],brRows,regions);
   for(unsigned i=0;i<2;i++){barriers[i].srcAccessMask=i?VK_ACCESS_TRANSFER_WRITE_BIT:VK_ACCESS_TRANSFER_READ_BIT;barriers[i].dstAccessMask=VK_ACCESS_HOST_READ_BIT;}
   p_vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,NULL,2,barriers,0,NULL);
-  BR_STEP("rows end",p_vkEndCommandBuffer(cmd));
+  const VkResult endResult=p_vkEndCommandBuffer(cmd);
+  const uint64_t recordEnd=brClockUs();
+  BR_STEP("rows end",endResult);
   VkFenceCreateInfo fi={.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   BR_STEP("rows fence",p_vkCreateFence(device,&fi,NULL,&fence));
   VkSubmitInfo si={.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO,.commandBufferCount=1,.pCommandBuffers=&cmd};
+  const uint64_t submitStart=brClockUs();
   VkResult submitted=p_vkQueueSubmit(queue,1,&si,fence);
+  const uint64_t submitEnd=brClockUs();
   if(!vkStep("rows submit",submitted,NULL)) {
     if(submitted==VK_ERROR_DEVICE_LOST){probe_line("vk buffer-rows retained: device lost at submit");return -1;}
     goto done;
   }
-  if(!vkStep("rows wait",p_vkWaitForFences(device,1,&fence,VK_TRUE,30000000000ULL),NULL)) {
+  const uint64_t waitStart=brClockUs();
+  const VkResult waited=p_vkWaitForFences(device,1,&fence,VK_TRUE,30000000000ULL);
+  const uint64_t waitEnd=brClockUs();
+  if(!vkStep("rows wait",waited,NULL)) {
     probe_line("vk buffer-rows retained: completion unknown");return -1;
   }
   BR_STEP("rows invalidate",p_vkInvalidateMappedMemoryRanges(device,2,ranges));
+  const uint64_t validateStart=brClockUs();
   ok=brValidate(mapped[0],(size_t)needs[0].size,mapped[1],(size_t)needs[1].size);
+  const uint64_t validateEnd=brClockUs();
+  const int clockOK=recordStart!=UINT64_MAX && recordEnd>=recordStart && recordEnd!=UINT64_MAX &&
+    submitStart!=UINT64_MAX && submitEnd>=submitStart && submitEnd!=UINT64_MAX &&
+    waitStart!=UINT64_MAX && waitEnd>=waitStart && waitEnd!=UINT64_MAX &&
+    validateStart!=UINT64_MAX && validateEnd>=validateStart && validateEnd!=UINT64_MAX;
+  probe_line("vk buffer-rows host-us: record=%llu submit=%llu wait=%llu validate=%llu clock=%d",
+    (unsigned long long)brElapsedUs(recordStart,recordEnd),
+    (unsigned long long)brElapsedUs(submitStart,submitEnd),
+    (unsigned long long)brElapsedUs(waitStart,waitEnd),
+    (unsigned long long)brElapsedUs(validateStart,validateEnd),clockOK);
 done:
   if(fence)p_vkDestroyFence(device,fence,NULL);
   if(pool)p_vkDestroyCommandPool(device,pool,NULL);

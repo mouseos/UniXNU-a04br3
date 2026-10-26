@@ -12,9 +12,13 @@ def run(args, **kw):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--lavapipe', type=Path, help='explicit CPU ICD shared library')
+    parser.add_argument('--vulkan-include', type=Path, default=ROOT/'.cache/mesa-pvr/include',
+                        help='pinned Vulkan headers (also supports isolated worktrees)')
     args=parser.parse_args()
     source=ROOT/'package/powervr/user/powervrprobed_vulkan.c'
-    include=ROOT/'.cache/mesa-pvr/include'
+    include=args.vulkan_include.resolve()
+    if not (include/'vulkan/vulkan.h').is_file():
+        parser.error('pinned Vulkan headers missing; pass --vulkan-include')
     run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsyntax-only','-I',include,source])
     builder=ROOT/'scripts/build-a04br3-powervr-probe.py'
     with tempfile.TemporaryDirectory() as temporary:
@@ -40,6 +44,9 @@ void probe_pass(void){}
 void probe_fail(void){}
 #include "'''+str(source)+r'''"
 int main(void){
+ assert(brElapsedUs(2,7)==5);assert(brElapsedUs(7,2)==0);
+ assert(brElapsedUs(UINT64_MAX,7)==0);assert(brElapsedUs(2,UINT64_MAX)==0);
+ assert(brClockUs()!=UINT64_MAX);
  size_t sn=brPrefix+brSrcPitch*brRows+8192, dn=brPrefix+brDstPitch*brRows+8192;
  uint8_t *s=malloc(sn),*d=malloc(dn);assert(s&&d);
  for(size_t n=0;n<sn;n++)s[n]=brPattern(n);
@@ -126,7 +133,11 @@ int main(int argc,char **argv){
         run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-I',include,harness,'-ldl','-o',tmp/'probe'])
         if args.lavapipe:
             env=dict(os.environ, VK_DRIVER_FILES='/usr/share/vulkan/icd.d/lvp_icd.json')
-            run([tmp/'probe',args.lavapipe.resolve()],env=env,timeout=90)
+            executed=subprocess.run([str(tmp/'probe'),str(args.lavapipe.resolve())],env=env,
+                                    timeout=90,capture_output=True,text=True,check=True)
+            print(executed.stdout,end='')
+            assert 'vk buffer-rows host-us: record=' in executed.stdout
+            assert 'clock=1' in executed.stdout
             run([tmp/'lifecycle',args.lavapipe.resolve()],env=env,timeout=90)
     print('PASS buffer-rows source, opt-in constructor, exclusive CLI'+(', CPU lavapipe real Vulkan copy' if args.lavapipe else ''))
 if __name__=='__main__':main()
