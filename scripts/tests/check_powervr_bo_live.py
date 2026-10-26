@@ -19,6 +19,8 @@ h = h.replace('assert(!held&&n==4);++parses;', '''assert(!held&&n==4);++parses;
 h = h.replace('void IOLog(const char*,...){assert(false);}', 'void IOLog(const char*,...){}')
 h = h.replace('struct Host{int complete(){return 0;}void release(){assert(false);}};\nstruct HostMap{void release(){assert(false);}};', r'''
 using task_t=void*;
+constexpr unsigned kIODirectionOut=2;
+constexpr int KERN_PROTECTION_FAILURE=2;
 constexpr uint64_t kDevicePageMask=~(kDevicePageSize-1);
 static bool failPrepare,failHost,failScanout,scanout;
 static unsigned hostLive,hostMapLive,completed;

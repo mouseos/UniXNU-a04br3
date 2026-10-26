@@ -28,6 +28,7 @@ h = r'''
 #include <initializer_list>
 #include "native_powervr_pte.h"
 #include "native_powervr_bo_stats.h"
+#include "native_powervr_bo_flags.h"
 using IOOptionBits=unsigned;using IOByteCount=uint64_t;using vm_offset_t=uintptr_t;
 constexpr unsigned kIODirectionInOut=3,kIOMapWriteCombineCache=4u<<8,
  kIOWriteCombineCache=4,kIOMemoryBufferCacheShift=28,kIOMemoryTypePhysical64=0x20,kIOMemoryMapperNone=1;
