@@ -9,7 +9,7 @@
 # the tablet left fastboot, waits for it to come back and keeps the UART log of that round.
 #
 # usage: [SERIAL=<fastboot serial>] [MODE=auto|boot|flash] [ROUNDS=1] [NEXT_IMAGE_CMD='<command printing a boot image path>']
-#        [USERDATA=<userdata image, first round only>] [UART=/dev/ttyUSB0 | UART_LOG=<file appended by another collector>]
+#        [RUNS_ROOT=<host log directory>] [USERDATA=<userdata image, first round only>] [UART=/dev/ttyUSB0 | UART_LOG=<file appended by another collector>]
 #        run-a04br3-unattended.sh BOOT_IMAGE [wait_seconds=1200]
 # MODE=flash (default) writes the boot partition and reboots. MODE=boot uses fastboot boot and MODE=auto tries it first,
 # but the stock LK does not hand a fastboot-booted ramdisk to the kernel slot at its header address (observed: /chosen
@@ -17,7 +17,7 @@
 # checked first (scripts/check-a04br3-bootimg.py). With UART= this script reads the port itself; stop other readers
 # or use UART_LOG= with the file of a running collector. Each round writes result.txt and stage.txt (last stage reached from the
 # UART log: sec, dxe, firmware-timeout (includes a DarwinBoot failure), exit-boot-services, bsd_init; first panic; LK reason). Exit status: 0 when every round returned to fastboot by itself, 2 when a round
-# did not leave fastboot, 3 when it did not come back within wait_seconds. Logs: out/a04br3/unattended/<time>/round-N/.
+# did not leave fastboot, 3 when it did not come back within wait_seconds. Logs: ${RUNS_ROOT:-out/a04br3/unattended}/<time>/round-N/.
 set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 IMG=${1:?boot image}
@@ -33,9 +33,10 @@ until fastboot devices 2>/dev/null | grep -q .; do
 done
 # A wedged USB device can hang fastboot forever; the timeout keeps the cycle reporting
 # (observed D-state fastboot during the PMGR relaunch round).
-FB() { if command -v timeout >/dev/null; then timeout ${FB_TIMEOUT:-300} fastboot $"@"; else fastboot $"@"; fi; }
+FB() { if command -v timeout >/dev/null; then timeout "${FB_TIMEOUT:-300}" fastboot "$@"; else fastboot "$@"; fi; }
 SERIAL=${SERIAL:-$(fastboot devices | awk 'NR==1{print $1}')}
-RUNS=$ROOT/out/a04br3/unattended/$(date +%Y%m%d-%H%M%S)
+RUNS_ROOT=${RUNS_ROOT:-$ROOT/out/a04br3/unattended}
+RUNS=$RUNS_ROOT/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$RUNS"
 for round in $(seq 1 "$ROUNDS"); do
   RUN=$RUNS/round-$round
@@ -85,13 +86,17 @@ for round in $(seq 1 "$ROUNDS"); do
   classify() {
     local log=$RUN/uart.log stage=none
     [ -s "$log" ] || { echo "stage: no UART output" > "$RUN/stage.txt"; return; }
-    grep -aq 'A04BR3 SEC: test cycle' "$log" && stage=sec
-    grep -aq 'A04BR3TestCycleDxe: fastboot flag' "$log" && stage=dxe
-    grep -aq 'no ExitBootServices within' "$log" && stage=firmware-timeout
-    grep -aq 'A04BR3TestCycleDxe: ExitBootServices' "$log" && stage=exit-boot-services
+    grep -aqE 'A04BR3 SEC: (test cycle|RTC fastboot)' "$log" && stage=sec
+    grep -aqE 'A04BR3TestCycleDxe: fastboot flag|A04BR3 recovery: (RTC verified;|DXE RTC unverified)' "$log" && stage=dxe
+    grep -aqE 'no ExitBootServices within|A04BR3 recovery: [0-9]+ s firmware deadline; WDT feeding stopped' "$log" && stage=firmware-timeout
+    grep -aqE 'A04BR3TestCycleDxe: ExitBootServices|A04BR3 recovery: EBS,' "$log" && stage=exit-boot-services
     grep -aq 'a04br3-autoreset: fastboot flag' "$log" && stage=bsd_init
     {
       echo "stage: $stage"
+      # A smoke marker proves only that the injected fault path was entered.
+      # Return to fastboot is recorded separately by the actual polling loop.
+      grep -am1 'A04BR3 RECOVERY SMOKE:' "$log" | sed 's/^/smoke observed: /'
+      grep -a 'A04BR3 recovery:' "$log" | tail -5 | sed 's/^/recovery log: /'
       grep -am1 -E 'panic\(|Panicked|PANIC|Kernel panic' "$log" | sed 's/^/first panic: /'
       grep -a -i 'boot_reason\|reboot to boot loader' "$log" | tail -3 | sed 's/^/lk: /'
     } > "$RUN/stage.txt"
