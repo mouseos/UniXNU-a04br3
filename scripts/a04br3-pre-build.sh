@@ -16,10 +16,22 @@
 #     both are fetched here.
 # A04BR3_REUSE_DATA_SEED=1: rebuild from the retained policy-seeded data-32.dbr,
 # preserving its UUID without carrying forward obsolete APFS pages from data.dbr.
+# A04BR3_POWERVR_METAL_PIPELINE_DIAG=1: opt in to the existing bounded pipeline
+# failure callback in the Metal plugin (requires PROBE=1 and METAL=1).
 # Workflow input: pre_build = bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
 #   with the probe: pre_build = A04BR3_POWERVR_PROBE=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh", owner_trust_cache = true
 set -euo pipefail
 : "${DEVICE_DIR:?}" "${RUNNER_TEMP:?}"
+case "${A04BR3_POWERVR_METAL_PIPELINE_DIAG:-0}" in
+  0) ;;
+  1)
+    if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL:-0}" != 1 ]; then
+      echo "Metal pipeline diagnostics require A04BR3_POWERVR_PROBE=1 and A04BR3_POWERVR_METAL=1" >&2
+      exit 1
+    fi
+    ;;
+  *) echo "A04BR3_POWERVR_METAL_PIPELINE_DIAG must be 0 or 1" >&2; exit 1 ;;
+esac
 # SSH incremental builds opt in; default builds still create a fresh fixture.
 read_seed_uuid() {
   python3 - "$RUNNER_TEMP/owner-data/seed.json" <<'PY_UUID'
@@ -111,7 +123,11 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
     command -v rustup >/dev/null || { curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none; }
     export PATH="$HOME/.cargo/bin:$PATH"
     rustup toolchain install 1.98.0 --profile minimal --target aarch64-apple-ios
-    python3 "$TREE/scripts/build-a04br3-metal-plugin.py" --out "$RUNNER_TEMP/powervr-metal" \
+    METAL_DIAGNOSTICS=()
+    if [ "${A04BR3_POWERVR_METAL_PIPELINE_DIAG:-0}" = 1 ]; then
+      METAL_DIAGNOSTICS=(--pipeline-failure-diag)
+    fi
+    python3 "$TREE/scripts/build-a04br3-metal-plugin.py" ${METAL_DIAGNOSTICS[@]+"${METAL_DIAGNOSTICS[@]}"} --out "$RUNNER_TEMP/powervr-metal" \
       --vulkan "$DEVICE_DIR/build/mesa-pvr-ios/src/imagination/vulkan/libvulkan_powervr_mesa.dylib"
     METAL_TRUST=(--extra-trust "$RUNNER_TEMP/powervr-metal/trust.json")
     METAL_SEED=(--metal-plugin "$RUNNER_TEMP/powervr-metal" --metal-mode "${A04BR3_POWERVR_METAL_MODE:-selftest}")

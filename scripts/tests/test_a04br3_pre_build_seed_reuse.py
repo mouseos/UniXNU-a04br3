@@ -20,7 +20,7 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True):
+def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None):
     with tempfile.TemporaryDirectory(prefix='pre-build-reuse-') as directory:
         root = Path(directory)
         work, temporary, device, tools = [root / p for p in ('work', 'temp', 'device', 'bin')]
@@ -105,6 +105,9 @@ elif name == 'a04br3-seed-powervr-probe.py':
                    GITHUB_ENV=str(root / 'github-env'), A04BR3_POWERVR_PROBE='1' if probe else '0',
                    A04BR3_POWERVR_VULKAN='1', A04BR3_POWERVR_METAL='1' if metal else '0',
                    MOCK_FAIL_SEED='1' if fail_seed else '0', MOCK_FAIL_GROW='1' if fail_grow else '0', XNU_OWNER_DATA_VOLUME_UUID='stale')
+        env.pop('A04BR3_POWERVR_METAL_PIPELINE_DIAG', None)
+        if pipeline_diag is not None:
+            env['A04BR3_POWERVR_METAL_PIPELINE_DIAG'] = pipeline_diag
         env.pop('A04BR3_REUSE_DATA_SEED', None)
         if reuse:
             env['A04BR3_REUSE_DATA_SEED'] = '1'
@@ -126,7 +129,8 @@ elif name == 'a04br3-seed-powervr-probe.py':
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
             calls = log.read_text()
             assert not list(temporary.glob('a04br3-seed-rebuild.*')), 'temporary seed leaked'
-            failure = reuse and (metadata != 'valid' or not data or data == 'empty' or not baseline) or fail_seed or generation == fail_round or fail_grow or mismatch or (reuse and not probe)
+            diagnostic_failure = pipeline_diag not in (None, '0', '1') or (pipeline_diag == '1' and not (metal and probe))
+            failure = diagnostic_failure or reuse and (metadata != 'valid' or not data or data == 'empty' or not baseline) or fail_seed or generation == fail_round or fail_grow or mismatch or (reuse and not probe)
             assert (result.returncode != 0) == failure, result.stdout
             if reuse:
                 for forbidden in ('hdiutil ', 'unixnu ipsw', 'prepare-owner-data-fixture.py',
@@ -138,9 +142,9 @@ elif name == 'a04br3-seed-powervr-probe.py':
                     assert required in calls, calls
             if failure:
                 assert 'unixnu build' not in calls, calls
-                if not reuse:
+                if not reuse and not diagnostic_failure:
                     assert 'hdiutil detach' in calls, calls
-                if reuse and (metadata != 'valid' or not data or data == 'empty' or not probe or not baseline):
+                if diagnostic_failure or reuse and (metadata != 'valid' or not data or data == 'empty' or not probe or not baseline):
                     assert not calls, calls  # 不備はtrust/data変更より前に停止する。
                 if reuse and data:
                     assert (temporary / 'data.dbr').read_bytes() == previous_data
@@ -159,6 +163,9 @@ elif name == 'a04br3-seed-powervr-probe.py':
                 if metal:
                     assert 'build-a04br3-metal-plugin.py' in calls and 'rustup toolchain install' in calls
                     assert (temporary / 'powervr-metal/trust.json').read_text() == 'plugin-' + str(generation)
+                    build = next(line for line in calls.splitlines() if line.startswith('python build-a04br3-metal-plugin.py '))
+                    assert build.split().count('--pipeline-failure-diag') == (1 if pipeline_diag == '1' else 0), build
+                    assert '--require-fetch-for-apple3' not in build and '--async-creation' not in build, build
                 else:
                     assert 'build-a04br3-metal-plugin.py' not in calls
                 assert (temporary / 'data.dbr').read_bytes().endswith(('+new-probe-' + str(generation)).encode())
@@ -249,6 +256,12 @@ def test_actual_staging_identity():
 
 def main():
     test_actual_staging_identity()
+    run_case(False, pipeline_diag='1')
+    run_case(True, pipeline_diag='1')
+    run_case(True, pipeline_diag='0')
+    run_case(True, pipeline_diag='invalid')
+    run_case(True, pipeline_diag='1', metal=False)
+    run_case(False, pipeline_diag='1', probe=False)
     run_case(False, rounds=3)
     run_case(False, rounds=4, fail_round=4)
     run_case(True)
