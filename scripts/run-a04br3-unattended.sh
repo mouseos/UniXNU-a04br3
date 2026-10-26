@@ -4,8 +4,8 @@
 # The test image boots with the board's test cycle on: uefi-a04br3 (A04BR3_TEST_CYCLE=1) sets the LK fastboot flag
 # (PMIC RTC_PDN1 bit 13) and arms the TOPRGU watchdog from SEC on (A04BR3PlatformSecBoardLib), A04BR3TestCycleDxe keeps
 # it running until XNU, and XNU (a04br3-autoreset,
-# package/A04BR3AutoReset.cpp) keeps kicking it and resets after the given time. A panic, a hang or the timer therefore
-# brings the tablet back to LK fastboot. Each round this script writes the image with fastboot, reboots it, checks that
+# package/A04BR3AutoReset.cpp) keeps kicking it and resets after the given time. The watchdog and timer are intended to
+# bring the tablet back to LK fastboot; each recovery path needs hardware qualification. Each round this script writes the image with fastboot, reboots it, checks that
 # the tablet left fastboot, waits for it to come back and keeps the UART log of that round.
 #
 # usage: [SERIAL=<fastboot serial>] [MODE=auto|boot|flash] [ROUNDS=1] [NEXT_IMAGE_CMD='<command printing a boot image path>']
@@ -16,8 +16,9 @@
 # initrd 0x1FE7-0x80001FE7, BootRamdiskDxe refuses it and no payload volume appears), so they do not boot a04br3. Every image is
 # checked first (scripts/check-a04br3-bootimg.py). With UART= this script reads the port itself; stop other readers
 # or use UART_LOG= with the file of a running collector. Each round writes result.txt and stage.txt (last stage reached from the
-# UART log: sec, dxe, firmware-timeout (includes a DarwinBoot failure), exit-boot-services, bsd_init; first panic; LK reason). Exit status: 0 when every round returned to fastboot by itself, 2 when a round
-# did not leave fastboot, 3 when it did not come back within wait_seconds. Logs: ${RUNS_ROOT:-out/a04br3/unattended}/<time>/round-N/.
+# UART log: sec, dxe, firmware-timeout (includes a DarwinBoot failure), exit-boot-services, bsd_init; first panic; LK reason). Exit status: 0 when every round was observed back in fastboot, 2 when a round
+# did not leave fastboot, 3 when it did not come back within wait_seconds. A return alone does not prove automatic recovery;
+# this observer cannot distinguish a UART reset or a physical reset from watchdog recovery. Logs: ${RUNS_ROOT:-out/a04br3/unattended}/<time>/round-N/.
 set -uo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 IMG=${1:?boot image}
@@ -109,6 +110,6 @@ for round in $(seq 1 "$ROUNDS"); do
     sleep 2
   done
   finish
-  echo "round $round: returned to fastboot by itself after $((SECONDS - end + LIMIT))s; $(head -1 "$RUN/stage.txt")" | tee "$RUN/result.txt"
+  echo "round $round: returned to fastboot (reset cause requires UART correlation) after $((SECONDS - end + LIMIT))s; $(head -1 "$RUN/stage.txt")" | tee "$RUN/result.txt"
 done
 echo "logs: $RUNS"
