@@ -122,6 +122,19 @@ extern "C" void native_metal_board_prepare(unsigned port) {
                  (unsigned long long)(uintptr_t)_dyld_get_image_header(0),
                  (unsigned long long)_dyld_get_image_vmaddr_slide(0));
         native_metal_board_text(imageLine);
+        // BEGIN actual plugin image anchor (host-mocked by the diagnostic test).
+        Dl_info pluginImage = {};
+        if (dladdr(reinterpret_cast<const void *>(&native_metal_board_prepare), &pluginImage) && pluginImage.dli_fbase) {
+            const char *name = pluginImage.dli_fname ? pluginImage.dli_fname : "?";
+            if (const char *slash = strrchr(name, '/')) name = slash + 1;
+            // At most 60 characters even with a full 64-bit base and long basename.
+            snprintf(imageLine,sizeof imageLine,"IM plugin=%llx name=%.28s",
+                     (unsigned long long)(uintptr_t)pluginImage.dli_fbase,name);
+        } else {
+            snprintf(imageLine,sizeof imageLine,"IM plugin=unknown");
+        }
+        native_metal_board_text(imageLine);
+        // END actual plugin image anchor
     }
 
     // Mesa's PowerVR driver (pvr_darwin.c): the accelerator, not the direct NativePowerVRGpu service, which sandboxed processes may not open.

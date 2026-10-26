@@ -24,6 +24,46 @@ with tempfile.TemporaryDirectory(prefix='pvr-metal-flags-') as t:
                  'for(unsigned i=0;i<sizeof(values)/sizeof(values[0]);i++){calls=0;setenv("PVR_METAL_ASYNC_CREATION",values[i],1);prepare();assert(calls==!strcmp(values[i],"1"));}}\n')
  real_run(['cc','-D_POSIX_C_SOURCE=200809L','-Wall','-Wextra','-Werror',str(gate),'-o',str(root/'board-gate')],check=True)
  real_run([str(root/'board-gate')],check=True)
+ # Compile the exact dladdr/formatting block; no Apple SDK or assumed runtime address.
+ anchor_start=board_source.index('        // BEGIN actual plugin image anchor')
+ anchor_end=board_source.index('        // END actual plugin image anchor',anchor_start)
+ anchor=board_source[anchor_start:anchor_end]
+ assert board_source.index('if(pipelineDiag && !strcmp(pipelineDiag,"1")) {') < anchor_start
+ fixture=root/'image-anchor.cpp'
+ fixture.write_text(r'''
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <string>
+struct Dl_info {const char *dli_fname;void *dli_fbase;};
+static int scenario;
+static std::string shown;
+static void native_metal_board_prepare(unsigned) {}
+static int dladdr(const void *address,Dl_info *info) {
+ assert(address==reinterpret_cast<const void *>(&native_metal_board_prepare));
+ if(scenario==1)return 0;
+ info->dli_fbase=scenario==3?nullptr:reinterpret_cast<void *>(UINT64_MAX);
+ info->dli_fname=scenario==2?nullptr:scenario==4?"/bundle/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":"/actual/current/NativePowerVRMetal.bundle/NativePowerVRMetal";
+ return 1;
+}
+static void native_metal_board_text(const char *s) {shown=s;assert(shown.size()<63);}
+static void run(){char imageLine[64];
+'''+anchor+r'''
+}
+int main(){
+ for(scenario=0;scenario<5;scenario++) {
+ run();
+ if(scenario==1 || scenario==3)assert(shown=="IM plugin=unknown");
+ else if(scenario==0)assert(shown=="IM plugin=ffffffffffffffff name=NativePowerVRMetal");
+ else if(scenario==2)assert(shown=="IM plugin=ffffffffffffffff name=?");
+ else assert(shown=="IM plugin=ffffffffffffffff name=abcdefghijklmnopqrstuvwxyzAB");
+ }
+ puts("PASS actual plugin dladdr anchor: exact function pointer, basename, unknown, 64-bit base and line length <63");
+}
+''')
+ real_run([os.environ.get('CXX','c++'),'-std=c++17','-Wall','-Wextra','-Werror',str(fixture),'-o',str(root/'image-anchor')],check=True)
+ real_run([str(root/'image-anchor')],check=True)
  board=root/'package/powervr/user/NativePowerVRMetalBoard.mm';board.parent.mkdir(parents=True);board.write_text('// board unchanged\n')
  library=root/'driver.dylib';library.write_bytes(b'fixture')
  out=root/'out'/'plugin';main.__globals__['ROOT']=root
