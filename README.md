@@ -355,3 +355,25 @@ R32_UINT の単体試験通過は、Metal UI や XR 二平面形式の動作成�
   [xnu_bootshim_benesse_a04br3](https://github.com/mouseos/xnu_bootshim_benesse_a04br3),
   [xnu_device_benesse_a04br3](https://github.com/mouseos/xnu_device_benesse_a04br3),
   [edk2-mtk](https://github.com/mouseos/edk2-mtk) (branch a04br3-upstream-port).
+
+### Reviewed loader memory-map diagnostic source pins
+
+These pins identify the reviewed default-off descriptor diagnostic source, not a
+hardware-qualified larger-RAM configuration. The earlier image checkpoint above
+is unchanged. No board default enables the diagnostic and no owned-memory size,
+UEFI reservation or resource ownership changes are included.
+
+| Repository | Commit | Branch |
+| --- | --- | --- |
+| mouseos/UniXNU | d8c9980ad36068dea0c67d6be65e511dfa148543 | diag/darwinboot-memory-map |
+| mouseos/DarwinBoot | 022a00e42e4f9d531753f5504cb41d840ca94c3f | diag/darwinboot-memory-map |
+| mouseos/uefi-a04br3 | d331be804970a5534e0fec973e0c6bdf993e3ad5 | diag/darwinboot-memory-map |
+
+The base pin records both the DarwinBoot gitlink and its mouseos fork URL, so a
+fresh recursive checkout does not depend on a local remote override. Use the
+one-build `DARWINBOOT_MEMORY_MAP_DIAG=1` firmware-defines override documented in
+that base's `docs/guide/boot.md`; it calls the official firmware build path without
+editing `board.toml`. The build log must contain the explicit define. The
+result is `Build/a04br3Pkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd` in the UEFI checkout.
+Source/host checks passed; actual firmware compilation and boot remain separate
+validation steps. This recipe performs no flash or reboot.
