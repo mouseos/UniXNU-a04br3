@@ -14,8 +14,8 @@
 #     keeps the CPU renderer; =publish makes backboardd composite on the GPU. The kernel needs a04br3-gpu-metal=1 (and sheng-fb-gpu=1 for
 #     the GPU copy into the scanout). The bridge needs the pinned metal2vulkan source and Rust 1.98.0 with the aarch64-apple-ios target;
 #     both are fetched here.
-# A04BR3_REUSE_DATA_SEED=1: require an existing data.dbr + seed.json; update declared
-# probe/plugin/trust inputs without recreating the initial Data volume or UUID.
+# A04BR3_REUSE_DATA_SEED=1: rebuild from the retained policy-seeded data-32.dbr,
+# preserving its UUID without carrying forward obsolete APFS pages from data.dbr.
 # Workflow input: pre_build = bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
 #   with the probe: pre_build = A04BR3_POWERVR_PROBE=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh", owner_trust_cache = true
 set -euo pipefail
@@ -50,6 +50,10 @@ case "${A04BR3_REUSE_DATA_SEED:-0}" in
       echo "Data seed reuse requires an existing nonempty $RUNNER_TEMP/data.dbr" >&2
       exit 1
     fi
+    if [ ! -f "$RUNNER_TEMP/data-32.dbr" ] || [ ! -s "$RUNNER_TEMP/data-32.dbr" ]; then
+      echo "Data seed reuse requires the retained nonempty $RUNNER_TEMP/data-32.dbr baseline" >&2
+      exit 1
+    fi
     DATA_UUID=$(read_seed_uuid)
     ;;
   *) echo "A04BR3_REUSE_DATA_SEED must be 0 or 1" >&2; exit 1 ;;
@@ -58,9 +62,19 @@ python3 "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$PWD" --out "$
 ./unixnu tree -D "$DEVICE_DIR"
 TREE=$PWD/out/a04br3/tree
 MOUNT=
+SEED_SCRATCH=
+SEED_INPUT="$RUNNER_TEMP/data.dbr"
+SEED_OUTPUT="$RUNNER_TEMP/data-probe.dbr"
 SEED_IDENTITY=()
 if [ "${A04BR3_REUSE_DATA_SEED:-0}" = 1 ]; then
   SEED_IDENTITY=(--expected-volume-uuid "$DATA_UUID")
+  # DBRDISK1 preserves every nonzero page, including obsolete APFS/COW blocks.
+  # Grow the immutable, policy-seeded baseline instead of editing prior outputs.
+  SEED_SCRATCH=$(mktemp -d "$RUNNER_TEMP/a04br3-seed-rebuild.XXXXXX")
+  trap 'rm -rf "$SEED_SCRATCH"' EXIT
+  SEED_INPUT="$SEED_SCRATCH/data-fresh.dbr"
+  SEED_OUTPUT="$SEED_SCRATCH/data-staged.dbr"
+  python3 "$TREE/scripts/seed-data-grow.py" --gib 4 "$RUNNER_TEMP/data-32.dbr" "$SEED_INPUT"
 fi
 if [ "${A04BR3_REUSE_DATA_SEED:-0}" != 1 ]; then
   OS_DMG=$(./unixnu ipsw fetch OS -D "$DEVICE_DIR" | grep '\.dmg$' | tail -1)
@@ -106,8 +120,8 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
   python3 "$DEVICE_DIR/scripts/build-a04br3-powervr-probe.py" --out "$RUNNER_TEMP/powervr-probe" ${PROBE_VULKAN[@]+"${PROBE_VULKAN[@]}"} \
     --trust-base "$RUNNER_TEMP/trustcache" --trust-out "$RUNNER_TEMP/trustcache-owner" ${METAL_TRUST[@]+"${METAL_TRUST[@]}"}
   python3 "$DEVICE_DIR/scripts/a04br3-seed-powervr-probe.py" --tree "$TREE" --probe-dir "$RUNNER_TEMP/powervr-probe" \
-    ${METAL_SEED[@]+"${METAL_SEED[@]}"} ${SEED_IDENTITY[@]+"${SEED_IDENTITY[@]}"} "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/data-probe.dbr"
-  mv "$RUNNER_TEMP/data-probe.dbr" "$RUNNER_TEMP/data.dbr"
+    ${METAL_SEED[@]+"${METAL_SEED[@]}"} ${SEED_IDENTITY[@]+"${SEED_IDENTITY[@]}"} "$SEED_INPUT" "$SEED_OUTPUT"
+  mv "$SEED_OUTPUT" "$RUNNER_TEMP/data.dbr"
   mv "$RUNNER_TEMP/trustcache-owner" "$RUNNER_TEMP/trustcache"
   echo "PowerVR probe staged; the payload step needs owner_trust_cache = true (--owner-trust-cache)"
 fi
@@ -127,6 +141,10 @@ ls -l "$RUNNER_TEMP/trustcache" "$RUNNER_TEMP/data.dbr"
 # bridge; the workflow's kernel step then links both.
 if [ -n "$MOUNT" ]; then
   hdiutil detach "$MOUNT" || true
+  trap - EXIT
+fi
+if [ -n "$SEED_SCRATCH" ]; then
+  rm -rf "$SEED_SCRATCH"
   trap - EXIT
 fi
 ./unixnu build kernel

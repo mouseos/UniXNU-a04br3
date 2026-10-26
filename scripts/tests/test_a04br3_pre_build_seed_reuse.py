@@ -20,7 +20,7 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-def run_case(reuse, rounds=1, mismatch=False, probe=True, metadata='valid', data=True, fail_seed=False, metal=True):
+def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True):
     with tempfile.TemporaryDirectory(prefix='pre-build-reuse-') as directory:
         root = Path(directory)
         work, temporary, device, tools = [root / p for p in ('work', 'temp', 'device', 'bin')]
@@ -34,6 +34,9 @@ def run_case(reuse, rounds=1, mismatch=False, probe=True, metadata='valid', data
         dmg.write_bytes(b'mock OS')
         log = root / 'calls'
         log.touch()
+        baseline_uuid = '87654321-1234-5678-9ABC-123456789ABC' if mismatch else UUID
+        if reuse and baseline:
+            (temporary / 'data-32.dbr').write_bytes(('baseline:' + baseline_uuid).encode())
         if reuse:
             (temporary / 'owner-data').mkdir()
             # The reuse path must not need the original raw fixture at all.
@@ -77,18 +80,23 @@ if name == 'prepare-owner-data-fixture.py':
     if image.exists(): raise SystemExit('fixture would overwrite existing seed')
     write(image, b'raw-seed')
     write(out / 'seed.json', ('{"volume_uuid":"' + os.environ['MOCK_UUID'] + '"}').encode())
-elif name == 'packed_ramdisk.py': write(Path(args[-1]), b'packed-seed')
-elif name == 'seed-data-grow.py': write(Path(args[-1]), b'grown-seed')
+elif name == 'packed_ramdisk.py': write(Path(args[-1]), ('baseline:' + os.environ['MOCK_UUID']).encode())
+elif name == 'seed-data-grow.py':
+    source = Path(args[-2]).read_bytes()
+    assert source.startswith(b'baseline:')
+    write(Path(args[-1]), b'grown-seed:' + source.split(b':', 1)[1])
+    if os.environ.get('MOCK_FAIL_GROW') == '1': raise SystemExit('mock grow failure')
 elif name == 'build-a04br3-trust-cache.py': write(option('--out'), b'base-trust')
 elif name == 'build-a04br3-powervr-probe.py': write(option('--trust-out'), ('new-owner-trust-' + os.environ['MOCK_GENERATION']).encode())
 elif name == 'build-a04br3-metal-plugin.py': write(option('--out') / 'trust.json', ('plugin-' + os.environ['MOCK_GENERATION']).encode())
 elif name == 'a04br3-seed-powervr-probe.py':
     if os.environ.get('MOCK_FAIL_SEED') == '1': raise SystemExit('mock reseed failure')
     source, destination = map(Path, args[-2:])
-    assert source.read_bytes().startswith((b'existing-seed', b'grown-seed'))
+    assert source.read_bytes().startswith(b'grown-seed:')
+    assert b'+new-probe-' not in source.read_bytes()
     if '--expected-volume-uuid' in args:
         expected = args[args.index('--expected-volume-uuid') + 1]
-        if expected != os.environ['MOCK_ACTUAL_UUID']: raise SystemExit('Data volume UUID mismatch')
+        if expected != source.read_bytes().split(b':', 1)[1].decode(): raise SystemExit('Data volume UUID mismatch')
     write(destination, source.read_bytes() + ('+new-probe-' + os.environ['MOCK_GENERATION']).encode())
 ''')
         env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
@@ -96,7 +104,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
                    MOCK_DMG=str(dmg), MOCK_UUID=UUID, MOCK_ACTUAL_UUID='87654321-1234-5678-9ABC-123456789ABC' if mismatch else UUID, MOCK_PYTHON=sys.executable,
                    GITHUB_ENV=str(root / 'github-env'), A04BR3_POWERVR_PROBE='1' if probe else '0',
                    A04BR3_POWERVR_VULKAN='1', A04BR3_POWERVR_METAL='1' if metal else '0',
-                   MOCK_FAIL_SEED='1' if fail_seed else '0', XNU_OWNER_DATA_VOLUME_UUID='stale')
+                   MOCK_FAIL_SEED='1' if fail_seed else '0', MOCK_FAIL_GROW='1' if fail_grow else '0', XNU_OWNER_DATA_VOLUME_UUID='stale')
         env.pop('A04BR3_REUSE_DATA_SEED', None)
         if reuse:
             env['A04BR3_REUSE_DATA_SEED'] = '1'
@@ -110,15 +118,19 @@ elif name == 'a04br3-seed-powervr-probe.py':
                 # The metadata UUID is unchanged while the artifact bytes evolve.
                 assert json.loads((temporary / 'owner-data/seed.json').read_text())['volume_uuid'].upper() == UUID
             env['MOCK_GENERATION'] = str(generation)
+            env['MOCK_FAIL_SEED'] = '1' if fail_seed or generation == fail_round else '0'
+            previous_data = (temporary / 'data.dbr').read_bytes() if (temporary / 'data.dbr').exists() else None
+            previous_baseline = (temporary / 'data-32.dbr').read_bytes() if (temporary / 'data-32.dbr').exists() else None
             log.write_text('')
             result = subprocess.run(['bash', '-c', launcher, 'mock-pre-build', str(SCRIPT)], cwd=work, env=env, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
             calls = log.read_text()
-            failure = reuse and (metadata != 'valid' or not data or data == 'empty') or fail_seed or mismatch or (reuse and not probe)
+            assert not list(temporary.glob('a04br3-seed-rebuild.*')), 'temporary seed leaked'
+            failure = reuse and (metadata != 'valid' or not data or data == 'empty' or not baseline) or fail_seed or generation == fail_round or fail_grow or mismatch or (reuse and not probe)
             assert (result.returncode != 0) == failure, result.stdout
             if reuse:
                 for forbidden in ('hdiutil ', 'unixnu ipsw', 'prepare-owner-data-fixture.py',
-                                  'a04br3-seed-launch-policy.py', 'packed_ramdisk.py', 'seed-data-grow.py'):
+                                  'a04br3-seed-launch-policy.py', 'packed_ramdisk.py'):
                     assert forbidden not in calls, calls
             elif not failure:
                 for required in ('hdiutil attach', 'hdiutil detach', 'prepare-owner-data-fixture.py',
@@ -128,10 +140,12 @@ elif name == 'a04br3-seed-powervr-probe.py':
                 assert 'unixnu build' not in calls, calls
                 if not reuse:
                     assert 'hdiutil detach' in calls, calls
-                if reuse and (metadata != 'valid' or not data or data == 'empty' or not probe):
+                if reuse and (metadata != 'valid' or not data or data == 'empty' or not probe or not baseline):
                     assert not calls, calls  # 不備はtrust/data変更より前に停止する。
                 if reuse and data:
-                    assert (temporary / 'data.dbr').read_bytes() == (b'' if data == 'empty' else b'existing-seed')
+                    assert (temporary / 'data.dbr').read_bytes() == previous_data
+                if previous_baseline is not None:
+                    assert (temporary / 'data-32.dbr').read_bytes() == previous_baseline
             else:
                 assert calls.count('unixnu build kernel') == 1, calls
                 assert 'unixnu build kernel uuid=' + UUID in calls, calls
@@ -148,6 +162,14 @@ elif name == 'a04br3-seed-powervr-probe.py':
                 else:
                     assert 'build-a04br3-metal-plugin.py' not in calls
                 assert (temporary / 'data.dbr').read_bytes().endswith(('+new-probe-' + str(generation)).encode())
+                expected_data = ('grown-seed:' + UUID + '+new-probe-' + str(generation)).encode()
+                assert (temporary / 'data.dbr').read_bytes() == expected_data
+                assert (temporary / 'data.dbr').stat().st_size == len(expected_data)
+                assert (temporary / 'data-32.dbr').read_bytes() == ('baseline:' + UUID).encode()
+                assert calls.count('seed-data-grow.py') == 1
+                assert str(temporary / 'data-32.dbr') in calls
+                if reuse:
+                    assert 'a04br3-seed-rebuild.' in calls
                 assert (temporary / 'trustcache').read_bytes() == ('new-owner-trust-' + str(generation)).encode()
                 assert (temporary / 'a04br3-data.env').read_text() == 'export XNU_OWNER_DATA_VOLUME_UUID=' + UUID + '\n'
                 assert (root / 'github-env').read_text().splitlines()[-1] + '\n' == 'XNU_OWNER_DATA_VOLUME_UUID=' + UUID + '\n'
@@ -228,17 +250,20 @@ def test_actual_staging_identity():
 def main():
     test_actual_staging_identity()
     run_case(False, rounds=3)
+    run_case(False, rounds=4, fail_round=4)
     run_case(True)
     run_case(True, metal=False)
     for metadata in ('missing', 'malformed', 'list', 'numeric', 'invalid', 'nil'):
         run_case(True, metadata=metadata)
+    run_case(True, baseline=False)
+    run_case(True, fail_grow=True)
     run_case(True, mismatch=True)
     run_case(True, probe=False)
     run_case(True, data=False)
     run_case(True, data='empty')
     run_case(False, fail_seed=True)
     run_case(True, fail_seed=True)
-    print('PASS: same-workdir initial -> reuse -> reuse; updated probe/plugin/trust; UUID before kernel; no reuse initialization; metadata/Data mismatch and PROBE=0 rejected; input preserved')
+    print('PASS: same-workdir initial -> reuse -> reuse; updated probe/plugin/trust; UUID before kernel; fresh baseline each time; bounded size and baseline identity; metadata/Data mismatch and PROBE=0 rejected; input preserved')
 
 
 if __name__ == '__main__':
