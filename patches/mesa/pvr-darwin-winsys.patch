@@ -3676,3 +3676,114 @@ index d975be1..c1a95f5 100644
        if (_ret) {                                         \
           _ret = errno;                                    \
           _result = vk_errorf(NULL,                        \
+diff --git a/src/imagination/vulkan/rogue/pvr_blit.c b/src/imagination/vulkan/rogue/pvr_blit.c
+index a624f41..0008fbb 100644
+--- a/src/imagination/vulkan/rogue/pvr_blit.c
++++ b/src/imagination/vulkan/rogue/pvr_blit.c
+@@ -25,6 +25,10 @@
+ #include <stdbool.h>
+ #include <stddef.h>
+ #include <stdint.h>
++#ifdef PVR_WINSYS_DARWIN
++#include <stdlib.h>
++#include <string.h>
++#endif
+ #include <vulkan/vulkan.h>
+ 
+ #include "pvr_blit.h"
+@@ -1560,6 +1564,84 @@ void pvr_rogue_CmdUpdateBuffer(VkCommandBuffer commandBuffer,
+                               false);
+ }
+ 
++#ifdef PVR_WINSYS_DARWIN
++/* A regular list of disjoint byte rows is one existing linear TQ rectangle.
++ * Avoid one firmware kick per row on the Darwin synchronous submit path.
++ * All other copies retain the original region-by-region implementation.
++ */
++static bool
++pvr_darwin_copy_buffer_rows(struct pvr_cmd_buffer *cmd_buffer,
++                           const struct pvr_buffer *src,
++                           const struct pvr_buffer *dst,
++                           const VkCopyBufferInfo2 *info)
++{
++   const char *enabled = getenv("PVR_DARWIN_BUFFER_ROWS");
++   if (!enabled || strcmp(enabled, "1") || info->regionCount < 2 ||
++       info->regionCount > PVR_MAX_TRANSFER_SIZE_IN_TEXELS || src == dst)
++      return false;
++
++   const VkBufferCopy2 *rows = info->pRegions;
++   const uint64_t bytes = rows[0].size;
++   if (!bytes || bytes % 16 || bytes / 16 > PVR_MAX_TRANSFER_SIZE_IN_TEXELS ||
++       rows[1].srcOffset <= rows[0].srcOffset ||
++       rows[1].dstOffset <= rows[0].dstOffset)
++      return false;
++   const uint64_t src_pitch = rows[1].srcOffset - rows[0].srcOffset;
++   const uint64_t dst_pitch = rows[1].dstOffset - rows[0].dstOffset;
++   if (src_pitch < bytes || dst_pitch < bytes || src_pitch % 16 || dst_pitch % 16 ||
++       src_pitch / 16 > PVR_MAX_TRANSFER_SIZE_IN_TEXELS ||
++       dst_pitch / 16 > PVR_MAX_TRANSFER_SIZE_IN_TEXELS ||
++       (src->dev_addr.addr & 15) || (dst->dev_addr.addr & 15) ||
++       (rows[0].srcOffset & 15) || (rows[0].dstOffset & 15))
++      return false;
++   for (uint32_t i = 0; i < info->regionCount; ++i) {
++      /* Subtraction avoids overflow in both the regularity and bounds checks. */
++      if (rows[i].size != bytes || rows[i].srcOffset < rows[0].srcOffset ||
++          rows[i].dstOffset < rows[0].dstOffset ||
++          rows[i].srcOffset - rows[0].srcOffset != i * src_pitch ||
++          rows[i].dstOffset - rows[0].dstOffset != i * dst_pitch ||
++          rows[i].srcOffset > src->vk.size || bytes > src->vk.size - rows[i].srcOffset ||
++          rows[i].dstOffset > dst->vk.size || bytes > dst->vk.size - rows[i].dstOffset)
++         return false;
++   }
++   /* Distinct VkBuffers can alias memory. Keep the old path if their address
++    * spans overlap; do not change the behavior of an overlapping copy.
++    */
++   const uint64_t src_end = rows[info->regionCount - 1].srcOffset + bytes;
++   const uint64_t dst_end = rows[info->regionCount - 1].dstOffset + bytes;
++   if (src->dev_addr.addr > UINT64_MAX - src_end ||
++       dst->dev_addr.addr > UINT64_MAX - dst_end)
++      return false;
++   const uint64_t src_start = src->dev_addr.addr + rows[0].srcOffset;
++   const uint64_t dst_start = dst->dev_addr.addr + rows[0].dstOffset;
++   if (src_start < dst->dev_addr.addr + dst_end &&
++       dst_start < src->dev_addr.addr + src_end)
++      return false;
++
++   struct pvr_transfer_cmd *cmd = pvr_transfer_cmd_alloc(cmd_buffer);
++   if (!cmd)
++      return true; /* allocator already set the command buffer error */
++   pvr_setup_buffer_surface(&cmd->sources[0].surface,
++                            &cmd->sources[0].mappings[0].src_rect,
++                            src->dev_addr, rows[0].srcOffset,
++                            VK_FORMAT_R32G32B32A32_UINT, VK_FORMAT_R32G32B32A32_UINT,
++                            bytes / 16, info->regionCount, src_pitch / 16);
++   pvr_setup_buffer_surface(&cmd->dst, &cmd->scissor,
++                            dst->dev_addr, rows[0].dstOffset,
++                            VK_FORMAT_R32G32B32A32_UINT, VK_FORMAT_R32G32B32A32_UINT,
++                            bytes / 16, info->regionCount, dst_pitch / 16);
++   cmd->source_count = 1;
++   cmd->sources[0].mapping_count = 1;
++   cmd->sources[0].mappings[0].dst_rect = cmd->scissor;
++   const VkResult result = pvr_arch_cmd_buffer_add_transfer_cmd(cmd_buffer, cmd);
++   if (result != VK_SUCCESS) {
++      vk_free(&cmd_buffer->vk.pool->alloc, cmd);
++      vk_command_buffer_set_error(&cmd_buffer->vk, result);
++   }
++   return true;
++}
++#endif
++
+ void pvr_rogue_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
+                               const VkCopyBufferInfo2 *pCopyBufferInfo)
+ {
+@@ -1570,6 +1652,10 @@ void pvr_rogue_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
+    PVR_CHECK_COMMAND_BUFFER_BUILDING_STATE(cmd_buffer);
+ 
+    PVR_TRACE_BEGIN_TRANSFER(cmd_buffer, PVR_TRANSFER_OP_COPY_BUFFER);
++#ifdef PVR_WINSYS_DARWIN
++   if (pvr_darwin_copy_buffer_rows(cmd_buffer, src, dst, pCopyBufferInfo))
++      goto end_cmd_copy_buffer2;
++#endif
+ 
+    for (uint32_t i = 0; i < pCopyBufferInfo->regionCount; i++) {
+       const VkResult result =

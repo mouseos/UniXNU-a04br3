@@ -60,6 +60,8 @@ def main():
                         help='report the first two real Metal render-pipeline failures through the board log')
     parser.add_argument('--require-fetch-for-apple3', action='store_true',
                         help='qualify GE8300 Apple3 compatibility claims against actual framebuffer-fetch support')
+    parser.add_argument('--buffer-rows', action='store_true',
+                        help='opt in to regular buffer-row TQ coalescing in this bundle (default off)')
     parser.add_argument('--roa-color', action='store_true',
                         help='opt in to experimental Darwin GE8300 COLOR ROA in this bundle (default off)')
     parser.add_argument('--async-creation', action='store_true',
@@ -93,6 +95,7 @@ def main():
             (args.tq_clip, 'tq-clip', 'PVR_DARWIN_TQ_CLIP'),
             (args.pipeline_failure_diag, 'pipeline-failure-diag', 'PVR_METAL_PIPELINE_DIAG'),
             (args.require_fetch_for_apple3, 'require-fetch-for-apple3', 'PVR_METAL_REQUIRE_FETCH_FOR_APPLE3'),
+            (args.buffer_rows, 'buffer-rows', 'PVR_DARWIN_BUFFER_ROWS'),
             (args.roa_color, 'roa-color', 'PVR_DARWIN_ROA_COLOR'),
             (args.async_creation, 'async-creation', 'PVR_METAL_ASYNC_CREATION')):
         if not enabled:
