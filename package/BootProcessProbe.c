@@ -13,6 +13,8 @@
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
 #include <vm/vm_page.h>
+#include <vm/vm_pageout.h>
+#include "BootMemoryQueueSnapshot.h"
 
 // Nontransactional page counters, as in host_statistics64. Called only by
 // the board's explicitly enabled stack diagnostics, with no VM lock held.
@@ -24,6 +26,21 @@ void boot_memory_snapshot(uint64_t out[7]) {
  out[4]=vm_page_wire_count;
  out[5]=compressor_object ? VM_PAGE_COMPRESSOR_COUNT : 0;
  out[6]=vm_page_speculative_count;
+}
+// Supplemental policy/queue reads only; gate and bounded rows belong to Board.
+void boot_memory_queue_snapshot(struct boot_memory_queue_record *out) {
+ if (!out) return;
+ *out=(struct boot_memory_queue_record){0};
+ out->throttled=vm_page_throttled_count;
+ out->lopage_free=vm_lopage_free_count;
+ out->pageable_internal=vm_page_pageable_internal_count;
+ out->pageable_external=vm_page_pageable_external_count;
+ out->compressor_mode=vm_compressor_mode;
+ out->compressor_present=VM_CONFIG_COMPRESSOR_IS_PRESENT ? 1u : 0u;
+ out->compressor_active=VM_CONFIG_COMPRESSOR_IS_ACTIVE ? 1u : 0u;
+ out->swap_present=VM_CONFIG_SWAP_IS_PRESENT ? 1u : 0u;
+ out->swap_active=VM_CONFIG_SWAP_IS_ACTIVE ? 1u : 0u;
+ out->freezer_swap_active=VM_CONFIG_FREEZER_SWAP_IS_ACTIVE ? 1u : 0u;
 }
 // Exact private process ABI from this source revision's proc.h/proc_internal.h.
 // Do not mix BSD and Mach-private header type universes in one translation unit.
