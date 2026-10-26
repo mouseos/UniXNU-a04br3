@@ -45,6 +45,7 @@ if not reference.is_file():
     (OUT / 'libShengPlatformPower.a').unlink(missing_ok=True)
     run(['xcrun', 'ar', 'rcs', OUT / 'libShengPlatformPower.a', OUT / 'FirstPassStub.o'])
     print('PMGR bridge: no reference kernel yet; linked a no-op sheng_pmgr_run. Build the kernel again to link the bridge.')
+    (OUT / 'build-report.json').write_text(json.dumps({'mode': 'first-pass-noop', 'reference_kernel': False}, indent=2) + '\n')
     raise SystemExit(0)
 
 # The contract audit reads the original kernelcache from .cache/firmware; take it from the IPSW cache of the driver.
