@@ -97,13 +97,19 @@ void service(void *, wait_result_t) {
   thread_terminate_self();
 }
 }
+// BEGIN firmware DT lookup: actual XNU device_tree.h status contract.
+static bool firmwareHandoff(const void **record, unsigned *length) {
+  DTEntry chosen = nullptr;
+  return SecureDTLookupEntry(nullptr, "/chosen", &chosen) == kSuccess &&
+         SecureDTGetProperty(chosen, "a04br3-charger-owner", record, length) == kSuccess;
+}
+// END firmware DT lookup
 extern "C" void a04br3_charger_init(void) {
   unsigned enabled = 0;
   if (!PE_parse_boot_argn("a04br3-charger-owner", &enabled, sizeof enabled) || enabled != 1) return;
   // Validate this boot's sealed firmware record before even mapping registers.
-  DTEntry chosen=nullptr; const void *record=nullptr; unsigned length=0;
-  if(SecureDTLookupEntry(nullptr,"/chosen",&chosen)!=0 ||
-     SecureDTGetProperty(chosen,"a04br3-charger-owner",&record,&length)!=0) {
+  const void *record=nullptr; unsigned length=0;
+  if (!firmwareHandoff(&record, &length)) {
     owner.stopped=true;IOLog("a04br3 charger: no firmware handoff; no charger access\n");return;
   }
   uint64_t counter,frequency;
