@@ -50,8 +50,7 @@ int main(){
 }
 '''
 # Check the production failure sites and the original-error lifetime, not a model.
-method=FRONT[FRONT.index('- (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d options:'):]
-method=method[:method.index('// The asynchronous forms')]
+method=function(FRONT,'- (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d options:')
 for stage in ('descriptor','archives','runtime'):assert f'"{stage}"' in method
 assert method.index('NSString *runtimeFailure=handle?nil:lastError();')<method.index('journalRenderPipeline(')
 assert 'nil,runtimeFailure)' in method and 'handle?nullptr:nmb_last_error()' not in method

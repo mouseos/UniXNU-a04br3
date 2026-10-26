@@ -89,6 +89,26 @@ void pipelineFailure(unsigned sequence,const char *stage,const char *error,const
     pipelineFailureField(sequence,"D",spec,384);
 }
 
+// BEGIN raw no-copy refusal UART serializer (portable fixture).
+void noCopyFailure(unsigned sequence,uintptr_t pointer,uint64_t length,uint64_t options,const char *error) {
+    char line[63];
+    snprintf(line,sizeof line,"NC%u P %llx",sequence,(unsigned long long)pointer);
+    native_metal_board_text(line);
+    snprintf(line,sizeof line,"NC%u L %llx O %llx",sequence,(unsigned long long)length,(unsigned long long)options);
+    native_metal_board_text(line);
+    if(!error)error="<null>";
+    size_t at=0;unsigned part=0;
+    do {
+        size_t count=0;while(count<48 && at+count<512 && error[at+count])++count;
+        snprintf(line,sizeof line,"NC%u E%02u %.*s",sequence,part++,int(count),error+at);
+        native_metal_board_text(line);at+=count;
+    } while(at<512 && error[at]);
+    if(at==512 && error[at]) {
+        snprintf(line,sizeof line,"NC%u E truncated at 512",sequence);native_metal_board_text(line);
+    }
+}
+// END raw no-copy refusal UART serializer
+
 }  // namespace
 
 extern "C" void native_metal_board_prepare(unsigned port) {
@@ -115,6 +135,7 @@ extern "C" void native_metal_board_prepare(unsigned port) {
     if(pipelineDiag && !strcmp(pipelineDiag,"1")) {
         native_metal_set_exception_output(native_metal_board_text);
         native_bridge_metal_set_pipeline_failure_callback(pipelineFailure);
+        native_bridge_metal_set_no_copy_failure_callback(noCopyFailure);
         // Actual process main image, not a guessed base of a sampled dylib.
         // One bounded record per preparation; this reads no arbitrary pointers.
         char imageLine[64];
