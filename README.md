@@ -29,6 +29,26 @@ the namespaced tree, and archive builders use the resolved `UNIXNU_OUT` cache ro
 Controller/host checks do not establish SDK link or hardware qualification. Firmware
 and boot-image generation retain the pinned UEFI and board settings documented below.
 
+Run the host migration checks from any working directory with Python 3.11+, Git,
+`dtc`, Clang, `g++` and mtools (`mformat`, `mcopy`, `mmd`, `mtype`) on `PATH`.
+Initialize both checkouts' submodules at their recorded revisions first. The SoC
+checkout must be clean and match the commit in this device's `feeds.toml`:
+
+```sh
+python3 "$DEVICE_DIR/scripts/check-schema2-host.py" \
+  --unixnu /absolute/path/to/UniXNU \
+  --soc /absolute/path/to/UniXNU-mt8167-common \
+  --out /absolute/path/to/new-host-results
+```
+
+The output directory must be new or empty and outside all three source trees.
+`host-results.json` records the tools/device/SoC revisions, dirty state, exact
+commands, exit codes and individual logs. The checks stop on the first failure
+and preserve its evidence. They execute archive and ADT compatibility, controller
+fixtures, optional P19 gauge/buffer-row fixtures and deterministic FAT generation.
+No SDK build, flash, UART, SSH or device operation runs. Host success does not
+qualify the kernel link, firmware or runtime on hardware.
+
 # UniXNU-a04br3
 
 UniXNU device support for the Benesse TAB-A04-BR3 (a04br3), a tablet with the MediaTek MT8167 SoC
