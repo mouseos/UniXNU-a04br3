@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// From UniXNU-tb128fu package/BootUiTraceProbe.c (fdb4434, itself UniXNU-sheng), unchanged except this header.
+// From UniXNU-tb128fu package/BootUiTraceProbe.c (fdb4434, itself UniXNU-sheng).
 // Cross-task reads use the native XNU VM API, outside task/scheduler locks.
 // A user-page fault can block this isolated capture worker, never the monitor.
 #include <kern/task.h>
@@ -41,6 +41,21 @@ static void bt_kernel_stack(thread_t thread,uint64_t *out) {
  }
 }
 #define BT_ROLES 4
+// Same sched-lock snapshot as the main UPCB. Registers only: no additional
+// user-memory reads. A blocked thread's UPCB is not evidence of a running loop.
+struct bt_main_diag {
+ uint64_t regs[6],kernel[BT_KFRAMES],tid,event;
+ unsigned state,hint,cs;int pri;
+};
+static struct bt_main_diag draft_diag[BT_ROLES],published_diag[BT_ROLES];
+static void bt_capture_main_diag(struct bt_main_diag *out,thread_t thread,arm_saved_state_t *state,const uint64_t *kernel) {
+ static const unsigned regno[6]={8,9,10,19,20,21};
+ for(unsigned i=0;i<6;++i)out->regs[i]=(uint64_t)get_saved_state_reg(state,regno[i]);
+ memcpy(out->kernel,kernel,sizeof(out->kernel));
+ out->tid=thread->thread_id;out->event=(uint64_t)thread->wait_event;
+ out->state=(unsigned)thread->state;out->hint=(unsigned)thread->block_hint;
+ out->cs=thread->c_switch;out->pri=thread->sched_pri;
+}
 static struct bt_main draft_main[BT_ROLES],published_main[BT_ROLES];
 static struct bt_prev hot_prev[BT_ROLES][BT_MAX_THREADS];
 static struct bt_hotrow hot_draft[BT_ROLES][BT_HOT],hot_published[BT_ROLES][BT_HOT];
@@ -55,6 +70,7 @@ volatile unsigned boot_ui_trace_phase,boot_ui_trace_index;
 
 void boot_ui_trace_begin(void) {
  memset(draft_main,0,sizeof(draft_main));memset(hot_draft,0,sizeof(hot_draft));
+ memset(draft_diag,0,sizeof(draft_diag));
  memset(&draft,0,sizeof(draft));memset(draft_pid,0,sizeof(draft_pid));
  memset(draft_slide,0,sizeof(draft_slide));memset(draft_names,0,sizeof(draft_names));
  draft_busy=0;draft_omitted=0;boot_ui_trace_phase=1;
@@ -96,6 +112,7 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
    e->fp=(uint64_t)get_saved_state_fp(state);
    e->trap=(uint64_t)get_saved_state_reg(state,16);
    for(unsigned reg=0;reg<8;++reg)e->regs[reg]=(uint64_t)get_saved_state_reg(state,reg);
+   if(visited==1)bt_capture_main_diag(&draft_diag[role],thread,state,sample_k[count-1]);
    if((e->pc && !bt_user(e->pc,4)) || (e->lr && !bt_user(e->lr,4)))e->error=2;
   }
   thread_unlock(thread);ml_set_interrupts_enabled(irq);
@@ -157,6 +174,7 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
 void boot_ui_trace_publish(void) {
  if(!__atomic_exchange_n(&trace_lock,1,__ATOMIC_ACQUIRE)) {
   published=draft;memcpy(published_main,draft_main,sizeof(draft_main));memcpy(hot_published,hot_draft,sizeof(hot_draft));memcpy(published_pid,draft_pid,sizeof(draft_pid));
+  memcpy(published_diag,draft_diag,sizeof(draft_diag));
   memcpy(published_slide,draft_slide,sizeof(draft_slide));memcpy(published_names,draft_names,sizeof(draft_names));
   published_busy=draft_busy;published_omitted=draft_omitted;
   __atomic_store_n(&trace_lock,0,__ATOMIC_RELEASE);
@@ -179,6 +197,17 @@ unsigned boot_ui_trace_role_rows(unsigned role,char rows[][120],unsigned max,uns
   for(unsigned row=0;row<3;++row) {
    int at=snprintf(rows[n],120,"STK%c %02u",c,row*8+1);
    for(unsigned i=0;i<8 && at>0 && at<119;++i)at+=snprintf(rows[n]+at,120-at," %llx",m->frames[row*8+i]);
+   ++n;
+  }
+  // Preserve the existing five detail rows even for small callers. Each extra
+  // row checks its own bound; the board opts into capture with stacklog=1.
+  const struct bt_main_diag *d=&published_diag[role];
+  if(n<max)snprintf(rows[n++],120,"STK%c REG x8=%llx x9=%llx x10=%llx",c,d->regs[0],d->regs[1],d->regs[2]);
+  if(n<max)snprintf(rows[n++],120,"STK%c REG x19=%llx x20=%llx x21=%llx",c,d->regs[3],d->regs[4],d->regs[5]);
+  if(n<max)snprintf(rows[n++],120,"STK%c K tid=%llx st=%x hint=%u pri=%d ev=%llx cs=%u",c,d->tid,d->state,d->hint,d->pri,d->event,d->cs);
+  for(unsigned row=0;row<3 && n<max;++row) {
+   int at=snprintf(rows[n],120,"STK%c K%02u",c,row*4);
+   for(unsigned i=0;i<4 && at>0 && at<119;++i)at+=snprintf(rows[n]+at,120-at," %llx",d->kernel[row*4+i]);
    ++n;
   }
  } else if(published_pid[role]) {
