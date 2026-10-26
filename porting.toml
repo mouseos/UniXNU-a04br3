@@ -21,17 +21,17 @@ evidence = [{ kind = "host", reference = "scripts/tests/check_schema2_contract.p
 
 [[area]]
 id = "firmware"
-status = "implemented"
+status = "host-verified"
 components = []
 paths = ["proprietary-files.txt", "scripts/extract-files.py", "scripts/gen-touch-firmware.py"]
 inputs = ["Retained device1b13730 and source-pinned components; firmware implementation remains in its original package."]
 configuration = ["Schema2 MT8167 profile, ipados17.7.11/21H461 and explicit complete archive plan."]
 procedure = ["Run unixnu defconfig/tree/status, then scripts/tests/check_schema2_contract.py with explicit base/SoC/output paths."]
-findings = ["firmware: existing source retained. Schema2 runtime has not been observed."]
+findings = ["Schema2 official CLI package and firmware builds passed from clean UEFI8db and pinned EDK2cfb using LLVM18. Selected UEFI submodules are clean and pinned. Normal FD size0x300000, SHA256 c69ca3a1402c5a9a7ae0da3f2de7f0427038ab0fa61a4e562e47970df57c4f28. No firmware or device runtime qualification is implied."]
 completion = ["Record independently reviewed fixed sources, successful full build, and separate schema2 hardware observations."]
 limits = ["No schema2 kernel/firmware/payload/device qualification. Schema1 boot and smoke observations are baseline evidence only."]
 next_action = ["Complete independent source review and fixed-source build before any main-default promotion."]
-evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }]
+evidence = [{ kind = "source", reference = "migration/board-schema1.toml", result = "Preserved source contract from device1b13730; host results are recorded separately until fixed-commit verification." }, { kind = "host", reference = "schema2-firmware-build.log and firmware-manifest.json (external build records)", result = "Package and normal FD build PASS; clean pinned sources; A04BR3_TEST_CYCLE=1, intentional early fault and memory-map diagnostics default off. No flash/device operations.", command = "PATH=/usr/lib/llvm-18/bin:$PATH ./unixnu build package firmware -D ../UniXNU-a04br3-migration-schema2 --out ../../port/xnu/out/schema2-display-audit-check --uefi ../uefi-a04br3-migration-schema2 -j 4", revision = "3ffb3543bd4d24c8a460da5aef0c1cd45739687e" }]
 
 [[area]]
 id = "cpu"
