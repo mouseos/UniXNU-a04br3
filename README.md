@@ -35,7 +35,9 @@ Use sibling tools and device checkouts, not a device checkout nested in the tool
 repository. Initialize both checkouts' submodules at their recorded revisions.
 The tools checkout must match `migration/inputs.toml`'s `paired_tools_revision`
 exactly (`b209e8b37ee41148ae43e447997683bbc0f6a97d`); the SoC checkout must match
-this device's `feeds.toml`. All three source repositories must be clean:
+this device's `feeds.toml`. All three source repositories must be clean and must
+not contain `local.toml` or `unixnu.local.toml`. Qualification does not accept
+these development overrides, even when Git ignores them:
 
 ```sh
 python3 "$DEVICE_DIR/scripts/check-schema2-host.py" \
@@ -47,8 +49,15 @@ python3 "$DEVICE_DIR/scripts/check-schema2-host.py" \
 The output directory must be new or empty and outside all three source trees.
 `host-results.json` records the tools/device/SoC revisions and full Git porcelain
 status before and after testing, the required tools pin, exact commands, exit
-codes and individual logs. A dirty source or mismatched tools pin is refused;
-changes during testing also fail. CI records its workflow revision separately
+codes and individual logs. Local configuration paths and SHA-256 hashes are
+recorded without their contents. A dirty source, local configuration or
+mismatched tools pin is refused; changes during testing also fail. The regression
+test uses the real pinned resolver to select an external NativeMsdc through an
+ignored `local.toml`, confirms that Git still reports clean, then verifies that
+the qualification runner refuses it before running any contract commands.
+This is a restriction on local configuration inputs, not a complete audit of
+every ignored file or every external component's contents.
+CI records its workflow revision separately
 from the pinned tools revision actually executed. The checks stop on the first
 failure and preserve its evidence. They execute archive and ADT compatibility, controller
 fixtures, optional P19 gauge/buffer-row fixtures and deterministic FAT generation.

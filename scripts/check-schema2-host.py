@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the A04BR3 schema2 host contract; never builds an SDK image or accesses a device."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,14 +22,24 @@ def source_identities(roots):
     for name, root in roots.items():
         status = subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain=v1',
                                           '--untracked-files=all', '--ignore-submodules=none'], text=True)
+        overrides = []
+        for filename in ('local.toml', 'unixnu.local.toml'):
+            path = root / filename
+            if path.exists() or path.is_symlink():
+                overrides.append({'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()
+                                  if path.is_file() else None})
         result[name] = {'path': str(root), 'revision': revision(root),
-                        'dirty': bool(status), 'status_porcelain': status}
+                        'dirty': bool(status), 'status_porcelain': status,
+                        'local_configurations': overrides}
     return result
 
 
 def source_refusal(identities, expected_tools):
     if identities['tools']['revision'] != expected_tools:
         return 'tools HEAD differs from migration/inputs.toml paired_tools_revision'
+    overrides = [name for name, value in identities.items() if value['local_configurations']]
+    if overrides:
+        return 'local source/build configuration is not allowed in qualification: ' + ', '.join(overrides)
     dirty = [name for name, value in identities.items() if value['dirty']]
     return 'dirty source repositories: ' + ', '.join(dirty) if dirty else None
 
@@ -62,7 +73,10 @@ def plan(tools, soc, out):
     for name in ('test_schema2_host_runner', 'check_schema2_prebuild_layout', 'test_a04br3_pre_build_seed_reuse',
                  'test_a04br3_autoreset_panic', 'test_a04br3_charger',
                  'test_a04br3_charger_handoff_api', 'test_a04br3_gauge', 'check_pvr_buffer_rows'):
-        checks.append((name, [py, str(tests / (name + '.py'))]))
+        command = [py, str(tests / (name + '.py'))]
+        if name == 'test_schema2_host_runner':
+            command += ['--unixnu', str(tools), '--soc', str(soc)]
+        checks.append((name, command))
     checks.append(('flash-validation', [py, '-m', 'unittest', 'discover', '-s', str(tests), '-p', 'test_flash_validation.py']))
     for name in ('test_a04br3_ssh_profile', 'test_kernel_output_root', 'test_adt_migration_overrides', 'test_payload_volume'):
         checks.append((name, [py, str(tools / 'scripts/tests' / (name + '.py'))]))
