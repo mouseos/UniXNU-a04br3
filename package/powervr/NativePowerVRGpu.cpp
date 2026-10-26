@@ -1305,14 +1305,33 @@ NativePowerVRGpu *gService;
 bool NativePowerVRUserClient::open(bool handoffOnly)
 {
   lock_ = IOLockAlloc();
-  if (!lock_) return false;
+  if (!lock_) {
+    IOLog("powervr-gpu: open IOLockAlloc failed\n");
+    return false;
+  }
   handoffOnly_ = handoffOnly;
   if (handoffOnly)
-    return native_gop_handoff_acquire && native_gop_handoff_close && native_gop_handoff_call_owned &&
-           native_gop_handoff_acquire(this) == kIOReturnSuccess;
+  {
+    if (!native_gop_handoff_acquire || !native_gop_handoff_close || !native_gop_handoff_call_owned) {
+      IOLog("powervr-gpu: open handoff weak symbols missing (acquire=%p close=%p call=%p)\n",
+            reinterpret_cast<void *>(native_gop_handoff_acquire),
+            reinterpret_cast<void *>(native_gop_handoff_close),
+            reinterpret_cast<void *>(native_gop_handoff_call_owned));
+      return false;
+    }
+    const IOReturn acquireStatus = native_gop_handoff_acquire(this);
+    if (acquireStatus != kIOReturnSuccess) {
+      IOLog("powervr-gpu: open handoff acquire 0x%x\n", static_cast<unsigned>(acquireStatus));
+      return false;
+    }
+    return true;
+  }
   if (native_powervr_jobs_file_create) {
     jobs_ = native_powervr_jobs_file_create();
-    if (!jobs_) return false;
+    if (!jobs_) {
+      IOLog("powervr-gpu: open jobs_file_create failed\n");
+      return false;
+    }
   }
   return true;
 }
@@ -1326,20 +1345,32 @@ static IOReturn newConnection(IOService *provider, task_t owningTask, void *secu
   *handler = nullptr;
   NativePowerVRUserClient *client = new NativePowerVRUserClient;
   if (!client) return kIOReturnNoMemory;
-  if (!client->initWithTask(owningTask, securityID, type, properties) || !client->open(handoffOnly)) {
+  char dbgName[20] = {};
+  proc_selfname(dbgName, sizeof dbgName);
+  const bool inited = client->initWithTask(owningTask, securityID, type, properties);
+  if (!inited) {
+    IOLog("powervr-gpu: %s newConnection initWithTask failed\n", dbgName);
+    client->release();
+    return kIOReturnNoMemory;
+  }
+  if (!client->open(handoffOnly)) {
+    IOLog("powervr-gpu: %s newConnection open(%d) failed\n", dbgName, static_cast<int>(handoffOnly));
     client->release();
     return kIOReturnNoMemory;
   }
   if (!client->attach(provider)) {
+    IOLog("powervr-gpu: %s newConnection attach failed\n", dbgName);
     client->release();
     return kIOReturnError;
   }
   if (!client->start(provider)) {
+    IOLog("powervr-gpu: %s newConnection start failed\n", dbgName);
     client->detach(provider);
     client->release();
     return kIOReturnError;
   }
   *handler = client;
+  IOLog("powervr-gpu: %s newConnection ok\n", dbgName);
   return kIOReturnSuccess;
 }
 
