@@ -24,6 +24,8 @@ h=r'''
 #include <cstring>
 #include <cstdio>
 #include <vector>
+#include <string>
+#include <cstdarg>
 #include <cerrno>
 #ifdef REAL_XNU_OSPTR
 #include <libkern/c++/OSPtr.h>
@@ -36,6 +38,12 @@ constexpr unsigned kIOMapReference=1,kIOMapInhibitCache=2,kIOMapAnywhere=4,kIOMa
 constexpr int kIOReturnSuccess=0;
 constexpr uint64_t DRM_PVR_BO_BYPASS_DEVICE_CACHE=1,kDevicePageSize=4096,kDevicePageMask=~4095ULL;
 static unsigned prepared,completed,mapsCreated,fixtures,liveMaps,allocs,failAlloc,mapAttempts,failMapAttempt;static bool nullDescriptor=false,failPhysical=false;
+static bool gBoLiveEnabled, failRange, wrongLength;
+static int prepareStatus;
+static uint64_t ramPhys=0x60000000;
+static std::vector<std::string> failureLines;
+static unsigned pidReads;
+static int proc_selfpid(){++pidReads;return 56;}
 static unsigned get_task_map(task_t t){return t;}
 struct IOMemoryMap;struct IOMemoryDescriptor;
 struct Ref {IOMemoryMap *p=nullptr;void reset(IOMemoryMap*,int);};constexpr int OSRetain=0;
@@ -45,11 +53,11 @@ struct IOMemoryMap {unsigned refs=1;task_t task=1;uint64_t fAddress=0,fOffset=0,
  uint64_t getPhysicalSegment(uint64_t off,uint64_t *len,unsigned);IOMemoryMap *copyCompatible(IOMemoryMap*);
 };
 struct IOMemoryDescriptor {unsigned refs=1;bool device=true;uint64_t len=16384,phys=0xbe9c0000;std::vector<IOMemoryMap*> registry;
- void retain(){++refs;}void release(){assert(refs);--refs;}uint64_t getLength(){return len;}
- IOReturn prepare(){++prepared;assert(!device);return 0;}IOReturn complete(){++completed;assert(!device);return 0;}
- uint64_t getPhysicalSegment(uint64_t off,uint64_t *n,unsigned){*n=len-off;return phys+off;}
+ void retain(){++refs;}void release(){assert(refs);--refs;}uint64_t getLength(){return len+(wrongLength?4096:0);}
+ IOReturn prepare(){++prepared;assert(!device);return prepareStatus;}IOReturn complete(){++completed;assert(!device);return 0;}
+ uint64_t getPhysicalSegment(uint64_t off,uint64_t *n,unsigned){*n=len-off;return failPhysical?0:phys+off;}
  OSPtr<IOMemoryMap> createMappingInTask(task_t intoTask,mach_vm_address_t atAddress,IOOptionBits options,mach_vm_size_t offset=0,mach_vm_size_t length=0);
- static IOMemoryDescriptor *withAddressRange(uint64_t,uint64_t n,unsigned,task_t){static IOMemoryDescriptor ram;ram.device=false;ram.len=n;ram.phys=0x60000000;ram.retain();return &ram;}
+ static IOMemoryDescriptor *withAddressRange(uint64_t,uint64_t n,unsigned,task_t){if(failRange)return nullptr;static IOMemoryDescriptor ram;ram.device=false;ram.len=n;ram.phys=ramPhys;ram.retain();return &ram;}
 };
 void Ref::reset(IOMemoryMap *q,int){p=q;p->retain();}
 void IOMemoryMap::release(){assert(refs);if(!--refs){if(fSuperMap.p)fSuperMap.p->release();if(md)md->release();--liveMaps;delete this;}}
@@ -86,10 +94,15 @@ struct native_powervr_sg{uint64_t phys,size;};
 struct NativePowerVRBoView {void release(){assert(false);}};
 using IOBufferMemoryDescriptor=IOMemoryDescriptor;
 static void *kzallocBytes(size_t n){++allocs;return failAlloc==allocs?nullptr:calloc(1,n);}static void kfreeBytes(void *p,size_t){free(p);}
-static void IOLog(const char *,...){}
+static void IOLog(const char *format,...){
+ if(!strstr(format,"host import FAIL"))return;
+ char line[320];va_list args;va_start(args,format);vsnprintf(line,sizeof line,format,args);va_end(args);
+ failureLines.emplace_back(line);
+}
 '''
 h+=fn(s,'struct native_powervr_bo {')+';\n'
-for signature in ('void boDestroy(', 'IOMemoryDescriptor *hostRange(', 'int scanoutHostRange(', 'int boImportHost('):h+=fn(s,signature)+'\n'
+h+='void boLiveRemove(native_powervr_bo *) {}\nvoid boLiveAdd(native_powervr_bo *, bool) {}\n'
+for signature in ('void boDestroy(', 'IOMemoryDescriptor *hostRange(', 'int scanoutHostRange(', 'int hostImportFailure(', 'int boImportHost('):h+=fn(s,signature)+'\n'
 h+=r'''
 static void lookupFails(task_t task,uint64_t address,uint64_t size,int expected){IOMemoryMap *out=(IOMemoryMap*)1;assert(scanoutHostRange(task,address,size,&out)==expected&&!out);++fixtures;}
 int main(){
@@ -124,6 +137,29 @@ int main(){
  native_powervr_bo *ram=nullptr;assert(!boImportHost(1,0x300000,4096,0,&ram));assert(ram->hostPrepared&&!ram->hostMap&&prepared==1);boDestroy(ram);assert(completed==1);++fixtures;
  // The BO keeps the issued map/descriptor alive after the original owner releases it.
  native_powervr_bo *last=nullptr;assert(!boImportHost(1,0x101000,4096,0,&last));scan.registry.clear();whole->release();assert(liveMaps==2);boDestroy(last);assert(scan.refs==1&&!liveMaps);++fixtures;
+ assert(!mapsCreated && failureLines.empty() && !pidReads); // Default-off, even for exercised failures.
+ gBoLiveEnabled=true;
+ auto failed=[&](const char *stage,int expected){
+  auto count=failureLines.size();native_powervr_bo *b=nullptr;
+  assert(boImportHost(1,0x300000,4096,0,&b)==expected&&!b);
+  assert(failureLines.size()==count+1);
+  assert(failureLines.back().find(stage)!=std::string::npos);
+  assert(failureLines.back().find("pid 56 err ")!=std::string::npos);
+  assert(failureLines.back().find("addr 300000 size 1000")!=std::string::npos);++fixtures;
+ };
+ allocs=0;failAlloc=1;failed("bo_alloc",-ENOMEM);failAlloc=0;
+ failRange=true;failed("host_range",-ENOMEM);failRange=false;
+ auto beforeComplete=completed;prepareStatus=int(0xe00002c7u);failed("prepare",-EFAULT);
+ assert(completed==beforeComplete&&failureLines.back().find("detail e00002c7")!=std::string::npos);prepareStatus=0;
+ wrongLength=true;failed("host_length",-EINVAL);wrongLength=false;
+ assert(completed==beforeComplete+1);
+ allocs=0;failAlloc=2;failed("sg_alloc",-ENOMEM);failAlloc=0;
+ failPhysical=true;failed("segment",-EFAULT);failPhysical=false;
+ assert(failureLines.back().find("off 0 pa 0")!=std::string::npos);
+ ramPhys=0x100000000ULL;failed("phys32",-ENOTTY);ramPhys=0x60000000;
+ assert(failureLines.back().find("pa 100000000 len 1000")!=std::string::npos);
+ for(unsigned i=0;i<40;++i)assert(hostImportFailure("bound",0x55,0x66,-EINVAL)==-EINVAL);
+ assert(failureLines.size()==16 && pidReads==16); // Fixed bound, independent of number of callers.
  assert(!mapsCreated);
  printf("PASS %u cases: actual 3-state helper/import/destroy, full/interior SG, no prepare on known-GOP rejection, RAM fallback, failures and retained lifetimes\n",fixtures);
 }

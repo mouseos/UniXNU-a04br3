@@ -86,6 +86,7 @@
 extern "C" {
 void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 void proc_selfname(char *, int);
+int proc_selfpid(void);
 vm_offset_t phystokv(uint64_t pa);
 extern uint64_t gPhysBase, gPhysSize;
 // The firmware image (scripts/build-a04br3-board.py) and the core's CORE_ID register (A04BR3Gpu.cpp).
@@ -823,54 +824,75 @@ int scanoutHostRange(task_t task, uint64_t address, uint64_t size, IOMemoryMap *
   return status;
 }
 
+// Failure-only diagnostics share a04br3-stacklog=1's once-published gate.
+// Fixed per-boot bound, no BO reads, new mappings, or additional pinning.
+int hostImportFailure(const char *stage, uint64_t address, uint64_t size, int error,
+                      uint64_t detail = 0, uint64_t offset = 0, uint64_t phys = 0, uint64_t length = 0)
+{
+  static unsigned failures;
+  if (__atomic_load_n(&gBoLiveEnabled, __ATOMIC_ACQUIRE) &&
+      __atomic_fetch_add(&failures, 1u, __ATOMIC_RELAXED) < 16)
+    IOLog("powervr: host import FAIL %s pid %d err %d addr %llx size %llx detail %llx off %llx pa %llx len %llx\n",
+          stage, proc_selfpid(), error, (unsigned long long)address, (unsigned long long)size,
+          (unsigned long long)detail, (unsigned long long)offset,
+          (unsigned long long)phys, (unsigned long long)length);
+  return error;
+}
+
 int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, native_powervr_bo **out)
 {
   static unsigned traces;
   const bool report = __atomic_fetch_add(&traces, 1, __ATOMIC_RELAXED) < 4;
   auto *bo = static_cast<native_powervr_bo *>(kzallocBytes(sizeof(native_powervr_bo)));
-  if (!bo) return -ENOMEM;
+  if (!bo) return hostImportFailure("bo_alloc", address, size, -ENOMEM);
+  auto fail = [&](const char *stage, int error, uint64_t detail = 0,
+                  uint64_t offset = 0, uint64_t phys = 0, uint64_t length = 0) {
+    hostImportFailure(stage, address, size, error, detail, offset, phys, length);
+    boDestroy(bo);
+    return error;
+  };
   bo->refs = 1;
   bo->size = size;
   bo->flags = flags;
   const int scanout_status = scanoutHostRange(task, address, size, &bo->hostMap);
-  if (scanout_status && scanout_status != -ENOENT) { boDestroy(bo); return scanout_status; }
+  if (scanout_status && scanout_status != -ENOENT) return fail("scanout_ref", scanout_status);
   if (bo->hostMap) {
     if (report) IOLog("powervr: known scanout import: reference retained; no generic prepare\n");
     bo->host = bo->hostMap->getMemoryDescriptor();
-    if (!bo->host) { boDestroy(bo); return -EFAULT; }
+    if (!bo->host) return fail("scanout_md", -EFAULT);
     bo->host->retain();
     // The display engine reads these permanent device pages outside the GPU
     // cache domain; do not cache the scanout in the GPU either.
     bo->flags |= DRM_PVR_BO_BYPASS_DEVICE_CACHE;
   } else {
     bo->host = hostRange(task, address, size, kIODirectionInOut);
-    if (!bo->host) { boDestroy(bo); return -ENOMEM; }
+    if (!bo->host) return fail("host_range", -ENOMEM);
     static unsigned prepareTraces;
     if (__atomic_fetch_add(&prepareTraces, 1, __ATOMIC_RELAXED) < 4)
       IOLog("powervr: ordinary host import: prepare addr %llx size %llx\n", (unsigned long long)address, (unsigned long long)size);
     IOReturn status = bo->host->prepare();
-    if (status != kIOReturnSuccess) { boDestroy(bo); return -EFAULT; }
+    if (status != kIOReturnSuccess) return fail("prepare", -EFAULT, static_cast<uint32_t>(status));
     bo->hostPrepared = true;
-    if (bo->host->getLength() != size) { boDestroy(bo); return -EINVAL; }
+    if (bo->host->getLength() != size) return fail("host_length", -EINVAL, bo->host->getLength());
   }
   const uint64_t pages = size / kDevicePageSize;
   bo->sgCapacity = pages > 0xffffffffULL ? 0 : static_cast<uint32_t>(pages);
   bo->sg = static_cast<native_powervr_sg *>(kzallocBytes(sizeof(native_powervr_sg) * bo->sgCapacity));
-  if (!bo->sg) { boDestroy(bo); return -ENOMEM; }
+  if (!bo->sg) return fail("sg_alloc", -ENOMEM, bo->sgCapacity);
   for (uint64_t offset = 0; offset < size;) {
     IOByteCount length = 0;
     if (report && bo->hostMap && !offset) IOLog("powervr: known scanout import: physical segment begin\n");
     const uint64_t phys = bo->hostMap ? bo->hostMap->getPhysicalSegment(offset, &length, kIOMemoryMapperNone)
                                       : bo->host->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
-    if (!phys || !length || (phys & (kDevicePageSize - 1))) { boDestroy(bo); return -EFAULT; }
+    if (!phys || !length || (phys & (kDevicePageSize - 1))) return fail("segment", -EFAULT, 0, offset, phys, length);
     if (length > size - offset) length = size - offset;
     length &= kDevicePageMask;
     // The GPU's bus is 32 bits wide (PHYS_BUS_WIDTH 32): a page above 4 GiB cannot be mapped.
-    if (!length || phys + length > (1ULL << 32)) { boDestroy(bo); return -ENOTTY; }
+    if (!length || phys + length > (1ULL << 32)) return fail("phys32", -ENOTTY, 0, offset, phys, length);
     if (bo->nents && bo->sg[bo->nents - 1].phys + bo->sg[bo->nents - 1].size == phys) {
       bo->sg[bo->nents - 1].size += length;
     } else {
-      if (bo->nents == bo->sgCapacity) { boDestroy(bo); return -ENOMEM; }
+      if (bo->nents == bo->sgCapacity) return fail("sg_capacity", -ENOMEM, bo->sgCapacity, offset, phys, length);
       bo->sg[bo->nents++] = {phys, length};
     }
     offset += length;
@@ -1768,13 +1790,13 @@ int NativePowerVRUserClient::importHost(NativePowerVRAbiImportHost *args)
   if (args->handle || args->read_only || !args->address || !args->size || ((args->address | args->size) & (kDevicePageSize - 1)) ||
       args->address + args->size < args->address || args->size > SIZE_MAX ||
       (args->flags & ~static_cast<uint64_t>(DRM_PVR_BO_BYPASS_DEVICE_CACHE)))
-    return -EINVAL;
+    return hostImportFailure("arguments", args->address, args->size, -EINVAL);
   native_powervr_bo *bo = nullptr;
   int err = boImportHost(current_task(), args->address, args->size, args->flags, &bo);
   if (err) return err;
   uint32_t handle = 0;
   err = handleInsert(bos_, bo, &handle);
-  if (err) { native_powervr_bo_put(bo); return err; }
+  if (err) { native_powervr_bo_put(bo); return hostImportFailure("handle", args->address, args->size, err); }
   args->handle = handle;
   args->read_only = 0;   // read-only backing is rejected by boImportHost()
   return 0;

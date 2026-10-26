@@ -42,6 +42,8 @@ constexpr unsigned DRM_PVR_BO_BYPASS_DEVICE_CACHE=8;
 h += '\n' + function('void initBoLivePolicy()') + '\n'
 h += function('void boLiveCopy(') + '\n'
 h += function('extern "C" void native_powervr_bo_live_snapshot(') + '\n'
+h += 'int proc_selfpid(){return 56;}\n'
+h += function('int hostImportFailure(') + '\n'
 h += function('int boImportHost(') + '\n'
 h += 'void refGet(uint32_t*p){__atomic_add_fetch(p,1u,__ATOMIC_RELAXED);}\n'
 h += 'bool refPut(uint32_t*p){return __atomic_sub_fetch(p,1u,__ATOMIC_ACQ_REL)==0;}\n'
