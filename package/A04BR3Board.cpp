@@ -214,12 +214,15 @@ void cpuDiagnosticReport()
   __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(timerFrequency));
   if (infra && apmixed) {
     const uint32_t mux = *reinterpret_cast<volatile uint32_t *>(infra);
+    // Linux MT8167: INFRA_TOPCKGEN_DCMDBC at INFRACFG+0x14.
+    // Raw only: its switch bit does not establish a frequency divisor.
+    const uint32_t dcm = *reinterpret_cast<volatile uint32_t *>(infra + 0x14);
     const uint32_t con0 = *reinterpret_cast<volatile uint32_t *>(apmixed + 0x100);
     const uint32_t con1 = *reinterpret_cast<volatile uint32_t *>(apmixed + 0x104);
     const uint32_t power = *reinterpret_cast<volatile uint32_t *>(apmixed + 0x110);
     __asm__ volatile("dmb oshld" ::: "memory");
-    IOLog("a04br3 perf cpu-clk raw infra=%08x mux=%u armpll_con0=%08x con1=%08x pwr=%08x cntfrq=%llu (non-atomic; cntfrq is timer)\n",
-          mux, (mux >> 2) & 3, con0, con1, power, timerFrequency);
+    IOLog("a04br3 perf cpu-clk raw infra=%08x mux=%u dcm=%08x armpll_con0=%08x con1=%08x pwr=%08x cntfrq=%llu (non-atomic; cntfrq is timer)\n",
+          mux, (mux >> 2) & 3, dcm, con0, con1, power, timerFrequency);
   } else {
     IOLog("a04br3 perf cpu-clk unknown map infra=%u apmixed=%u cntfrq=%llu\n",
           infra != nullptr, apmixed != nullptr, timerFrequency);
