@@ -84,7 +84,7 @@ XNUのtask telemetry cacheに保持されたshared cache UUIDとslide、main Mac
 header仮想アドレスを含む。固定XNUの `vm_shared_region_start_address` は
 shared region初回mappingのUUIDをユーザーメモリから取得してtaskへ保持する。
 診断workerはユーザーメモリを読まない。slideが未設定、採取中の値の違い、
-またはtask lock取得失敗の場合、mappingは使えない。`stable=1` は二重読取りが
+またはtask lock取得失敗の場合、mappingは使えない。`double_read_equal=1` は二重読取りが
 一致したことのみで、非原子的な書込みやexec競合、ABAを排除しない。
 
 同一bootのUUID・slideと同じUID/versionのIRQ行を近接時刻の複数mapping行で
@@ -94,3 +94,5 @@ symbolや実行時の読み取り範囲を証明しない。cacheの各mapping�
 検証し、256-byte bucket内に複数候補がある場合は全部を示す。main executable
 はheaderアドレスのみでUUIDを取得していないため、追加の画像識別なしには
 シンボルを確定しない。記録は任意指定時だけ行い、ログへのアクセスを制限する。
+
+IRQ行には個別採取時刻がなく、epoch内の集計だけである。PID/UID/versionと近接するmappingが一致してもexec境界や同一画像を証明できない。画像特定を前提とする自動シンボル化は、そのbootでexecがなかったことを別の証拠で確認できるまで行わない。

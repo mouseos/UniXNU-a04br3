@@ -333,7 +333,7 @@ void boot_home_perf_sample(void) {
   if(r->pid==1) {
    if (__atomic_load_n(&uirq_pid,__ATOMIC_ACQUIRE)==1 && r->map_at) {
     uint64_t map_ns=0; absolutetime_to_nanoseconds(r->map_at,&map_ns);
-    printf("a04br3 uirq mapping pid=%d uid=%llu version=%u at_ns=%llu stable=%u slide=%x image=%llx uuid=",
+    printf("a04br3 uirq mapping pid=%d uid=%llu version=%u at_ns=%llu double_read_equal=%u slide=%x image=%llx uuid=",
       r->pid,r->uniqueid,r->map_version,map_ns,r->map_valid,r->cache_slide,r->image_addr);
     for(unsigned k=0;k<16;k++) printf("%02x",r->cache_uuid[k]);
     printf(" (telemetry cache, non-atomic)\n");
