@@ -31,7 +31,10 @@ Report start/end timestamps, status (`complete`, `partial`, `failed` or
 __TEXT validity flags are explicit. `exec_version` and `dyld_version` are
 distinct. A complete status means only that these bounded reads completed and
 matched their later checks; it does not make the snapshot atomic. A malformed
-or partially unreadable Mach-O reports incomplete, not successful detail.
+or partially unreadable Mach-O reports incomplete, clears UUID/text validity
+and values, and must be excluded from address attribution. Consumers must
+require `detail_complete=1`, UUID and text validity, a matching fixed binary,
+and independently establish that its mapping existed at the sampled time.
 `cache_slide_valid=0` means unknown; the cache slide is not the executable or
 dyld slide. For a valid individual __TEXT row the candidate image slide is
 `load - text_vm`, after confirming the image UUID against the local binary.

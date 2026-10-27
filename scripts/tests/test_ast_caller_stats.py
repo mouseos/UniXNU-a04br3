@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import subprocess,tempfile
-s=(Path(__file__).resolve().parents[2]/'package/BootProcessProbe.c').read_text();start=s.index('// Optional AST call-site histogram.');code='#include <stdint.h>\n#include <stdio.h>\n#include <assert.h>\n#include <pthread.h>\n#include <string.h>\n'+s[start:]+r'''
+s=(Path(__file__).resolve().parents[2]/'package/BootProcessProbe.c').read_text();start=s.index('// Optional AST call-site histogram.');code='#include <stdint.h>\n#include <stdio.h>\n#include <assert.h>\n#include <pthread.h>\n#include <string.h>\n'+s[start:s.index('// Separate opt-in timer-interrupted samples;',start)]+r'''
 static void *writer(void *a){unsigned c=(unsigned)(uintptr_t)a;for(unsigned i=0;i<64000;i++)native_ast_caller_sample(c,0x1000+c*4);return 0;}
 int main(void){
  native_ast_caller_sample(0,0x1000);assert(ast_caller_rows[0].seen==0);boot_ast_caller_enable(1);boot_ast_caller_report();

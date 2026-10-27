@@ -61,11 +61,12 @@ int main(void){
  uint8_t macho[160]={0};struct live_macho_head *h=(void *)macho;h->magic=0xfeedfacf;h->ncmds=2;h->sizeofcmds=96;
  uint32_t *u=(void *)(macho+32);u[0]=0x1b;u[1]=24;memset(macho+40,0x5a,16);
  uint32_t *seg=(void *)(macho+56);seg[0]=0x19;seg[1]=72;memcpy(macho+64,"__TEXT",6);uint64_t vm=0x100000000;memcpy(macho+80,&vm,8);
+ uint64_t checked=0;assert(live_image_entry_address(UINT64_MAX-10,1,&checked)!=0);assert(live_image_entry_address(UINT64_MAX-24,1,&checked)==0 && checked==UINT64_MAX);
  struct live_image_row row={0};live_image_decode((void *)1,(uintptr_t)macho,&row);assert(row.complete && row.uuid_valid && row.text_valid && row.text_vm==vm);
  struct live_image_info entry={(uintptr_t)macho,0,0};struct live_info_head info={15,1,(uintptr_t)&entry,0,0,1,{0},0};image_info_address=(uintptr_t)&info;
  live_pc_image_report(1,1011);assert(!refs && !proc_refs);
  mutate_address=(uintptr_t)&entry;mutate_on_read=2;mutate_reads=0;live_pc_image_report(1,1012);assert(!refs && !proc_refs);
- mutate_address=0;fail_address=(uintptr_t)(macho+32);live_pc_image_report(1,1013);fail_address=0;
+ mutate_address=0;fail_address=(uintptr_t)(macho+56);live_pc_image_report(1,1013);fail_address=0;
  change_version_on_read=1;live_pc_image_report(1,1014);assert(!refs && !proc_refs);process.version=7;
  fail_address=(uintptr_t)&info;live_pc_image_report(1,1015);fail_address=0;
  h->ncmds=3;memset(&row,0,sizeof(row));live_image_decode((void *)1,(uintptr_t)macho,&row);assert(row.valid && !row.complete);h->ncmds=2;
@@ -89,6 +90,8 @@ int main(void){
   self.assertFalse(any('livepc image epoch=1012 ' in x or 'livepc image epoch=1014 ' in x for x in lines))
   partial=next(x for x in lines if 'livepc image epoch=1013 ' in x)
   self.assertIn('detail_complete=0',partial)
+  self.assertIn('text_valid=0',partial)
+  self.assertIn('uuid_valid=0',partial)
   for row in (x for x in lines if 'livepc sample ' in x):
    fields=dict(x.split('=',1) for x in row.split() if '=' in x)
    self.assertEqual(int(fields['lr'],16),int(fields['pc'],16)^0x55aa)

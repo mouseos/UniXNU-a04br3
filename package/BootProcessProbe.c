@@ -572,6 +572,11 @@ static int live_read(vm_map_t map,uint64_t addr,void *buf,unsigned len) {
  if(!addr || addr+len<addr)return -1;
  return vm_map_read_user(map,addr,buf,len)==KERN_SUCCESS ? 0 : -1;
 }
+static int live_image_entry_address(uint64_t base,unsigned index,uint64_t *out) {
+ uint64_t offset=(uint64_t)index*sizeof(struct live_image_info);
+ if(base>UINT64_MAX-offset)return -1;
+ *out=base+offset;return 0;
+}
 static void live_image_decode(vm_map_t map,uint64_t addr,struct live_image_row *row) {
  struct live_macho_head h={0};row->addr=addr;
  if(live_read(map,addr,&h,sizeof(h)) || h.magic!=0xfeedfacf || h.ncmds>1024 || h.sizeofcmds>65536)return;
@@ -615,16 +620,16 @@ static void live_pc_image_report(unsigned pid,uint64_t epoch) {
  if(!failed) {
   unsigned limit=first.count<LIVE_IMAGES_MAX?first.count:LIVE_IMAGES_MAX;
   for(unsigned i=0;i<limit;i++) {
-   struct live_image_info image;
-   if(live_read(map,first.array+(uint64_t)i*sizeof(image),&image,sizeof(image))){failed=1;break;}
+   struct live_image_info image;uint64_t entry_addr;
+   if(live_image_entry_address(first.array,i,&entry_addr) || live_read(map,entry_addr,&image,sizeof(image))){failed=1;break;}
    live_image_entries[i]=image;live_image_decode(map,image.addr,&live_image_rows[i]);
    if(!live_image_rows[i].complete)details_failed++;
    read_count++;
   }
   if(!failed && first.dyld){live_image_decode(map,first.dyld,&live_image_rows[read_count]);if(!live_image_rows[read_count].complete)details_failed++;}
   for(unsigned i=0;i<read_count && !failed;i++) {
-   struct live_image_info check;
-   if(live_read(map,first.array+(uint64_t)i*sizeof(check),&check,sizeof(check)))failed=1;
+   struct live_image_info check;uint64_t entry_addr;
+   if(live_image_entry_address(first.array,i,&entry_addr) || live_read(map,entry_addr,&check,sizeof(check)))failed=1;
    else if(memcmp(&check,&live_image_entries[i],sizeof(check)))changed=1;
   }
   if(live_read(map,info,&last,sizeof(last)))failed=1;
@@ -642,6 +647,7 @@ static void live_pc_image_report(unsigned pid,uint64_t epoch) {
  printf("a04br3 livepc images epoch=%llu pid=%u uid=%llu exec_version=%u start_ns=%llu end_ns=%llu info=%llx cache_slide=%x cache_slide_valid=%u dyld_version=%u count=%u captured=%u truncated=%u detail_incomplete=%u status=%s snapshot=nonatomic mapping_at_sample=unknown\n",(unsigned long long)epoch,pid,(unsigned long long)uid,exec_version,(unsigned long long)start_ns,(unsigned long long)end_ns,(unsigned long long)info,slide,slide!=0xffffffffU,first.version,first.count,read_count,first.count>LIVE_IMAGES_MAX,details_failed,status);
  if(!failed && !changed) for(unsigned i=0;i<read_count+!!first.dyld;i++) {
   struct live_image_row *r=&live_image_rows[i];
+  if(!r->complete){r->uuid_valid=0;r->text_valid=0;r->text_vm=0;r->text_size=0;memset(r->uuid,0,sizeof(r->uuid));}
   printf("a04br3 livepc image epoch=%llu index=%u dyld=%u mapping_at_sample=unknown load=%llx text_vm=%llx text_size=%llx text_valid=%u macho=%u detail_complete=%u uuid_valid=%u uuid=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",(unsigned long long)epoch,i,i==read_count,(unsigned long long)r->addr,(unsigned long long)r->text_vm,(unsigned long long)r->text_size,r->text_valid,r->valid,r->complete,r->uuid_valid,r->uuid[0],r->uuid[1],r->uuid[2],r->uuid[3],r->uuid[4],r->uuid[5],r->uuid[6],r->uuid[7],r->uuid[8],r->uuid[9],r->uuid[10],r->uuid[11],r->uuid[12],r->uuid[13],r->uuid[14],r->uuid[15]);
  }
 }
