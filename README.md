@@ -586,3 +586,9 @@ interrupt masking, so they are not percentages of CPU time. Addresses are
 unslid: symbolize bucket ranges against the exact kernel Mach-O and do not
 assume every address in a 256-byte bucket belongs to one function. The feature
 requires an image rebuild; it cannot inspect the already running P31 kernel.
+
+IRQ epoch reports include boundary times (`start_ns=0` for the first interval),
+interval `stored`/`lost_full`, and missed report attempts (`skipped`). The
+`busy` counter is cumulative and asynchronous: an IRQ may increment it while
+the report holds the table lock, so differences only approximate per-epoch
+contention and cannot yield exact per-epoch loss percentages.

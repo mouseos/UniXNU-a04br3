@@ -299,7 +299,8 @@ struct home_irq_slot { uint64_t pc, hits; };
 static struct home_irq_slot home_irq_slots[HOME_IRQ_SLOTS];
 static unsigned home_irq_pid;
 static uint64_t home_irq_ticks, home_irq_sampled, home_irq_overflow, home_irq_uniqueid, home_irq_other_generation;
-static uint64_t home_irq_contended, home_irq_epoch;
+static uint64_t home_irq_contended, home_irq_epoch, home_irq_epoch_overflow, home_irq_start;
+static uint64_t home_irq_report_skipped;
 static unsigned home_irq_table_lock;
 int proc_getpid(proc_t);
 extern int native_irq_pc_hook_compiled(void) __attribute__((weak_import));
@@ -335,13 +336,17 @@ void native_irq_pc_sample(uint64_t pc,unsigned user) {
   if(!slot->pc)slot->pc=bucket;
   if(slot->pc==bucket){++slot->hits;__atomic_store_n(&home_irq_table_lock,0,__ATOMIC_RELEASE);return;}
  }
+ ++home_irq_epoch_overflow;
  __atomic_fetch_add(&home_irq_overflow,1,__ATOMIC_RELAXED);
  __atomic_store_n(&home_irq_table_lock,0,__ATOMIC_RELEASE);
 }
 void boot_home_irq_report(void) {
  unsigned pid=__atomic_load_n(&home_irq_pid,__ATOMIC_ACQUIRE);
  if(!pid)return;
- if(__atomic_exchange_n(&home_irq_table_lock,1,__ATOMIC_ACQUIRE))return;
+ if(__atomic_exchange_n(&home_irq_table_lock,1,__ATOMIC_ACQUIRE)){++home_irq_report_skipped;return;}
+ uint64_t end_ticks=mach_absolute_time(),start_ticks=home_irq_start;home_irq_start=end_ticks;
+ uint64_t epoch_overflow=home_irq_epoch_overflow;home_irq_epoch_overflow=0;
+ uint64_t skipped=home_irq_report_skipped;home_irq_report_skipped=0;
  struct home_irq_slot snapshot[HOME_IRQ_SLOTS];
  memcpy(snapshot,home_irq_slots,sizeof(snapshot));
  memset(home_irq_slots,0,sizeof(home_irq_slots));
@@ -356,9 +361,10 @@ void boot_home_irq_report(void) {
    top[j].pc=pc;top[j].hits=hits;break;
   }
  }
- uint64_t at=0;absolutetime_to_nanoseconds(mach_absolute_time(),&at);
- printf("a04br3 irq pc pid=%u uid=%llu hook=%u epoch=%llu at_ns=%llu stored=%llu shift=8 rate=%u\n",
-  pid,__atomic_load_n(&home_irq_uniqueid,__ATOMIC_ACQUIRE),boot_home_irq_hook_available(),epoch,at,stored,HOME_IRQ_RATE);
+ uint64_t at=0,start=0;absolutetime_to_nanoseconds(end_ticks,&at);
+ if(start_ticks)absolutetime_to_nanoseconds(start_ticks,&start);
+ printf("a04br3 irq pc pid=%u uid=%llu hook=%u epoch=%llu start_ns=%llu at_ns=%llu stored=%llu lost_full=%llu skipped=%llu shift=8 rate=%u\n",
+  pid,__atomic_load_n(&home_irq_uniqueid,__ATOMIC_ACQUIRE),boot_home_irq_hook_available(),epoch,start,at,stored,epoch_overflow,skipped,HOME_IRQ_RATE);
  printf("a04br3 irq pc counts epoch=%llu ticks=%llu samples=%llu overflow=%llu busy=%llu other=%llu\n",
   epoch,__atomic_load_n(&home_irq_ticks,__ATOMIC_RELAXED),__atomic_load_n(&home_irq_sampled,__ATOMIC_RELAXED),
   __atomic_load_n(&home_irq_overflow,__ATOMIC_RELAXED),__atomic_load_n(&home_irq_contended,__ATOMIC_RELAXED),__atomic_load_n(&home_irq_other_generation,__ATOMIC_RELAXED));

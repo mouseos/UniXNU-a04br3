@@ -27,12 +27,14 @@ int proc_getpid(proc_t p){return p->pid;}
 int native_irq_pc_hook_compiled(void){return 1;}
 static uint64_t mach_absolute_time(void){return 123;}
 static void absolutetime_to_nanoseconds(uint64_t n,uint64_t *out){*out=n*2;}
-static uint64_t reported_stored;
+static uint64_t reported_stored, last_epoch, last_start, last_end, last_full, last_skipped;
 static int sink(const char *s,...){
  if(strstr(s,"irq pc pid=")){
   va_list ap;va_start(ap,s);(void)va_arg(ap,unsigned);(void)va_arg(ap,uint64_t);
-  (void)va_arg(ap,unsigned);(void)va_arg(ap,uint64_t);(void)va_arg(ap,uint64_t);
-  __atomic_fetch_add(&reported_stored,va_arg(ap,uint64_t),__ATOMIC_RELAXED);va_end(ap);
+  (void)va_arg(ap,unsigned);last_epoch=va_arg(ap,uint64_t);last_start=va_arg(ap,uint64_t);
+  last_end=va_arg(ap,uint64_t);
+  __atomic_fetch_add(&reported_stored,va_arg(ap,uint64_t),__ATOMIC_RELAXED);
+  last_full=va_arg(ap,uint64_t);last_skipped=va_arg(ap,uint64_t);va_end(ap);
  }
  return 0;
 }
@@ -55,16 +57,16 @@ int main(void){
  assert(home_irq_other_generation==1 && home_irq_sampled==4000);
  test_uid=42;
  for(unsigned i=0;i<64;++i)for(unsigned j=0;j<16;++j)native_irq_pc_sample(0x10000+(uint64_t)i*256,0);
- assert(home_irq_sampled==4064 && home_irq_overflow==1);
- boot_home_irq_report();assert(home_irq_epoch==1);
+ assert(home_irq_sampled==4064 && home_irq_overflow==1 && home_irq_epoch_overflow==1);
+ boot_home_irq_report();assert(home_irq_epoch==1 && last_epoch==1 && last_start==0 && last_end==246 && last_full==1 && last_skipped==0);
  for(unsigned i=0;i<64;++i)assert(home_irq_slots[i].pc==0 && home_irq_slots[i].hits==0);
  uint64_t busy=home_irq_contended;home_irq_table_lock=1;
  for(unsigned i=0;i<16;++i)native_irq_pc_sample(0x33000,0);
- assert(home_irq_contended==busy+1);boot_home_irq_report();assert(home_irq_epoch==1);
+ assert(home_irq_contended==busy+1);boot_home_irq_report();assert(home_irq_epoch==1 && home_irq_report_skipped==1);
  home_irq_table_lock=0;
  for(unsigned i=0;i<16;++i)native_irq_pc_sample(0x33000,0);
  unsigned recovered=0;for(unsigned i=0;i<64;++i)if(home_irq_slots[i].pc==0x33000)recovered++;
- assert(recovered==1);boot_home_irq_report();assert(home_irq_epoch==2);
+ assert(recovered==1);boot_home_irq_report();assert(home_irq_epoch==2 && home_irq_report_skipped==0 && home_irq_epoch_overflow==0 && last_epoch==2 && last_start==246 && last_end==246 && last_full==0 && last_skipped==1);
  uint64_t before_samples=home_irq_sampled,before_busy=home_irq_contended,before_reported=reported_stored;
  pthread_t reporter_thread;assert(!pthread_create(&reporter_thread,0,reporter,0));
  for(unsigned i=0;i<4;++i)assert(!pthread_create(&threads[i],0,worker,0));
