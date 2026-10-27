@@ -32,6 +32,18 @@
       "source": "iokit/Kernel/arm/sdio/A04BR3WLANPSKBinding.h",
       "original_sha256": "cd9ba29b0199f15f330f40b66410186937053b6f19e0c131e2d1a73772263f3b",
       "vendored_sha256": "d31986e5e8ffb98a34ddcc93a9fe8913bc88add3da8f19788217eba9eac1c97f"
+    },
+    {
+      "path": "network/apple/IOEthernetController.cpp",
+      "source": "iokit/Kernel/arm/network/apple/IOEthernetController.cpp",
+      "original_sha256": "a45281eee4ce901d3737b29b82ec5518557e1d18b44cf5b1163e1a2d055a0b54",
+      "vendored_sha256": "c255d82358030e07c0f375200a2e2d33ffb5eea4263b4c0ca337994daa78d86c"
+    },
+    {
+      "path": "network/apple/SOURCE.json",
+      "source": "iokit/Kernel/arm/network/apple/SOURCE.json",
+      "original_sha256": "269134cbbf6548ba7ad84faa721f01a4805dec07fd6b67ba4f346d9ce93b590c",
+      "vendored_sha256": "6bb08929d8241e58380b6bcdc6f97e82f3d1a5b6a01ff9da565d54b0aeffcb3a"
     }
   ],
   "bearssl_files": [

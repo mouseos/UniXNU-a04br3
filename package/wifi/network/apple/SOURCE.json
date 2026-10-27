@@ -18,7 +18,7 @@
       "path": "IOEthernetController.cpp",
       "sha256": "51a2931ddd221d2c3b948ecdc41a5875a460b00ffeda3bf9e998b8226c6e5b4b",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOEthernetController.cpp",
-      "vendored_sha256": "a45281eee4ce901d3737b29b82ec5518557e1d18b44cf5b1163e1a2d055a0b54"
+      "vendored_sha256": "c255d82358030e07c0f375200a2e2d33ffb5eea4263b4c0ca337994daa78d86c"
     },
     {
       "path": "IOEthernetController.h",
@@ -209,7 +209,8 @@
     "ownership_annotations": "IONetworkInterface/IONetworkStack load real IOKit/IOLib before BSD headers, so OSMetaClass LIBKERN_CONSUMED exists before bpf/skywalk.",
     "bpf_mode_names": "if_set_bpf_tap switch now uses exact exported kpi_interface.h BPF_MODE_DISABLED/INPUT/OUTPUT/INPUT_OUTPUT values (0/1/2/3) rather than private dlil aliases.",
     "shared_backing_lifecycle": "Protected nonvirtual adopt/clear seam adds independent ifnet_reference to actual base private _backingIfnet; adopts before bridge ifnet_attach, clears and releases after actual bridge detach completes. Default allocation not called; genuine base free is fallback reference cleanup. No parent IOEthernetInterface.cpp changes.",
-    "ios16_stack_authorization": "A04BR3-only compatibility: retain superclass init and actual administrator check. Dedicated com.apple.networking.ionetworkstack.user-client, if present, must be canonical true; false/malformed denies without fallback. Only if absent, accept an actual owning-task signed com.apple.security.iokit-user-client-class array containing exact IONetworkStackUserClient; malformed arrays and root-only callers denied. Observed donor configd signed XML supplies that exact class grant. No task-name, process-name or fabricated entitlement. Runtime IOServiceOpen errno remains unobserved."
+    "ios16_stack_authorization": "A04BR3-only compatibility: retain superclass init and actual administrator check. Dedicated com.apple.networking.ionetworkstack.user-client, if present, must be canonical true; false/malformed denies without fallback. Only if absent, accept an actual owning-task signed com.apple.security.iokit-user-client-class array containing exact IONetworkStackUserClient; malformed arrays and root-only callers denied. Observed donor configd signed XML supplies that exact class grant. No task-name, process-name or fabricated entitlement. Runtime IOServiceOpen errno remains unobserved.",
+    "avb_option_enum_types": "IOEthernetController::allocateAVBPacket casts the direction, physically-contiguous and write-through enumerators individually to IOOptionBits before OR. Preserve all option bits; avoid Clang deprecated-anon-enum-enum-conversion without suppressing diagnostics."
   },
   "local_files": [
     {

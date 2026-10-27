@@ -9,7 +9,7 @@ class Provenance(unittest.TestCase):
  def test_original_imports_or_explicit_adaptations(self):
   old=json.loads((WIFI/'IMPORT.sources.json').read_text());new=json.loads((WIFI/'PORT.sources.json').read_text())
   self.assertEqual(old['source_commit'],new['donor_commit'])
-  adapted={r['path']:r for r in new['adapted_imports']};self.assertEqual(len(adapted),5)
+  adapted={r['path']:r for r in new['adapted_imports']};self.assertEqual(len(adapted),7)
   for path,row in old['files'].items():
    if path in adapted:
     self.assertEqual(row['sha256'],adapted[path]['original_sha256']);want=adapted[path]['vendored_sha256']

@@ -1797,8 +1797,9 @@ IOEthernetController::IOEthernetAVBPacket * IOEthernetController::allocateAVBPac
 			vm_size_t maxPacketSize = AVB_MAX_PACKET_SIZE;
 			vm_size_t allocationSize = maxPacketSize;
 			vm_offset_t alignment = 1;
-			IOOptionBits options = kIODirectionOutIn | kIOMemoryPhysicallyContiguous |
-			kIOMapWriteThruCache;
+			IOOptionBits options = static_cast<IOOptionBits>(kIODirectionOutIn) |
+			static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
+			static_cast<IOOptionBits>(kIOMapWriteThruCache);
 			IODMACommand::Segment64 dmaSegment;
 			UInt32 segmentCount = 1;
 			UInt64 dmaOffset = 0;
