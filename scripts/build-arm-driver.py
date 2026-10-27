@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+from a04br3_runtime_config import require_cpu_counters_disabled
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -96,6 +97,15 @@ if component == 'NativeAdreno':
 # builds the GICv2 path of ArmCpu (github.com/mouseos/ArmCpu); without it ArmCpu builds unchanged.
 if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_GICV2') == '1':
     command += ['-DARMCPU_GICV2=1']
+if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_A04BR3_RUNTIME') == '1':
+    if os.environ.get('XNU_ARMCPU_GICV2') != '1':
+        raise SystemExit('a04br3 runtime sampling requires the GICv2 driver')
+    config = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT/config_cpu_counters.h'
+    try:
+        require_cpu_counters_disabled(config)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    command += ['-DARMCPU_RUNTIME_A04BR3=1']
 # a04br3 eMMC (MSDC0, github.com/mouseos/NativeMsdc). CONFIG_XNU_NATIVE_MSDC_BLOCK=y builds the userdata windows as
 # IOBlockStorageDevice subclasses; their kernel link needs the audited storage aliases (board.toml, the NativeMsdc bindings
 # entry). Without it the driver serves the persistent store only and links on its own. With the RAM block linked and no

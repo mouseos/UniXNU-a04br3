@@ -27,6 +27,7 @@ enum { kPEHaltCPU=0, kPERestartCPU=1, kPEHangCPU=2,
  kPEPanicRestartCPUNoCallouts=9, kPEPanicDiagnosticsDone=10,
  kPEPanicDiagnosticsInProgress=11 };
 unsigned active, delays, previousCalls;
+volatile uint32_t a04br3_runtime_probe_active;
 unsigned panic_active() { return active; }
 uint8_t dummy;
 volatile uint8_t *gToprgu = &dummy;
@@ -47,7 +48,7 @@ int previous(unsigned type) {
  return 123;
 }
 void clear() {
- gPanicLatched=0; active=0; writes.clear(); delays=0;
+ gPanicLatched=0; active=0; a04br3_runtime_probe_active=0; writes.clear(); delays=0;
  gToprgu=&dummy; gPreviousHaltRestart=previous;
 }
 void expectReset(unsigned type, bool enabled) {
@@ -64,6 +65,8 @@ int main() {
  assert(PE_halt_restart==boardHaltRestart && gPreviousHaltRestart==previous);
  installHaltRestart(); assert(gPreviousHaltRestart==previous);
  watchdogKick(); assert(writes.size()==1); writes.clear();
+ a04br3_runtime_probe_active=1; watchdogKick(); assert(writes.empty());
+ a04br3_runtime_probe_active=0; watchdogKick(); assert(writes.size()==1); writes.clear();
  for (unsigned type : {7U,8U,10U,11U}) {
   clear(); assert(boardHaltRestart(type)==123);
   assert(gPanicLatched && writes.empty() && !delays);
