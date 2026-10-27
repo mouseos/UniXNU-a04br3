@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class IrqPcTest(unittest.TestCase):
     def test_observer(self):
         src = (ROOT / 'package/BootProcessProbe.c').read_text()
-        body = src[src.index('// Optional timer-IRQ PC histogram.'):]
+        body = src[src.index('// Optional timer-IRQ PC histogram.'):src.index('// Separate opt-in timer-interrupted samples;')]
         body = body.replace('__attribute__((weak_import))', '')
         harness = r'''
 #include <assert.h>

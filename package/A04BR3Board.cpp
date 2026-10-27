@@ -35,6 +35,8 @@ void a04br3_gpu_init(void);
 void boot_memory_snapshot(uint64_t out[7]);
 void boot_home_perf_sample(void);
 void boot_home_irq_init(unsigned);
+void boot_live_pc_init(unsigned);
+void boot_live_pc_report(void);
 unsigned boot_home_irq_hook_available(void);
 void boot_home_irq_report(void);
 void boot_ipi_reason_enable(unsigned);
@@ -262,6 +264,7 @@ void procLogThread(void *, wait_result_t)
       cpuDiagnosticReport();
     }
     boot_home_irq_report();
+    boot_live_pc_report();
     boot_ipi_reason_report();
     boot_ast_caller_report();
     native_powervr_submit_perf_report();
@@ -294,6 +297,9 @@ extern "C" void unixnu_board_init(void)
       irqPid = 1;  // diagnostic kernel + existing opt-in: sample launchd
   }
   boot_home_irq_init(irqPid);
+  unsigned livePc = 0;
+  PE_parse_boot_argn("a04br3-live-pc", &livePc, sizeof(livePc));
+  boot_live_pc_init(livePc == 1 ? 1 : 0);
   unsigned ipiReasonPerf = 0;
   PE_parse_boot_argn("a04br3-home-perf", &ipiReasonPerf, sizeof(ipiReasonPerf));
   boot_ipi_reason_enable(ipiReasonPerf);

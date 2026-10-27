@@ -15,6 +15,7 @@
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
 #include <kern/clock.h>
+#include <vm/vm_map.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
 #include "BootMemoryQueueSnapshot.h"
@@ -486,4 +487,135 @@ void boot_ast_caller_report(void) {
   printf("a04br3 ast caller cpu=%u sampled_delta=%llu omitted_delta=%llu\n",c,(unsigned long long)sampled,(unsigned long long)(sampled-shown));
  }
  printf("a04br3 ast caller bad_cpu=%u (cumulative)\n",__atomic_load_n(&ast_caller_bad_cpu,__ATOMIC_RELAXED));
+}
+
+// Separate opt-in timer-interrupted samples; saved thread UPCBs are not used.
+#define LIVE_PC_SLOTS 128u
+#define LIVE_PC_RATE 16u
+struct live_pc_row { uint64_t pc, lr, tid, hits; unsigned user, version; };
+int proc_pidversion(proc_t);
+static struct live_pc_row live_pc_rows[LIVE_PC_SLOTS];
+static unsigned live_pc_pid, live_pc_lock;
+static uint64_t live_pc_seen, live_pc_busy, live_pc_full, live_pc_uid, live_pc_other, live_pc_epoch, live_pc_start;
+extern char bootsessionuuid_string[37] __attribute__((weak_import));
+void boot_live_pc_init(unsigned pid) { __atomic_store_n(&live_pc_pid,pid,__ATOMIC_RELEASE); }
+void native_live_pc_sample(uint64_t pc,uint64_t lr,unsigned user) {
+ unsigned pid=__atomic_load_n(&live_pc_pid,__ATOMIC_ACQUIRE);
+ if(!pid || !pc)return;
+ proc_t p=(proc_t)get_bsdtask_info(current_task());
+ if(!p || proc_getpid(p)!=(int)pid)return;
+ uint64_t seq=__atomic_fetch_add(&live_pc_seen,1,__ATOMIC_RELAXED);
+ if(seq%LIVE_PC_RATE)return;
+ uint64_t uid=proc_uniqueid(p),zero=0;
+ if(!uid){__atomic_fetch_add(&live_pc_other,1,__ATOMIC_RELAXED);return;}
+ __atomic_compare_exchange_n(&live_pc_uid,&zero,uid,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE);
+ if(__atomic_load_n(&live_pc_uid,__ATOMIC_ACQUIRE)!=uid){__atomic_fetch_add(&live_pc_other,1,__ATOMIC_RELAXED);return;}
+ uint64_t tid=current_thread()->thread_id;unsigned version=(unsigned)proc_pidversion(p);
+ if(__atomic_exchange_n(&live_pc_lock,1,__ATOMIC_ACQUIRE)){__atomic_fetch_add(&live_pc_busy,1,__ATOMIC_RELAXED);return;}
+ for(unsigned i=0;i<LIVE_PC_SLOTS;i++) {
+  struct live_pc_row *r=&live_pc_rows[i];
+  if(!r->hits){r->pc=pc;r->lr=lr;r->tid=tid;r->user=user;r->version=version;r->hits=1;goto done;}
+  if(r->pc==pc && r->lr==lr && r->tid==tid && r->user==user && r->version==version){r->hits++;goto done;}
+ }
+ __atomic_fetch_add(&live_pc_full,1,__ATOMIC_RELAXED);
+ done: __atomic_store_n(&live_pc_lock,0,__ATOMIC_RELEASE);
+}
+static void live_pc_image_report(unsigned pid,uint64_t epoch);
+void boot_live_pc_report(void) {
+ unsigned pid=__atomic_load_n(&live_pc_pid,__ATOMIC_ACQUIRE);
+ if(!pid)return;
+ if(__atomic_exchange_n(&live_pc_lock,1,__ATOMIC_ACQUIRE))return;
+ struct live_pc_row rows[LIVE_PC_SLOTS];
+ memcpy(rows,live_pc_rows,sizeof(rows));memset(live_pc_rows,0,sizeof(live_pc_rows));
+ uint64_t now=mach_absolute_time(),start=live_pc_start;live_pc_start=now;
+ uint64_t epoch=++live_pc_epoch;
+ __atomic_store_n(&live_pc_lock,0,__ATOMIC_RELEASE);
+ uint64_t ns=0,start_ns=0;absolutetime_to_nanoseconds(now,&ns);if(start)absolutetime_to_nanoseconds(start,&start_ns);
+ const char *boot=(bootsessionuuid_string && bootsessionuuid_string[0])?bootsessionuuid_string:"unavailable";
+ printf("a04br3 livepc boot=%s pid=%u uid=%llu epoch=%llu start_ns=%llu end_ns=%llu hook=%u rate=%u seen=%llu busy=%llu full=%llu other=%llu\n",boot,pid,(unsigned long long)__atomic_load_n(&live_pc_uid,__ATOMIC_ACQUIRE),(unsigned long long)epoch,(unsigned long long)start_ns,(unsigned long long)ns,boot_home_irq_hook_available(),LIVE_PC_RATE,(unsigned long long)__atomic_load_n(&live_pc_seen,__ATOMIC_RELAXED),(unsigned long long)__atomic_load_n(&live_pc_busy,__ATOMIC_RELAXED),(unsigned long long)__atomic_load_n(&live_pc_full,__ATOMIC_RELAXED),(unsigned long long)__atomic_load_n(&live_pc_other,__ATOMIC_RELAXED));
+ live_pc_image_report(pid,epoch);
+ for(unsigned i=0;i<LIVE_PC_SLOTS;i++)if(rows[i].hits)
+  printf("a04br3 livepc sample epoch=%llu tid=%llu version=%u mode=%s pc=%llx lr=%llx count=%llu\n",(unsigned long long)epoch,(unsigned long long)rows[i].tid,rows[i].version,rows[i].user?"user":"kernel-unslid",(unsigned long long)rows[i].pc,(unsigned long long)rows[i].lr,(unsigned long long)rows[i].hits);
+}
+
+// dyld_all_image_infos prefix and dyld_image_info are the 64-bit ABI. Only
+// bounded reads from a referenced map; this worker may block on page faults.
+#define LIVE_IMAGES_MAX 128u
+struct live_image_info { uint64_t addr,path,mod; };
+struct live_info_head { uint32_t version,count; uint64_t array,notify; uint8_t detached,initialized,pad[6]; uint64_t dyld; };
+struct live_macho_head { uint32_t magic,cputype,subtype,filetype,ncmds,sizeofcmds,flags,reserved; };
+struct live_image_row { uint64_t addr,text_vm,text_size; uint8_t uuid[16]; unsigned valid,uuid_valid,text_valid; };
+static struct live_image_row live_image_rows[LIVE_IMAGES_MAX+1];
+static struct live_image_info live_image_entries[LIVE_IMAGES_MAX];
+static int live_read(vm_map_t map,uint64_t addr,void *buf,unsigned len) {
+ if(!addr || addr+len<addr)return -1;
+ return vm_map_read_user(map,addr,buf,len)==KERN_SUCCESS ? 0 : -1;
+}
+static void live_image_decode(vm_map_t map,uint64_t addr,struct live_image_row *row) {
+ struct live_macho_head h={0};row->addr=addr;
+ if(live_read(map,addr,&h,sizeof(h)) || h.magic!=0xfeedfacf || h.ncmds>1024 || h.sizeofcmds>65536)return;
+ row->valid=1;uint64_t off=sizeof(h),end=off+h.sizeofcmds;
+ for(unsigned i=0;i<h.ncmds && off+8<=end;i++) {
+  if(addr+off<addr || addr+off+8<addr+off)break;
+  uint32_t c[2];if(live_read(map,addr+off,c,sizeof(c)) || c[1]<8 || off+c[1]>end)break;
+  if(c[0]==0x1b && c[1]>=24) {
+   if(!live_read(map,addr+off+8,row->uuid,16))row->uuid_valid=1;
+  } else if(c[0]==0x19 && c[1]>=72) {
+   struct {uint32_t cmd,size;char name[16];uint64_t vmaddr,vmsize;} segment;
+   if(!live_read(map,addr+off,&segment,sizeof(segment)) && !memcmp(segment.name,"__TEXT\0",7)) {
+    row->text_vm=segment.vmaddr;row->text_size=segment.vmsize;row->text_valid=1;
+   }
+  }
+  off+=c[1];
+ }
+}
+struct live_image_request {unsigned pid;uint64_t epoch;unsigned seen;};
+static int live_image_selected(proc_t p,void *arg) {return proc_pid(p)==(int)((struct live_image_request *)arg)->pid;}
+static int live_image_capture(proc_t p,void *arg) {
+ struct live_image_request *req=arg;req->seen=1;uint64_t uid=proc_uniqueid(p),observed=__atomic_load_n(&live_pc_uid,__ATOMIC_ACQUIRE);
+ unsigned version=(unsigned)proc_pidversion(p);task_t task=proc_task(p);uint64_t start=mach_absolute_time(),start_ns=0,end_ns=0;
+ if(!task || !uid || !observed || uid!=observed || !task_lock_try(task)) {
+  printf("a04br3 livepc images epoch=%llu unavailable=task_or_generation\n",(unsigned long long)req->epoch);return PROC_RETURNED;
+ }
+ task_reference(task);
+ vm_map_t map=task->map;uint64_t info=task_get_all_image_info_addr(task);unsigned slide=task->task_shared_region_slide;
+ if(map)vm_map_reference(map);
+ task_unlock(task);
+ struct live_info_head first={0},last={0};unsigned read_count=0,failed=0;
+ memset(live_image_rows,0,sizeof(live_image_rows));
+ if(!map || live_read(map,info,&first,sizeof(first)) || !first.array || first.count>4096)failed=1;
+ if(!failed) {
+  read_count=first.count<LIVE_IMAGES_MAX?first.count:LIVE_IMAGES_MAX;
+  for(unsigned i=0;i<read_count;i++) {
+   struct live_image_info image;
+   if(live_read(map,first.array+(uint64_t)i*sizeof(image),&image,sizeof(image))){failed=1;break;}
+   live_image_entries[i]=image;live_image_decode(map,image.addr,&live_image_rows[i]);
+  }
+  if(first.dyld)live_image_decode(map,first.dyld,&live_image_rows[read_count]);
+  for(unsigned i=0;i<read_count && !failed;i++) {
+   struct live_image_info check;
+   if(live_read(map,first.array+(uint64_t)i*sizeof(check),&check,sizeof(check)) || memcmp(&check,&live_image_entries[i],sizeof(check)))failed=1;
+  }
+  if(live_read(map,info,&last,sizeof(last)) || memcmp(&first,&last,sizeof(first)))failed=1;
+ }
+ if((unsigned)proc_pidversion(p)!=version || proc_task(p)!=task)failed=1;
+ if(!task_lock_try(task))failed=1;
+ else {
+  if(task->map!=map || task_get_all_image_info_addr(task)!=info || task->task_shared_region_slide!=slide)failed=1;
+  task_unlock(task);
+ }
+ if(map)vm_map_deallocate(map);
+ task_deallocate(task);
+ absolutetime_to_nanoseconds(start,&start_ns);absolutetime_to_nanoseconds(mach_absolute_time(),&end_ns);
+ printf("a04br3 livepc images epoch=%llu pid=%u uid=%llu version=%u start_ns=%llu end_ns=%llu info=%llx cache_slide=%x cache_slide_valid=%u version=%u count=%u captured=%u truncated=%u headers_entries_unchanged=%u\n",(unsigned long long)req->epoch,req->pid,(unsigned long long)uid,version,(unsigned long long)start_ns,(unsigned long long)end_ns,(unsigned long long)info,slide,slide!=0xffffffffU,first.version,first.count,read_count,first.count>LIVE_IMAGES_MAX,!failed);
+ if(!failed) for(unsigned i=0;i<read_count+!!first.dyld;i++) {
+  struct live_image_row *r=&live_image_rows[i];
+  printf("a04br3 livepc image epoch=%llu index=%u dyld=%u load=%llx text_vm=%llx text_size=%llx text_valid=%u macho=%u uuid_valid=%u uuid=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",(unsigned long long)req->epoch,i,i==read_count,(unsigned long long)r->addr,(unsigned long long)r->text_vm,(unsigned long long)r->text_size,r->text_valid,r->valid,r->uuid_valid,r->uuid[0],r->uuid[1],r->uuid[2],r->uuid[3],r->uuid[4],r->uuid[5],r->uuid[6],r->uuid[7],r->uuid[8],r->uuid[9],r->uuid[10],r->uuid[11],r->uuid[12],r->uuid[13],r->uuid[14],r->uuid[15]);
+ }
+ return PROC_RETURNED;
+}
+static void live_pc_image_report(unsigned pid,uint64_t epoch) {
+ struct live_image_request req={pid,epoch,0};
+ proc_iterate(PROC_ALLPROCLIST|PROC_NOWAITTRANS,live_image_capture,&req,live_image_selected,&req);
+ if(!req.seen)printf("a04br3 livepc images epoch=%llu unavailable=process_absent_or_transition\n",(unsigned long long)epoch);
 }
