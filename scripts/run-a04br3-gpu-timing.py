@@ -20,6 +20,7 @@ import time
 
 ROOT=Path(__file__).resolve().parents[1]
 ORDER=(26,380,26,380,26,380)
+FAULT=re.compile(r'panic\(|Panicked|Kernel panic|Synchronous Exception at|context reset\s+[1-9]|HWR counter [1-9]|\bhwr\s+[1-9]|\bfaults [1-9]|MMU fault|powervr[^\n]*\bFAULT\b',re.I)
 
 def sha(path):
     h=hashlib.sha256()
@@ -63,7 +64,7 @@ def analyze(raw,clock):
         return {'state':'fail','reason':'firmware fault/reboot before XNU'}
     text=text[boots[0].start():]
     if re.search(r'A04BR3 SEC:|Preloader Start|BOOT_REASON:',text):return {'state':'fail','reason':'reboot boundary before complete measurement'}
-    fault=re.search(r'panic\(|Panicked|Kernel panic|Synchronous Exception at|context reset\s+[1-9]|HWR counter [1-9]|\bfaults [1-9]|MMU fault|powervr[^\n]*\bFAULT\b',text,re.I)
+    fault=FAULT.search(text)
     if fault:return {'state':'fail','reason':'fault/panic/reset: '+fault.group(0)}
     if re.search(r'powervrprobed: FAIL',text):return {'state':'fail','reason':'probe FAIL'}
     if re.search(r'gpu scanout: [^\n]*(?:failed|abandoned)=[1-9]',text):return {'state':'fail','reason':'UI scanout failure'}
@@ -172,7 +173,8 @@ def kernel_ready(a,folder):
 
 
 def recover(io,a,folder,process=None):
-    end=io.now()+a.recovery_timeout;sent=False
+    request=folder/('initial-reset-request.json' if process is None else 'reset-request.json')
+    end=io.now()+a.recovery_timeout;sent=request.exists()
     while io.now()<end:
         present=io.fastboot()
         if present and (process is None or process.poll() is not None):
@@ -181,7 +183,7 @@ def recover(io,a,folder,process=None):
         # Do not reset a flash transfer. Wait for the new kernel listener, or
         # autonomous recovery, before sending at most one UART reset request.
         if not present and not sent and (process is None or kernel_ready(a,folder)):
-            save(folder/'reset-request.json',{'utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
+            save(request,{'utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
                  'uart_offset':a.uart_log.stat().st_size,'method':'existing a04br3-reset.sh','cause':'host requested; not autonomous recovery proof'})
             io.reset(folder);sent=True
         io.sleep(2)
@@ -251,7 +253,7 @@ def campaign(a,inputs,io):
                         (folder/'recovery-uart.log').write_bytes(recovery)
                         recovery_text=recovery.decode(errors='replace')
                         round_result['recovery_boot_reasons']=re.findall(r'BOOT_REASON[:=]\s*(\d+)',recovery_text)
-                        if len(recovery)>32*1024*1024 or re.search(r'panic\(|Synchronous Exception at|context reset\s+[1-9]|HWR counter [1-9]',recovery_text,re.I):
+                        if len(recovery)>32*1024*1024 or FAULT.search(recovery_text):
                             round_result.update(state='fail',recovery_error='fault or overflow in recovery UART')
             except OSError as capture_error:
                 round_result.update(state='fail',recovery_capture_error=str(capture_error))

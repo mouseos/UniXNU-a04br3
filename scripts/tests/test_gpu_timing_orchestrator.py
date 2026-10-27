@@ -140,13 +140,13 @@ class Tests(unittest.TestCase):
         self.assertEqual(m.analyze(boot(380).replace(b'380000062',b'299000000'),380)['state'],'fail')
         self.assertEqual(m.analyze(boot().replace(b'\n',b'\\r\\n'),26)['state'],'pass')
 
-    def run_case(self,mutation):
+    def run_case(self,mutation,transport=Fake):
         directory=tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup);r=Path(directory.name)
         log=r/'collector.log';log.write_bytes(boot()) # prior successful boot MUST be outside epoch
         for c in (26,380):(r/str(c)).write_bytes(str(c).encode())
         a=SimpleNamespace(out=r/'run',uart_log=log,uart='unused',boot26=r/'26',boot380=r/'380',measurement_timeout=10,
                           recovery_timeout=5,settle=1,post_success=1,environment_json=None)
-        a.out.mkdir();inputs={str(c):{'boot_sha256':m.sha(r/str(c))} for c in (26,380)};io=Fake(a,mutation)
+        a.out.mkdir();inputs={str(c):{'boot_sha256':m.sha(r/str(c))} for c in (26,380)};io=transport(a,mutation)
         status=m.campaign(a,inputs,io);result=json.loads((a.out/'campaign.json').read_text());return status,result,io,a
 
     def test_six_boots(self):
@@ -195,6 +195,9 @@ class Tests(unittest.TestCase):
         m.recover(io,a,folder,Process(io));self.assertEqual(io.resets,1)
         io.exit_code=2
         with self.assertRaises(RuntimeError):m.recover(io,a,folder,Process(io))
+        io.present=False;io.exit_code=None
+        with self.assertRaises(TimeoutError):m.recover(io,a,folder,Process(io))
+        self.assertEqual(io.resets,1)
 
     def test_dead_collector_preflight_has_no_device_effect(self):
         directory=tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup);r=Path(directory.name)
@@ -205,6 +208,15 @@ class Tests(unittest.TestCase):
         io=Dead(a);io.present=False
         self.assertEqual(m.campaign(a,{},io),2)
         self.assertEqual(io.resets,0);self.assertFalse(io.sequence)
+
+    def test_fault_in_recovery_never_passes(self):
+        class LateFault(Fake):
+            def reset(self,folder):
+                super().reset(folder)
+                with self.a.uart_log.open('ab') as f:f.write(b'powervr: faults 0 hwr 1\n')
+        status,result,io,a=self.run_case(lambda b:b,LateFault)
+        self.assertEqual(status,2);self.assertFalse(result['success']);self.assertEqual(len(io.sequence),1)
+        self.assertIn('recovery UART',result['rounds'][0]['recovery_error'])
 
     def test_panic_stops_schedule(self):
         status,result,io,a=self.run_case(lambda b:b+b'panic(cpu0)\n')
