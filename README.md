@@ -500,8 +500,8 @@ new sampler is enabled, the large periodic all-process name list is suppressed
 to reduce UART traffic. Use a longer
 interval where UART traffic itself would affect observation. Global VM pages
 are approximate independent reads; task resident, compressed, and footprint
-are separate ledger quantities, not additive totals. The sample timestamp and
-CPU counter are nanoseconds since boot and cumulative CPU time respectively;
+are separate ledger quantities, not additive totals. The per-task `cpu_at_ns` timestamp and CPU counter are nanoseconds since boot
+and cumulative CPU time respectively;
 compare matching pid and process name across samples (pid reuse is possible).
 The task ledger is charged on scheduling and is not a wall clock. Rates can
 exceed 100% on SMP. At most ten named tasks and 32 threads per task are
@@ -517,14 +517,20 @@ existing display and storage-cache counters, when available. Console output
 and sampling perturb timing; compare against the original P29 as a control.
 No device execution or image build is claimed for this branch.
 
-The display probe buffers up to 32 monotonic timestamp markers between reports:
+The display probe retains the latest 32 monotonic timestamp markers between reports:
 stage 0 is acceptance of a display swap, stage 1 follows a successful GPU
 offer, and stage 2 is the existing successful transfer hook, used by CPU copies and
 successful GPU handoffs. The
 markers identify observation points only: stage 0 is not the app render
 command-buffer commit, stage 2 alone is not proof that pixels are visible, and no causal pairing
-with a touch is established. Buffer overflow or lock contention is counted as
+with a touch is established. Overwriting older entries or lock contention is counted as
 `dropped`; events are emitted later by the heartbeat. The legacy swap timeline
 already stores timestamps but this P29 source has no wired UART command to read
 it. P29 can provide existing touch/report and aggregate scanout data without
 reboot; these new markers need a rebuilt image.
+
+Input `seq` and `reports` are shared values read after publishing; with the
+synthetic self-test running they may refer to another publisher. HID reports
+are attempted reports, not necessarily successful delivery. The input log is
+synchronous and can delay subsequent polling. An error-triggered release is
+marked `error=<code>`.

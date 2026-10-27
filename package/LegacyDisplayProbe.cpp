@@ -170,20 +170,25 @@ void native_legacy_frame_colors_observed(const uint32_t *colors,const uint64_t *
 // full buffer drops events instead of delaying the display path.
 struct HomeDisplayEvent { uint64_t us; unsigned stage; };
 static HomeDisplayEvent homeDisplayEvents[32];
-static unsigned homeDisplayCount, homeDisplayLock, homeDisplayDropped, homeDisplayEnabled;
+static unsigned homeDisplayCount, homeDisplayHead, homeDisplayLock, homeDisplayDropped, homeDisplayEnabled;
 static void homeDisplayRecord(unsigned stage, uint64_t us) {
     if (!__atomic_load_n(&homeDisplayEnabled, __ATOMIC_RELAXED)) return;
     if (__atomic_exchange_n(&homeDisplayLock, 1, __ATOMIC_ACQUIRE)) {
         __atomic_fetch_add(&homeDisplayDropped, 1, __ATOMIC_RELAXED); return;
     }
-    if (homeDisplayCount < 32) homeDisplayEvents[homeDisplayCount++] = {us, stage};
-    else __atomic_fetch_add(&homeDisplayDropped, 1, __ATOMIC_RELAXED);
+    if (homeDisplayCount == 32) {
+        homeDisplayHead = (homeDisplayHead + 1) % 32;
+        --homeDisplayCount;
+        __atomic_fetch_add(&homeDisplayDropped, 1, __ATOMIC_RELAXED);
+    }
+    homeDisplayEvents[(homeDisplayHead + homeDisplayCount++) % 32] = {us, stage};
     __atomic_store_n(&homeDisplayLock, 0, __ATOMIC_RELEASE);
 }
 static void homeDisplayReport(void) {
     if (!__atomic_load_n(&homeDisplayEnabled, __ATOMIC_RELAXED) || __atomic_exchange_n(&homeDisplayLock, 1, __ATOMIC_ACQUIRE)) return;
     HomeDisplayEvent events[32]; unsigned count = homeDisplayCount;
-    memcpy(events, homeDisplayEvents, count * sizeof(events[0])); homeDisplayCount = 0;
+    for (unsigned i=0; i<count; ++i) events[i]=homeDisplayEvents[(homeDisplayHead+i)%32];
+    homeDisplayCount = 0; homeDisplayHead = 0;
     __atomic_store_n(&homeDisplayLock, 0, __ATOMIC_RELEASE);
     unsigned dropped = __atomic_exchange_n(&homeDisplayDropped, 0, __ATOMIC_RELAXED);
     IOLog("a04br3 perf display count=%u dropped=%u\n", count, dropped);

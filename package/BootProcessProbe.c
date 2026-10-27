@@ -195,7 +195,7 @@ void boot_process_snapshot(void) {
 // stack walk or printing while task/scheduler locks are held.
 struct home_perf_row {
  char name[24]; int pid; unsigned threads, running, waiting, busy, sampled, state;
- uint64_t wait, cpu_ticks, resident, compressed, footprint;
+ uint64_t wait, cpu_ticks, cpu_at, resident, compressed, footprint;
 };
 static struct home_perf_row home_perf_rows[10];
 static unsigned home_perf_count;
@@ -211,7 +211,7 @@ static int home_perf_capture(proc_t p, void *unused) {
  struct home_perf_row *r=&home_perf_rows[home_perf_count++];
  memset(r,0,sizeof(*r));strlcpy(r->name,proc_best_name(p),sizeof(r->name));r->pid=proc_pid(p);
  task_t task=proc_task(p);if(!task){r->busy=1;return PROC_RETURNED;}
- r->cpu_ticks=get_task_cpu_time(task);r->resident=get_task_resident_size(task);
+ r->cpu_ticks=get_task_cpu_time(task);r->cpu_at=mach_absolute_time();r->resident=get_task_resident_size(task);
  r->compressed=get_task_compressed(task);r->footprint=get_task_phys_footprint(task);
  if(!task_lock_try(task)){r->busy=1;return PROC_RETURNED;}
  r->threads=task->thread_count; thread_t th; unsigned scanned=0;
@@ -231,9 +231,9 @@ void boot_home_perf_sample(void) {
  uint64_t now=0;absolutetime_to_nanoseconds(mach_absolute_time(),&now);
  printf("a04br3 perf sample ns=%llu tasks=%u\n",now,home_perf_count);
  for(unsigned i=0;i<home_perf_count;++i){
-  struct home_perf_row *r=&home_perf_rows[i];uint64_t cpu=0;
-  absolutetime_to_nanoseconds(r->cpu_ticks,&cpu);
-  printf("a04br3 perf task p%d %.23s cpu_ns=%llu resident=%llu compressed=%llu footprint=%llu threads=%u run=%u wait=%u busy=%u sampled=%u state=%x event=%llx\n",
-   r->pid,r->name,cpu,r->resident,r->compressed,r->footprint,r->threads,r->running,r->waiting,r->busy,r->sampled,r->state,r->wait);
+  struct home_perf_row *r=&home_perf_rows[i];uint64_t cpu=0, at=0;
+  absolutetime_to_nanoseconds(r->cpu_ticks,&cpu);absolutetime_to_nanoseconds(r->cpu_at,&at);
+  printf("a04br3 perf task p%d %.23s cpu_ns=%llu cpu_at_ns=%llu resident=%llu compressed=%llu footprint=%llu threads=%u run=%u wait=%u busy=%u sampled=%u state=%x event=%llx\n",
+   r->pid,r->name,cpu,at,r->resident,r->compressed,r->footprint,r->threads,r->running,r->waiting,r->busy,r->sampled,r->state,r->wait);
  }
 }

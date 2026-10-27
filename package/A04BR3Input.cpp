@@ -213,7 +213,19 @@ void touchThread(void *, wait_result_t)
     if (!e) e = measure(0x90, 0xd4, 800, &y);
     if (!e) e = measure(0xa0, 0xe4, 600, &z);
     if (e) {
-      if (down) { publish(false, lastx, lasty); down = false; }
+      if (down) {
+        uint64_t before = 0;
+        if (perf == 1 && perfEdges < 32) before = mach_absolute_time();
+        publish(false, lastx, lasty); down = false;
+        if (perf == 1 && perfEdges < 32) {
+          uint64_t startNs = 0, elapsedNs = 0;
+          absolutetime_to_nanoseconds(before, &startNs);
+          absolutetime_to_nanoseconds(mach_absolute_time() - before, &elapsedNs);
+          IOLog("a04br3 perf input edge=0 error=%d seq=%u start_ns=%llu publish_ns=%llu reports=%u\n",
+                e, native_touch_seq, startNs, elapsedNs, native_touch_hid_reports);
+          ++perfEdges;
+        }
+      }
       if (++failures <= 3) IOLog("a04br3 input: touch transfer error %d\n", e);
       IOSleep(100);
       continue;
