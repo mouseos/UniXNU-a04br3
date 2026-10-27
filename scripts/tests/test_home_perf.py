@@ -119,8 +119,20 @@ static int is_saved_state64(arm_saved_state_t *s){return s!=0;}
 static uint64_t get_saved_state_pc(arm_saved_state_t *s){return s->pc;}
 static uint64_t get_saved_state_lr(arm_saved_state_t *s){return s->lr;}
 struct recount_times_mach {uint64_t rtm_user,rtm_system;};
-static struct recount_times_mach recount_task_times(task_t t){(void)t;return (struct recount_times_mach){3,4};}
-static struct recount_times_mach recount_thread_times(thread_t t){(void)t;return (struct recount_times_mach){5,6};}
+static struct recount_times_mach recount_task_times(task_t t){(void)t;
+#if PRECISE_USER_KERNEL_TIME
+ return (struct recount_times_mach){3,4};
+#else
+ return (struct recount_times_mach){7,0};
+#endif
+}
+static struct recount_times_mach recount_thread_times(thread_t t){(void)t;
+#if PRECISE_USER_KERNEL_TIME
+ return (struct recount_times_mach){5,6};
+#else
+ return (struct recount_times_mach){11,0};
+#endif
+}
 static unsigned strlcpy(char *d,const char *s,unsigned n) {snprintf(d,n,"%s",s);return strlen(s);}
 static const char *proc_best_name(proc_t p){return p->name;}
 static int proc_pid(proc_t p){return p->pid;}
@@ -172,8 +184,31 @@ int main(void){
  for(unsigned i=0;i<40;++i){th[i].thread_id=i+1;th[i].machine.upcb=&savedpc;}
  output_used=0;output[0]=0;boot_home_perf_sample();
  assert(home_perf_count==1 && home_perf_rows[0].detail_count==8);
- assert(strstr(output,"split=0 user_ns=6 system_ns=8"));
+#if PRECISE_USER_KERNEL_TIME
+ assert(strstr(output,"split=1 user_ns=6 system_ns=8"));
+#else
+ assert(strstr(output,"split=0 user_ns=14 system_ns=0"));
+#endif
  assert(strstr(output,"pc=1234 lr=5678"));
+ _Alignas(16) uint64_t frames[10]={0};
+ frames[0]=(uintptr_t)&frames[2];frames[1]=0x11;
+ frames[2]=(uintptr_t)&frames[4];frames[3]=0x22;
+ frames[4]=(uintptr_t)&frames[6];frames[5]=0x33;
+ frames[6]=(uintptr_t)&frames[8];frames[7]=0x44;
+ kernel_stack_size=sizeof(frames);th[2].kernel_stack=(uintptr_t)frames;
+ fake_ks.machine.ss.fp=(uintptr_t)frames;fake_ks.machine.ss.lr=0xaa;
+ struct home_perf_thread d={0};
+ home_perf_kernel_stack(&th[2],&d);
+ assert(d.valid_kernel && d.kernel[0]==0xaa && d.kernel[1]==0x11 && d.kernel[2]==0x22 && d.kernel[3]==0x33);
+ d=(struct home_perf_thread){0};th[1].kernel_stack=(uintptr_t)frames;
+ home_perf_kernel_stack(&th[1],&d);assert(!d.valid_kernel);
+ fake_ks.machine.ss.fp=(uintptr_t)frames+1;d=(struct home_perf_thread){0};
+ home_perf_kernel_stack(&th[2],&d);assert(d.valid_kernel && d.kernel[1]==0);
+ fake_ks.machine.ss.fp=(uintptr_t)&frames[10];d=(struct home_perf_thread){0};
+ home_perf_kernel_stack(&th[2],&d);assert(d.valid_kernel && d.kernel[1]==0);
+ frames[0]=(uintptr_t)frames;fake_ks.machine.ss.fp=(uintptr_t)frames;d=(struct home_perf_thread){0};
+ home_perf_kernel_stack(&th[2],&d);assert(d.kernel[1]==0x11 && d.kernel[2]==0);
+ th[1].kernel_stack=th[2].kernel_stack=0;
  for(unsigned i=0;i<16;++i)procs[i]=(struct proc){"logd",(int)i+1,&task};
  boot_home_perf_sample();assert(home_perf_count==10);
  assert(task_acquires==task_releases && sched_acquires==sched_releases);
@@ -183,10 +218,12 @@ int main(void){
         with tempfile.TemporaryDirectory(prefix='home-perf-') as tmp:
             src, binary = Path(tmp) / 'test.c', Path(tmp) / 'test'
             src.write_text(harness)
-            subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
-                            '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
-                            str(src), '-o', str(binary)], check=True)
-            subprocess.run([str(binary)], check=True)
+            for precise in (0, 1):
+                subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror',
+                                '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                                f'-DPRECISE_USER_KERNEL_TIME={precise}',
+                                str(src), '-o', str(binary)], check=True)
+                subprocess.run([str(binary)], check=True)
 
 
 if __name__ == '__main__':
