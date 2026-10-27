@@ -19,6 +19,7 @@
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
+#include "BootMemoryQueueSnapshot.h"
 #include "powervr/native_powervr_bo_stats.h"
 #include <kern/thread.h>
 #include <libkern/libkern.h>
@@ -29,6 +30,7 @@ void a04br3_charger_init(void);
 void a04br3_registers_init(void);
 void a04br3_gpu_init(void);
 void boot_memory_snapshot(uint64_t out[7]);
+void boot_home_perf_sample(void);
 void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
 int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
@@ -170,16 +172,27 @@ void msdcCacheReport()
 
 void procLogThread(void *, wait_result_t)
 {
+  unsigned perf = 0;
+  PE_parse_boot_argn("a04br3-home-perf", &perf, sizeof(perf));
   uint64_t cacheReportSeconds = 0;
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
-    static ProcLine line;
-    line = {};
-    proc_iterate(kProcAll, procCallout, &line, nullptr, nullptr);
-    procFlush(line);
-    IOLog("a04br3 procs: round %u, %u processes\n", round, line.count);
+    if (perf != 1) {
+      static ProcLine line;
+      line = {};
+      proc_iterate(kProcAll, procCallout, &line, nullptr, nullptr);
+      procFlush(line);
+      IOLog("a04br3 procs: round %u, %u processes\n", round, line.count);
+    }
     a04br3_display_report();
     a04br3_thread_report();
+    if (perf == 1) {
+      uint64_t m[7]; struct boot_memory_queue_record q;
+      boot_memory_snapshot(m); boot_memory_queue_snapshot(&q);
+      IOLog("a04br3 perf vm pagesize=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu throttled=%llu pageable_internal=%llu pageable_external=%llu mode=%d active_compressor=%u active_swap=%u\n",
+            m[0],m[1],m[2],m[3],m[4],m[5],m[6],q.throttled,q.pageable_internal,q.pageable_external,q.compressor_mode,q.compressor_active,q.swap_active);
+      boot_home_perf_sample();
+    }
     cacheReportSeconds += gProcLogSeconds;
     if (cacheReportSeconds >= 60) {
       cacheReportSeconds %= 60;

@@ -490,3 +490,41 @@ editing `board.toml`. The build log must contain the explicit define. The
 result is `Build/a04br3Pkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd` in the UEFI checkout.
 Source/host checks passed; actual firmware compilation and boot remain separate
 validation steps. This recipe performs no flash or reboot.
+
+### P29 Home performance sampling (experimental, default off)
+
+The source branch based on device commit `32fe8b7` adds an opt-in sampler:
+`a04br3-home-perf=1 a04br3-proclog=10`. This reuses the heartbeat worker;
+without a nonzero `a04br3-proclog` there are no periodic samples. When the
+new sampler is enabled, the large periodic all-process name list is suppressed
+to reduce UART traffic. Use a longer
+interval where UART traffic itself would affect observation. Global VM pages
+are approximate independent reads; task resident, compressed, and footprint
+are separate ledger quantities, not additive totals. The sample timestamp and
+CPU counter are nanoseconds since boot and cumulative CPU time respectively;
+compare matching pid and process name across samples (pid reuse is possible).
+The task ledger is charged on scheduling and is not a wall clock. Rates can
+exceed 100% on SMP. At most ten named tasks and 32 threads per task are
+sampled; `busy` marks failed try-locks, `sampled=0` means no wait state, and
+`run`/`wait` are partial instantaneous counts, not CPU time or a full wait
+history. Process iteration may block even with NOWAITTRANS.
+
+The first 32 physical touch edges report the monotonic time immediately before
+publishing and the duration of the synchronous publish callback. These markers
+are not an end-to-end input-to-visible-frame measurement; a reported HID count
+is not proof that SpringBoard handled that event. The monitor also emits the
+existing display and storage-cache counters, when available. Console output
+and sampling perturb timing; compare against the original P29 as a control.
+No device execution or image build is claimed for this branch.
+
+The display probe buffers up to 32 monotonic timestamp markers between reports:
+stage 0 is acceptance of a display swap, stage 1 follows a successful GPU
+offer, and stage 2 is the existing successful transfer hook, used by CPU copies and
+successful GPU handoffs. The
+markers identify observation points only: stage 0 is not the app render
+command-buffer commit, stage 2 alone is not proof that pixels are visible, and no causal pairing
+with a touch is established. Buffer overflow or lock contention is counted as
+`dropped`; events are emitted later by the heartbeat. The legacy swap timeline
+already stores timestamps but this P29 source has no wired UART command to read
+it. P29 can provide existing touch/report and aggregate scanout data without
+reboot; these new markers need a rebuilt image.

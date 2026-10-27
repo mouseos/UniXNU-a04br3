@@ -15,6 +15,8 @@
 #include <IOKit/IOLib.h>
 #include <libkern/c++/OSObject.h>
 #include <kern/thread.h>
+#include <machine/machine_routines.h>
+#include <mach/mach_time.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include "A04BR3RegisterLock.h"
@@ -201,7 +203,8 @@ void touchThread(void *, wait_result_t)
   IOLog("a04br3 input: BU21025 i2c0@48 init %d\n", e);
   if (e) return;
   a04br3_input_stage = a04br3_input_stage | 1;
-  unsigned lastx = 0, lasty = 0, failures = 0;
+  unsigned lastx = 0, lasty = 0, failures = 0, perf = 0, perfEdges = 0;
+  PE_parse_boot_argn("a04br3-home-perf", &perf, sizeof(perf));
   bool down = false;
   for (;;) {
     if (!down && (rd(gGpio, 0x200) & (1U << 8))) { IOSleep(20); continue; }   // pen up
@@ -218,7 +221,18 @@ void touchThread(void *, wait_result_t)
     failures = 0;
     const int active = point(x, y, z, &lastx, &lasty);
     if (active < 0) { (void)command(0); IOSleep(20); continue; }
+    bool edge = (active != 0) != down;
+    uint64_t before = 0, after = 0;
+    if (perf == 1 && edge && perfEdges < 32) before = mach_absolute_time();
     if (active || down) publish(active != 0, lastx, lasty);
+    if (perf == 1 && edge && perfEdges < 32) {
+      after = mach_absolute_time(); uint64_t beforeNs = 0, elapsedNs = 0;
+      absolutetime_to_nanoseconds(before, &beforeNs);
+      absolutetime_to_nanoseconds(after - before, &elapsedNs);
+      IOLog("a04br3 perf input edge=%u seq=%u start_ns=%llu publish_ns=%llu reports=%u\n",
+            active != 0, native_touch_seq, beforeNs, elapsedNs, native_touch_hid_reports);
+      ++perfEdges;
+    }
     if ((active != 0) != down) {
       if (active) a04br3_touch_contacts = a04br3_touch_contacts + 1;
       if (a04br3_touch_contacts <= 32) IOLog("a04br3 input: touch %s %u,%u seq %u reports %u result 0x%x\n",

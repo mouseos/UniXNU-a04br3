@@ -166,10 +166,35 @@ void native_legacy_frame_colors_observed(const uint32_t *colors,const uint64_t *
 }
 // The life of every accepted swap, from the kernel's side: validated (the client submitted it), offered to the GPU copy (or started on the CPU),
 // and retired. Times are microseconds since boot; the last 64 are kept.
+// Optional bounded timing markers for correlation with input; a contended or
+// full buffer drops events instead of delaying the display path.
+struct HomeDisplayEvent { uint64_t us; unsigned stage; };
+static HomeDisplayEvent homeDisplayEvents[32];
+static unsigned homeDisplayCount, homeDisplayLock, homeDisplayDropped, homeDisplayEnabled;
+static void homeDisplayRecord(unsigned stage, uint64_t us) {
+    if (!__atomic_load_n(&homeDisplayEnabled, __ATOMIC_RELAXED)) return;
+    if (__atomic_exchange_n(&homeDisplayLock, 1, __ATOMIC_ACQUIRE)) {
+        __atomic_fetch_add(&homeDisplayDropped, 1, __ATOMIC_RELAXED); return;
+    }
+    if (homeDisplayCount < 32) homeDisplayEvents[homeDisplayCount++] = {us, stage};
+    else __atomic_fetch_add(&homeDisplayDropped, 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&homeDisplayLock, 0, __ATOMIC_RELEASE);
+}
+static void homeDisplayReport(void) {
+    if (!__atomic_load_n(&homeDisplayEnabled, __ATOMIC_RELAXED) || __atomic_exchange_n(&homeDisplayLock, 1, __ATOMIC_ACQUIRE)) return;
+    HomeDisplayEvent events[32]; unsigned count = homeDisplayCount;
+    memcpy(events, homeDisplayEvents, count * sizeof(events[0])); homeDisplayCount = 0;
+    __atomic_store_n(&homeDisplayLock, 0, __ATOMIC_RELEASE);
+    unsigned dropped = __atomic_exchange_n(&homeDisplayDropped, 0, __ATOMIC_RELAXED);
+    IOLog("a04br3 perf display count=%u dropped=%u\n", count, dropped);
+    for (unsigned i=0; i<count; ++i)
+        IOLog("a04br3 perf display stage=%u time_us=%llu\n", events[i].stage, (unsigned long long)events[i].us);
+}
 struct SwapEvent {uint64_t submitted,offered,done;uint32_t number;};
 static SwapEvent swapEvents[64];static uint32_t swapEventCount;
 extern "C" void native_legacy_swap_stage(unsigned stage) {
     const uint64_t now=probeNowUs();
+    homeDisplayRecord(stage, now);
     uint32_t total=swapEventCount;
     if(stage==0) {
         SwapEvent &e=swapEvents[total%64];e={now,0,0,total+1};swapEventCount=total+1;return;
@@ -446,6 +471,7 @@ static void a04br3CopyReport(uint32_t frequency)
 }
 static void a04br3DisplayReport(void)
 {
+    homeDisplayReport();
     IOLog("a04br3 display: stage %u meta %d start %u gop %llx+%llx %ux%u reg %u surface %d pm %d client pid %d calls %u "
           "swaps %u reason %u transfers %u status %d presented %u retired %u\n",
           native_legacy_stage, native_legacy_meta_status, native_legacy_start_result,
@@ -468,6 +494,9 @@ static void a04br3DisplayReport(void)
 
 void native_legacy_display_probe(void);
 void native_legacy_display_probe(void) {
+    unsigned enabled = 0;
+    PE_parse_boot_argn("a04br3-home-perf", &enabled, sizeof(enabled));
+    __atomic_store_n(&homeDisplayEnabled, enabled == 1, __ATOMIC_RELAXED);
     a04br3_display_report_set(a04br3DisplayReport);
     // The registration path and optional original-userclient inspection both
     // reach this boot-thread entry. Run class constructors only once; a second
