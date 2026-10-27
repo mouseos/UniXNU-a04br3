@@ -22,6 +22,7 @@
 #include "BootMemoryQueueSnapshot.h"
 #include "powervr/native_powervr_bo_stats.h"
 #include <kern/thread.h>
+#include <machine/machine_routines.h>
 #include <libkern/libkern.h>
 
 extern "C" {
@@ -41,6 +42,7 @@ void native_powervr_submit_perf_enable(unsigned);
 void native_powervr_submit_perf_report(void);
 void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
 extern volatile uint64_t native_msdc_verified_cache_stats[3] __attribute__((weak_import));
+void native_root_timing_snapshot(uint64_t out[6]) __attribute__((weak_import));
 extern volatile uint32_t native_keyevents_stage;
 extern volatile int native_keyevents_status;
 // Existing kern_exec.c addon installer and union-mount diagnostics.
@@ -175,10 +177,26 @@ void msdcCacheReport()
           (unsigned long long)hits, (unsigned long long)misses, (unsigned long long)reused);
 }
 
+// Existing worker only. Snapshot fields are separate relaxed atomics, so their values need not represent one instant.
+// Transport wall includes lock wait, DMA and copying; it is neither CPU time nor per-process attribution.
+void msdcRootTimingReport(unsigned enabled)
+{
+  if (enabled != 1 || !native_root_timing_snapshot) return;
+  uint64_t begin = 0, end = 0, values[6] = {};
+  absolutetime_to_nanoseconds(mach_absolute_time(), &begin);
+  native_root_timing_snapshot(values);
+  absolutetime_to_nanoseconds(mach_absolute_time(), &end);
+  IOLog("a04br3 msdc root timing: begin_ns=%llu end_ns=%llu read_calls=%llu read_bytes=%llu read_ns=%llu verify_calls=%llu verify_bytes=%llu verify_ns=%llu\n",
+        (unsigned long long)begin, (unsigned long long)end,
+        (unsigned long long)values[0], (unsigned long long)values[1], (unsigned long long)values[2],
+        (unsigned long long)values[3], (unsigned long long)values[4], (unsigned long long)values[5]);
+}
+
 void procLogThread(void *, wait_result_t)
 {
-  unsigned perf = 0;
+  unsigned perf = 0, rootTiming = 0;
   PE_parse_boot_argn("a04br3-home-perf", &perf, sizeof(perf));
+  PE_parse_boot_argn("native-root-timing", &rootTiming, sizeof(rootTiming));
   uint64_t cacheReportSeconds = 0;
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
@@ -200,6 +218,7 @@ void procLogThread(void *, wait_result_t)
     }
     boot_home_irq_report();
     native_powervr_submit_perf_report();
+    msdcRootTimingReport(rootTiming);
     cacheReportSeconds += gProcLogSeconds;
     if (cacheReportSeconds >= 60) {
       cacheReportSeconds %= 60;
