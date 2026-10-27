@@ -77,15 +77,15 @@ static bool PE_parse_boot_argn(const char *n,void *v,int size){assert(size==size
 static void IOLog(const char *fmt,...){char t[1024];va_list a;va_start(a,fmt);vsnprintf(t,sizeof t,fmt,a);va_end(a);logs+=t;}
 static void IODelay(unsigned us){assert(us==10);}
 static vm_offset_t ml_io_map(vm_offset_t a,vm_size_t size){++maps;assert(size==4096||size==65536);if(a==0x10018000)return pllMap?(uintptr_t)pll:0;if(a==0x1000f000)return pwrapMap?(uintptr_t)pwrap:0;if(a==0x10000000)return (uintptr_t)top;if(a==0x13000000)return (uintptr_t)core;return (uintptr_t)other;}
-static uint32_t clockDiagnosticRead(volatile uint8_t *base,unsigned off){++reads;if(base==top){assert(off==0||off==4);return 0;}if(base==pll){uint32_t v=off==0x160?con0:off==0x164?con1:power;assert(off==0x160||off==0x164||off==0x170);if(off==unstableOffset&&++unstableSeen==2)v^=1;return v;}assert(base==pwrap&&lockHeld);if(off==0x98||off==0x9c)return init?1:0;assert(off==0xa4);return (1u<<21)|(((stallPhase==phase+1?1u:(phase==1?6u:0u)))<<16)|reply;}
+static uint32_t clockDiagnosticRead(volatile uint8_t *base,unsigned off){++reads;if(base==top){assert(off==0||off==4);return 0;}if(base==pll){if(off!=0x160&&off!=0x164&&off!=0x170){assert(requestSnapshot==1);return 0;}uint32_t v=off==0x160?con0:off==0x164?con1:power;if(off==unstableOffset&&++unstableSeen==2)v^=1;return v;}assert(base==pwrap&&lockHeld);if(off==0x98||off==0x9c)return init?1:0;assert(off==0xa4);return (1u<<21)|(((stallPhase==phase+1?1u:(phase==1?6u:0u)))<<16)|reply;}
 static void clockDiagnosticWrite(volatile uint8_t *base,unsigned off,uint32_t v){assert(base==pwrap);++writes;if(off==0xa0){assert(!(v&0x8000ffffu));assert(!failPmic);unsigned addr=(v>>16)*2;unsigned i=addr==0x30a?0:addr==0x30e?1:addr==0x312?2:3;assert(addr==0x30a||addr==0x30e||addr==0x312||addr==0x314);reply=rail[i];phase=1;++pmicReads;}else{assert(off==0xa8&&v==1);phase=2;}}
 '''
 # Use real waits and PMIC reader, changing only the injected failure result through a wrapper.
 for sig in ['bool clockDiagnosticWait(','const char *clockDiagnosticPmicRead(']:h+=definition(gpu,sig)+'\n'
 sel=definition(gpu,'unsigned selectClockParent(').replace('clockDiagnosticPmicRead(', 'injectedPmicRead(')
 h+='static const char *injectedPmicRead(volatile uint8_t *p,unsigned a,uint16_t *v){if(failPmic)return "injected read failure";return clockDiagnosticPmicRead(p,a,v);}\n'+sel+'\n'
+h+=definition(gpu,'void clockDiagnosticSnapshot(')+'\n'
 h+=r'''
-static void clockDiagnosticSnapshot(volatile uint8_t *){assert(requestSnapshot==0);}
 static uint32_t bankRead(void *,unsigned b,unsigned o){uint32_t v=readBank(&state,b,o);if(muxMismatch&&b==A04_RGX_TOP&&o==0x004)v^=1u<<8;return v;}
 static void bankWrite(void *,unsigned b,unsigned o,uint32_t v){writeBank(&state,b,o,v);}
 static void waitUs(void *,unsigned us){delayBank(&state,us);}
@@ -122,6 +122,8 @@ int main(){
  reset();present=false;uint32_t hz=26000000;assert(selectClockParent(&hz)==4&&!maps&&!reads&&!writes);++fixtures;
  reset();hz=26000000;assert(selectClockParent(&hz)==7&&hz==380000062&&writes==8&&pmicReads==4);++fixtures;
  reset();lockAvailable=false;hz=26000000;assert(selectClockParent(&hz)==4&&hz==26000000&&!reads&&!writes&&!lockHeld);++fixtures;
+ reset();init=false;hz=26000000;assert(selectClockParent(&hz)==4&&hz==26000000&&poisoned&&!writes&&!lockHeld);++fixtures;
+ reset();init=false;requestSnapshot=1;clockDiagnosticSnapshot(top);assert(poisoned&&!writes&&!lockHeld);++fixtures;
  for(unsigned phaseToStall:{1u,2u,3u}){reset();stallPhase=phaseToStall;hz=26000000;assert(selectClockParent(&hz)==4&&hz==26000000&&poisoned&&!lockHeld);++fixtures;}
  for(unsigned reason=0;reason<11;reason++){reset();if(reason==0)pllMap=false;if(reason==1)pwrapMap=false;if(reason==2)init=false;if(reason==3)failPmic=true;if(reason==4)con0=0x10;if(reason==5)power=7;if(reason==6)rail[1]=1;if(reason==7)rail[3]=0x47;if(reason==8)unstableOffset=0x160;if(reason==9)unstableOffset=0x164;if(reason==10)unstableOffset=0x170;hz=26000000;assert(selectClockParent(&hz)==4&&hz==26000000);++fixtures;}
  // Actual init publishes the frequency only after successful mux readback; then both FW fields see it.

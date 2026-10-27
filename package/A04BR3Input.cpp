@@ -120,7 +120,7 @@ int powerOn(void)
 {
   A04BR3WacsGuard guard;
   if (!guard) return -7;
-  if (!(rd(gPwrap, 0x9c) & 1)) return -2;
+  if (!(rd(gPwrap, 0x9c) & 1)) { a04br3_wacs_poison(); return -2; }
   uint16_t v = 0;
   if (pwRead(0x530, &v) || pwWrite(0x530, uint16_t((v & ~0xe0) | 0x60))) return -3;
   if (pwRead(0x50a, &v) || pwWrite(0x50a, uint16_t(v | 0x8000))) return -4;

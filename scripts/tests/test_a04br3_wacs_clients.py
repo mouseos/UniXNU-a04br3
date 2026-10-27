@@ -19,6 +19,7 @@ constexpr unsigned kWacsRdata=0xa4,kWacsCmd=0xa0,kWacsVldclr=0xa8;
 unsigned fsm=0,commands=0,acks=0,poisons=0,mode=0;
 bool init=true;
 uint32_t rd(volatile uint8_t*,unsigned off){
+ if(off==0x9c)return init?1:0;
  assert(off==0xa4); if(!init)return 0;
  unsigned current=fsm;
  if(mode==1 && commands==0)current=1;
@@ -31,10 +32,13 @@ void wr(volatile uint8_t*,unsigned off,uint32_t v){
  else {assert(off==0xa8&&v==1);++acks;fsm=0;}
 }
 void IODelay(unsigned){}
+void IOSleep(unsigned){}
 void a04br3_wacs_poison(){++poisons;}
+struct A04BR3WacsGuard { explicit operator bool() const { return true; } };
 void reset(unsigned m){fsm=commands=acks=poisons=0;mode=m;init=true;}
 '''
 for sig in ['int pwWait(', 'int pwRead(', 'int pwWrite(']: code+=definition(inp,sig)+'\n'
+code+=definition(inp,'int powerOn(')+'\n'
 code+=definition(rtc,'bool wacs(')+'\n'
 code+=r'''
 int main(){
@@ -43,6 +47,7 @@ int main(){
  for(unsigned m: {1u,2u,3u}){reset(m);assert(pwRead(0x530,&val)!=0&&poisons==1);}
  reset(2);assert(pwWrite(0x530,0x60)!=0&&poisons==1);
  reset(0);init=false;assert(pwRead(0x530,&val)!=0&&poisons==1&&!commands);
+ reset(0);init=false;assert(powerOn()==-2&&poisons==1&&!commands);
  reset(0);assert(wacs(false,0x802c,0,&val32)&&val32==0x1234&&acks==1&&!poisons);
  for(unsigned m: {1u,2u}){reset(m);assert(!wacs(false,0x802c,0,&val32)&&poisons==1);}
  reset(0);init=false;assert(!wacs(true,0x8036,0,nullptr)&&poisons==1&&!commands);

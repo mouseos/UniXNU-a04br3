@@ -111,6 +111,7 @@ void clockDiagnosticSnapshot(volatile uint8_t *top)
   const uint32_t status = clockDiagnosticRead(pwrap, 0xa4);
   IOLog("a04br3 gpu clock diagnostic: WACS2 EN %08x INIT %08x RDATA %08x\n", wacs_enable, init, status);
   if (!(wacs_enable & 1) || !(init & 1) || !(status & (1U << 21))) {
+    a04br3_wacs_poison();
     IOLog("a04br3 gpu clock diagnostic: VCORE unknown (WACS2 not initialized/enabled)\n");
     return;
   }
@@ -135,8 +136,12 @@ unsigned selectClockParent(uint32_t *hz)
   auto *pwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1000f000, 0x1000));
   A04BR3WacsGuard guard;
   if (!guard) { IOLog("a04br3 gpu clock: WACS2 lock unavailable; retaining 26 MHz\n"); return 4; }
-  if (!pll || !pwrap || !(clockDiagnosticRead(pwrap, 0x98) & 1) || !(clockDiagnosticRead(pwrap, 0x9c) & 1)) {
+  if (!pll || !pwrap) {
     IOLog("a04br3 gpu clock: PLL/VCORE state unavailable; retaining 26 MHz\n"); return 4;
+  }
+  if (!(clockDiagnosticRead(pwrap, 0x98) & 1) || !(clockDiagnosticRead(pwrap, 0x9c) & 1)) {
+    a04br3_wacs_poison();
+    IOLog("a04br3 gpu clock: WACS2 not initialized/enabled; retaining 26 MHz\n"); return 4;
   }
   const uint32_t con0 = clockDiagnosticRead(pll, 0x160), con1 = clockDiagnosticRead(pll, 0x164), power = clockDiagnosticRead(pll, 0x170);
   uint16_t rail[4] = {};
