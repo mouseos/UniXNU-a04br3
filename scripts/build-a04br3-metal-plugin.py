@@ -48,6 +48,7 @@ def main():
     parser.add_argument('--vulkan', type=Path, help='Mesa PowerVR driver (default: build-pvr-darwin.py --target ios output)')
     parser.add_argument('--out', type=Path, default=ROOT / 'build/a04br3-metal-plugin')
     parser.add_argument('--ui-latency', action='store_true', help='enable bounded input/render/handoff timestamp correlation (default off)')
+    parser.add_argument('--runtime-commit-trace', action='store_true', help='compile opt-in runtime commit phase instrumentation')
     parser.add_argument('--skip-bridge', action='store_true')
     parser.add_argument('--sipf1-dump', action='store_true',
                         help='enable bounded CPU-owned SIPF1 command snapshots in this diagnostic bundle only')
@@ -70,6 +71,8 @@ def main():
     parser.add_argument('--pool-block-mib', type=int, choices=(4, 8, 16, 32, 64),
                         help='opt in to a Metal runtime pool block size in MiB (default: upstream 64)')
     args = parser.parse_args()
+    if args.runtime_commit_trace and not args.ui_latency:
+        parser.error('--runtime-commit-trace requires --ui-latency')
     if args.ui_latency:
         plugin = ROOT / 'drivers/NativeMetal/NativeVulkanMetalPlugin.mm'
         frontend = ROOT / 'drivers/NativeMetal/NativeBridgeMetalFrontend.mm'
@@ -87,6 +90,8 @@ def main():
     command = ['python3', str(builder), '--name', NAME, '--principal-class', PRINCIPAL, '--vulkan-driver', str(library),
                '--driver-name', LIB_NAME, '--driver-identifier', LIB_IDENTIFIER, '--identifier', 'org.unixnu.a04br3.' + NAME,
                '--board-source', str(board), '--out', str(args.out.resolve()), '--portable-sha2']
+    if args.runtime_commit_trace:
+        command += ['--runtime-commit-trace']
     if args.sipf1_dump:
         # The generic builder recreates OUT; generated input must be its sibling.
         args.out.resolve().parent.mkdir(parents=True, exist_ok=True)

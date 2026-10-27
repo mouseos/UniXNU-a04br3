@@ -135,6 +135,14 @@ int main(){
   assert '--pool-block-mib' in errors.getvalue()
   assert before=={p.name:p.read_bytes() for p in out.parent.glob('*.mm')}
  assert board.read_text()=='// board unchanged\n'
+ with patch.object(sys,'argv',['metal','--vulkan',str(library),'--out',str(out),'--runtime-commit-trace']),patch('subprocess.run') as build,contextlib.redirect_stderr(io.StringIO()):
+  try:main()
+  except SystemExit as error:assert error.code==2
+  else:raise AssertionError('runtime trace without UI trace accepted')
+  build.assert_not_called()
+ with patch.object(sys,'argv',['metal','--vulkan',str(library),'--out',str(out),'--ui-latency','--runtime-commit-trace']),patch('subprocess.run') as build:
+  main()
+  assert build.call_args.args[0].count('--runtime-commit-trace')==1
  (metal/'NativeVulkanMetalPlugin.mm').write_text('old frontend\n')
  with patch.object(sys,'argv',['metal','--vulkan',str(library),'--out',str(out),'--ui-latency']),patch('subprocess.run') as build:
   try:main()
