@@ -427,7 +427,7 @@ void boot_ipi_reason_report(void) {
 #define AST_CALLER_SLOTS 32u
 #define AST_CALLER_RATE 64u
 struct ast_caller_slot { uint64_t pc, count; };
-struct ast_caller_row { uint64_t seen, dropped; struct ast_caller_slot slots[AST_CALLER_SLOTS]; } __attribute__((aligned(64)));
+struct ast_caller_row { uint64_t seen, dropped; uint32_t rng; struct ast_caller_slot slots[AST_CALLER_SLOTS]; } __attribute__((aligned(64)));
 static struct ast_caller_row ast_caller_rows[AST_CALLER_CPUS];
 unsigned native_ast_caller_enabled;
 static unsigned ast_caller_bad_cpu;
@@ -438,7 +438,11 @@ void native_ast_caller_sample(unsigned cpu, uint64_t pc) {
  struct ast_caller_row *row=&ast_caller_rows[cpu];
  uint64_t seen=__atomic_load_n(&row->seen,__ATOMIC_RELAXED);
  __atomic_store_n(&row->seen,seen+1,__ATOMIC_RELAXED);
- if (seen % AST_CALLER_RATE) return;
+ uint32_t r=__atomic_load_n(&row->rng,__ATOMIC_RELAXED);
+ if (!r) r=0x9e3779b9U ^ ((cpu+1U)*0x85ebca6bU);
+ r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+ __atomic_store_n(&row->rng,r,__ATOMIC_RELAXED);
+ if ((r & (AST_CALLER_RATE-1U)) != 0) return;
  if (!pc) { uint64_t n=__atomic_load_n(&row->dropped,__ATOMIC_RELAXED);__atomic_store_n(&row->dropped,n+1,__ATOMIC_RELAXED);return; }
  for (unsigned i=0;i<AST_CALLER_SLOTS;i++) {
   uint64_t key=__atomic_load_n(&row->slots[i].pc,__ATOMIC_RELAXED);
@@ -447,6 +451,8 @@ void native_ast_caller_sample(unsigned cpu, uint64_t pc) {
  }
  uint64_t n=__atomic_load_n(&row->dropped,__ATOMIC_RELAXED);__atomic_store_n(&row->dropped,n+1,__ATOMIC_RELAXED);
 }
+// Only the one report worker updates previous counts; the IRQ path never resets them.
+static uint64_t ast_caller_report_previous[AST_CALLER_CPUS][AST_CALLER_SLOTS];
 void boot_ast_caller_report(void) {
  if (!__atomic_load_n(&native_ast_caller_enabled,__ATOMIC_RELAXED)) return;
  unsigned observed=__atomic_load_n(&ast_caller_bad_cpu,__ATOMIC_RELAXED);
@@ -454,20 +460,27 @@ void boot_ast_caller_report(void) {
  if (!observed) { printf("a04br3 ast caller unavailable: hook not observed (not built or no calls yet)\n"); return; }
  for (unsigned c=0;c<AST_CALLER_CPUS;c++) {
   struct ast_caller_row *row=&ast_caller_rows[c];
-  printf("a04br3 ast caller cpu=%u seen=%llu dropped=%llu rate=%u (cumulative non-atomic)\n",c,
+  printf("a04br3 ast caller cpu=%u seen=%llu dropped=%llu rate=%u (seen/dropped cumulative, sampled deltas non-atomic)\n",c,
    (unsigned long long)__atomic_load_n(&row->seen,__ATOMIC_RELAXED),(unsigned long long)__atomic_load_n(&row->dropped,__ATOMIC_RELAXED),AST_CALLER_RATE);
-  struct ast_caller_slot top[4]={0};
+  struct ast_caller_slot top[4]={0}; uint64_t sampled=0;
   for (unsigned i=0;i<AST_CALLER_SLOTS;i++) {
    uint64_t pc=__atomic_load_n(&row->slots[i].pc,__ATOMIC_RELAXED);
-   uint64_t n=__atomic_load_n(&row->slots[i].count,__ATOMIC_RELAXED);
+   uint64_t current=__atomic_load_n(&row->slots[i].count,__ATOMIC_RELAXED);
+   uint64_t previous=ast_caller_report_previous[c][i];
+   ast_caller_report_previous[c][i]=current;
+   uint64_t n=current-previous; sampled+=n;
    if (!pc || !n) continue;
    for (unsigned j=0;j<4;j++) if (n>top[j].count) {
     for (unsigned k=3;k>j;k--) top[k]=top[k-1];
     top[j].pc=pc;top[j].count=n;break;
    }
   }
-  for (unsigned i=0;i<4 && top[i].count;i++)
-   printf("a04br3 ast caller cpu=%u pc=%llx samples=%llu\n",c,(unsigned long long)top[i].pc,(unsigned long long)top[i].count);
+  uint64_t shown=0;
+  for (unsigned i=0;i<4 && top[i].count;i++) {
+   shown+=top[i].count;
+   printf("a04br3 ast caller cpu=%u pc=%llx samples_delta=%llu\n",c,(unsigned long long)top[i].pc,(unsigned long long)top[i].count);
+  }
+  printf("a04br3 ast caller cpu=%u sampled_delta=%llu omitted_delta=%llu\n",c,(unsigned long long)sampled,(unsigned long long)(sampled-shown));
  }
  printf("a04br3 ast caller bad_cpu=%u (cumulative)\n",__atomic_load_n(&ast_caller_bad_cpu,__ATOMIC_RELAXED));
 }
