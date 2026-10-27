@@ -47,6 +47,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--vulkan', type=Path, help='Mesa PowerVR driver (default: build-pvr-darwin.py --target ios output)')
     parser.add_argument('--out', type=Path, default=ROOT / 'build/a04br3-metal-plugin')
+    parser.add_argument('--ui-latency', action='store_true', help='enable bounded input/render/handoff timestamp correlation (default off)')
     parser.add_argument('--skip-bridge', action='store_true')
     parser.add_argument('--sipf1-dump', action='store_true',
                         help='enable bounded CPU-owned SIPF1 command snapshots in this diagnostic bundle only')
@@ -96,6 +97,7 @@ def main():
             (args.pipeline_failure_diag, 'pipeline-failure-diag', 'PVR_METAL_PIPELINE_DIAG'),
             (args.require_fetch_for_apple3, 'require-fetch-for-apple3', 'PVR_METAL_REQUIRE_FETCH_FOR_APPLE3'),
             (args.buffer_rows, 'buffer-rows', 'PVR_DARWIN_BUFFER_ROWS'),
+            (args.ui_latency, 'ui-latency', 'PVR_METAL_LATENCY_DIAG'),
             (args.roa_color, 'roa-color', 'PVR_DARWIN_ROA_COLOR'),
             (args.async_creation, 'async-creation', 'PVR_METAL_ASYNC_CREATION')):
         if not enabled:

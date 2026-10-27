@@ -6,8 +6,8 @@ from unittest.mock import patch
 R=Path(__file__).resolve().parents[2]
 module=runpy.run_path(str(R/'scripts/build-a04br3-metal-plugin.py'))
 main=module['main'];real_run=subprocess.run
-flags=('--sipf1-dump','--submit-barrier','--serial-transfer','--tq-clip','--pipeline-failure-diag','--require-fetch-for-apple3','--roa-color','--async-creation')
-variables=('PVR_DARWIN_SIPF1_DUMP','PVR_DARWIN_SUBMIT_BARRIER','PVR_DARWIN_SERIAL_TRANSFER','PVR_DARWIN_TQ_CLIP','PVR_METAL_PIPELINE_DIAG','PVR_METAL_REQUIRE_FETCH_FOR_APPLE3','PVR_DARWIN_ROA_COLOR','PVR_METAL_ASYNC_CREATION')
+flags=('--sipf1-dump','--submit-barrier','--serial-transfer','--tq-clip','--pipeline-failure-diag','--require-fetch-for-apple3','--roa-color','--async-creation','--ui-latency')
+variables=('PVR_DARWIN_SIPF1_DUMP','PVR_DARWIN_SUBMIT_BARRIER','PVR_DARWIN_SERIAL_TRANSFER','PVR_DARWIN_TQ_CLIP','PVR_METAL_PIPELINE_DIAG','PVR_METAL_REQUIRE_FETCH_FOR_APPLE3','PVR_DARWIN_ROA_COLOR','PVR_METAL_ASYNC_CREATION','PVR_METAL_LATENCY_DIAG')
 board_source=(R/'package/powervr/user/NativePowerVRMetalBoard.mm').read_text()
 assert 'if(asyncCreation && !strcmp(asyncCreation,"1"))\n        native_bridge_metal_set_async_creation(true);' in board_source
 gate_start=board_source.index('    const char *asyncCreation=')
@@ -132,4 +132,4 @@ int main(){
   assert '--pool-block-mib' in errors.getvalue()
   assert before=={p.name:p.read_bytes() for p in out.parent.glob('*.mm')}
  assert board.read_text()=='// board unchanged\n'
-print('PASS actual Metal command preparation: 256 independent flag combinations; all 5 pool sizes alone/combined, exact pool16 constructor, pool16+async+skip-bridge, default absent/inherited unchanged, stale pool input unused, 10 invalid pool forms rejected before generation/build; OUT cleanup survival, skip-bridge preserved, strict board async gate; no GPU/build execution')
+print('PASS actual Metal command preparation: 512 independent flag combinations; all 5 pool sizes alone/combined, exact pool16 constructor, pool16+async+skip-bridge, default absent/inherited unchanged, stale pool input unused, 10 invalid pool forms rejected before generation/build; OUT cleanup survival, skip-bridge preserved, strict board async gate; no GPU/build execution')
