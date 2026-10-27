@@ -84,6 +84,9 @@
 #include "native_powervr_jobs.h"
 extern "C" uint64_t native_powervr_submit_perf_ioctl_begin(unsigned);
 extern "C" void native_powervr_submit_perf_ioctl_end(unsigned, uint64_t);
+extern "C" unsigned native_powervr_wait_perf_enabled(void);
+extern "C" uint64_t native_powervr_wait_perf_begin(unsigned);
+extern "C" void native_powervr_wait_perf_end(unsigned, uint64_t, int);
 #undef min
 #undef max
 
@@ -1614,7 +1617,16 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
     IOLockUnlock(lock_);
     if (closing) return kIOReturnNotReady;
     if (!jobs || !native_powervr_fence_wait) return kIOReturnUnsupported;
+    unsigned backboard = 0;
+    uint64_t waitPerf = 0;
+    if (native_powervr_wait_perf_enabled()) {
+      char perfName[20] = {};
+      proc_selfname(perfName, sizeof(perfName));
+      backboard = strcmp(perfName, "backboardd") == 0;
+      waitPerf = native_powervr_wait_perf_begin(backboard);
+    }
     const int err = native_powervr_fence_wait(jobs, wait.fence, wait.timeout_ns);
+    if (waitPerf) native_powervr_wait_perf_end(backboard, waitPerf, err);
     if (!err) return kIOReturnSuccess;
     if (err == -ETIMEDOUT) return kIOReturnTimeout;
     if (err == -EINVAL) return kIOReturnBadArgument;

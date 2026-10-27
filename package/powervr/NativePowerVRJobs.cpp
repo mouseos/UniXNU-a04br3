@@ -451,10 +451,11 @@ struct UfoList {
 
 // Best-effort cumulative wall intervals. Reports are deliberately non-transactional:
 // inflight counts may be transiently inconsistent with totals on other CPUs.
-enum PerfStage { PerfLock, PerfSpace, PerfBo, PerfKick, PerfKccb, PerfHwrt, PerfSubmit, PerfIoctlLock, PerfIoctlCall, PerfStages };
+enum PerfStage { PerfLock, PerfSpace, PerfBo, PerfKick, PerfKccb, PerfHwrt, PerfSubmit, PerfIoctlLock, PerfIoctlCall, PerfWaitFence, PerfWaitFenceBackboard, PerfStages };
 struct PerfCounter { uint64_t entered, finished, ticks; };
 PerfCounter gSubmitPerf[PerfStages];
 unsigned gSubmitPerfEnabled;
+uint64_t gWaitFenceResult[2][3];
 uint64_t nowAbs() { return mach_absolute_time(); }
 uint64_t perfBegin(PerfStage s)
 {
@@ -488,10 +489,27 @@ extern "C" void native_powervr_submit_perf_ioctl_end(unsigned stage, uint64_t st
   if (stage == 0) perfEnd(PerfIoctlLock, start);
   else if (stage == 1) perfEnd(PerfIoctlCall, start);
 }
+// WaitFence is outside the connection lock. Both clocks include descheduling;
+// per-name classification is diagnostic only and does not identify a frame.
+extern "C" unsigned native_powervr_wait_perf_enabled(void)
+{
+  return __atomic_load_n(&gSubmitPerfEnabled, __ATOMIC_RELAXED) == 1;
+}
+extern "C" uint64_t native_powervr_wait_perf_begin(unsigned backboard)
+{
+  return perfBegin(backboard ? PerfWaitFenceBackboard : PerfWaitFence);
+}
+extern "C" void native_powervr_wait_perf_end(unsigned backboard, uint64_t start, int result)
+{
+  if (!start) return;
+  perfEnd(backboard ? PerfWaitFenceBackboard : PerfWaitFence, start);
+  const unsigned bucket = result == 0 ? 0 : result == -ETIMEDOUT ? 1 : 2;
+  __atomic_fetch_add(&gWaitFenceResult[backboard ? 1 : 0][bucket], 1ULL, __ATOMIC_RELAXED);
+}
 extern "C" void native_powervr_submit_perf_report(void)
 {
   if (!__atomic_load_n(&gSubmitPerfEnabled, __ATOMIC_RELAXED)) return;
-  const char *names[PerfStages] = {"lock", "space", "bo", "kick", "kccb", "hwrt", "submit", "ioctl_lock", "ioctl_call"};
+  const char *names[PerfStages] = {"lock", "space", "bo", "kick", "kccb", "hwrt", "submit", "ioctl_lock", "ioctl_call", "wait_fence_other", "wait_fence_backboard"};
   for (unsigned i = 0; i < PerfStages; ++i) {
     const uint64_t entered = __atomic_load_n(&gSubmitPerf[i].entered, __ATOMIC_RELAXED);
     const uint64_t finished = __atomic_load_n(&gSubmitPerf[i].finished, __ATOMIC_RELAXED);
@@ -502,6 +520,11 @@ extern "C" void native_powervr_submit_perf_report(void)
           (unsigned long long)entered, (unsigned long long)finished, (unsigned long long)ticks,
           (unsigned long long)elapsedNs);
   }
+  for (unsigned i = 0; i < 2; ++i)
+    IOLog("a04br3 gpu wait perf: scope=%s success=%llu timeout=%llu other=%llu (non-atomic)\n",
+          i ? "backboardd" : "others", (unsigned long long)__atomic_load_n(&gWaitFenceResult[i][0], __ATOMIC_RELAXED),
+          (unsigned long long)__atomic_load_n(&gWaitFenceResult[i][1], __ATOMIC_RELAXED),
+          (unsigned long long)__atomic_load_n(&gWaitFenceResult[i][2], __ATOMIC_RELAXED));
 }
 
 // ---- The Linux API shim (compat/native_powervr_linux_jobs.h) ----
