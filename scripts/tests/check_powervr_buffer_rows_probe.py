@@ -15,11 +15,14 @@ def main():
     parser.add_argument('--vulkan-include', type=Path, default=ROOT/'.cache/mesa-pvr/include',
                         help='pinned Vulkan headers (also supports isolated worktrees)')
     args=parser.parse_args()
+    cc=os.environ.get('CC','cc')
     source=ROOT/'package/powervr/user/powervrprobed_vulkan.c'
+    # The public printf-format declaration must precede all fixture definitions.
+    preamble='#include "'+str(source.parent/'powervrprobed.h')+'"\n'
     include=args.vulkan_include.resolve()
     if not (include/'vulkan/vulkan.h').is_file():
         parser.error('pinned Vulkan headers missing; pass --vulkan-include')
-    run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsyntax-only','-I',include,source])
+    run([cc,'-std=gnu11','-Wall','-Wextra','-Werror','-fsyntax-only','-I',include,source])
     builder=ROOT/'scripts/build-a04br3-powervr-probe.py'
     with tempfile.TemporaryDirectory() as temporary:
         tmp=Path(temporary)
@@ -28,13 +31,13 @@ def main():
 int main(void){return !getenv("PVR_PROBE_BUFFER_ROWS") || strcmp(getenv("PVR_PROBE_BUFFER_ROWS"),"1") ||
  !getenv("PVR_DARWIN_BUFFER_ROWS") || strcmp(getenv("PVR_DARWIN_BUFFER_ROWS"),"1");}
 ''')
-        run(['cc','-Wall','-Wextra','-Werror',constructor,'-o',tmp/'constructor'])
+        run([cc,'-Wall','-Wextra','-Werror',constructor,'-o',tmp/'constructor'])
         run([tmp/'constructor'])
         for flags in (['--buffer-rows'],['--vulkan','--buffer-rows','--ui-batch'],['--vulkan','--buffer-rows','--serial-transfer']):
             result=subprocess.run(['python3',str(builder),'--check',*flags],capture_output=True)
             assert result.returncode!=0,flags
         validator=tmp/'validator.c'
-        validator.write_text(r'''#include <assert.h>
+        validator.write_text(preamble+r'''#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -60,13 +63,13 @@ int main(void){
  s[brPrefix]^=1;assert(!brValidate(s,sn,d,dn));free(s);free(d);return 0;
 }
 ''')
-        run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+        run([cc,'-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
              '-fno-omit-frame-pointer','-I',include,validator,'-ldl','-o',tmp/'validator'])
         run([tmp/'validator'])
         # Run the actual helper with a CPU ICD but replace only completion verdict.
         # A real wait first makes process exit safe; synthetic TIMEOUT must not free resources.
         lifecycle=tmp/'lifecycle.c'
-        lifecycle.write_text(r'''#include <assert.h>
+        lifecycle.write_text(preamble+r'''#include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,10 +116,10 @@ int main(int argc,char **argv){
  return 0;
 }
 ''')
-        run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-I',include,lifecycle,'-ldl','-o',tmp/'lifecycle'])
+        run([cc,'-std=gnu11','-Wall','-Wextra','-Werror','-I',include,lifecycle,'-ldl','-o',tmp/'lifecycle'])
 
         harness=tmp/'harness.c'
-        harness.write_text('''#include <stdarg.h>
+        harness.write_text(preamble+'''#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 static unsigned failures;
@@ -130,7 +133,7 @@ int main(int argc,char **argv){
  int result=probe_vulkan(argv[1]);return result!=0 || failures!=0;
 }
 ''')
-        run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-I',include,harness,'-ldl','-o',tmp/'probe'])
+        run([cc,'-std=gnu11','-Wall','-Wextra','-Werror','-I',include,harness,'-ldl','-o',tmp/'probe'])
         if args.lavapipe:
             env=dict(os.environ, VK_DRIVER_FILES='/usr/share/vulkan/icd.d/lvp_icd.json')
             executed=subprocess.run([str(tmp/'probe'),str(args.lavapipe.resolve())],env=env,
