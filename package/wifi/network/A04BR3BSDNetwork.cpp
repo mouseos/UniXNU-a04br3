@@ -208,6 +208,7 @@ int A04BR3BSDNetwork::scanCompleted()
      * external KPI consumers retain event_data[1]. A union supplies aligned
      * storage for the same exact 24+16 wire message in both layouts. */
     union { struct kern_event_msg header; uint8_t bytes[40]; } event={};
+    memset(&event,0,sizeof(event));
     static_assert(offsetof(struct kern_event_msg,event_data)==24,"native event header");
     static_assert(sizeof(event)==40,"native event payload is exact ifname16");
     event.header.total_size=sizeof(event);event.header.vendor_code=1;
@@ -249,6 +250,7 @@ int A04BR3BSDNetwork::refresh()
         ifnet_t ifp=interface;int retained=ifnet_reference(ifp);
         if(retained){(void)ifnet_set_flags(ifp,0,IFF_RUNNING);IOLockUnlock(gate);return retained;}
         union { struct kern_event_msg header; uint8_t bytes[48]; } event={};
+        memset(&event,0,sizeof(event));
         static_assert(offsetof(struct kern_event_msg,event_data)==24,"link header offset");
         static_assert(sizeof(event)==48,"link event family4 unit4 name16");
         event.header.total_size=sizeof(event);event.header.vendor_code=KEV_VENDOR_APPLE;
