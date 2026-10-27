@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in six-boot26/380MHz measurement using the existing unattended transport.
+"""Opt-in six-boot26/380/380/26/26/380 measurement using the existing unattended transport.
 Default validates inputs and writes a plan only. --execute permits flash/reset.
 An existing UART collector is mandatory and never stopped or replaced.
 """
@@ -19,7 +19,7 @@ import sys
 import time
 
 ROOT=Path(__file__).resolve().parents[1]
-ORDER=(26,380,26,380,26,380)
+ORDER=(26,380,380,26,26,380)
 FAULT=re.compile(r'panic\(|Panicked|Kernel panic|Synchronous Exception at|context reset\s+[1-9]|HWR counter [1-9]|\bhwr\s+[1-9]|\bfaults [1-9]|MMU fault|powervr[^\n]*\bFAULT\b',re.I)
 
 def sha(path):
@@ -50,6 +50,66 @@ def validate_inputs(a):
     clean=lambda d:[t for t in shlex.split(d['kernel_args']) if not t.startswith('a04br3-gpu-clock=')]
     if clean(reports[26])!=clean(reports[380]):raise ValueError('nonclock args differ')
     return {str(c):{'boot_sha256':sha(getattr(a,'boot'+str(c))),'payload_report_sha256':sha(getattr(a,'payload'+str(c))),'payload_report':reports[c]} for c in (26,380)}
+
+SOURCE_IDS=('base','device','base_builder','device_builder','kernel_device','metal','uefi','loader')
+
+def import_priors(a,inputs):
+    """Validate an ordered prefix from actual log bytes, not claimed PASS flags.
+    Return immutable bytes too, so an actively growing P25 file cannot change
+    between validation and evidence staging. All reads are host files only.
+    """
+    specs=getattr(a,'prior_epoch',[]) or []
+    if len(specs)>len(ORDER):raise ValueError('too many prior epochs')
+    records=[];snapshots=[];seen=set();previous_end=-1;common=None
+    source_stat=a.uart_log.stat()
+    with a.uart_log.open('rb') as collector:
+        opened=os.fstat(collector.fileno())
+        if (opened.st_dev,opened.st_ino)!=(source_stat.st_dev,source_stat.st_ino):
+            raise ValueError('collector changed during prior validation')
+        for index,(state_path,log_path) in enumerate(specs):
+            state_path,log_path=Path(state_path),Path(log_path)
+            with state_path.open('rb') as state_file:state_bytes=state_file.read(1024*1024+1)
+            if len(state_bytes)>1024*1024:raise ValueError('prior state exceeds1MiB')
+            state=json.loads(state_bytes)
+            with log_path.open('rb') as log_file:raw=log_file.read(32*1024*1024+1)
+            if not 0<len(raw)<=32*1024*1024:raise ValueError('prior log empty or exceeds32MiB')
+            offset=state.get('uart_offset')
+            if type(offset) is not int or offset<0:raise ValueError('invalid original UART offset')
+            end=offset+len(raw)
+            if offset in seen or offset<previous_end:raise ValueError('duplicate, overlapping or out-of-order prior epoch')
+            collector.seek(offset)
+            if collector.read(len(raw))!=raw:raise ValueError('prior log does not match collector at original offset')
+            clock=ORDER[index];bound=inputs[str(clock)]
+            if state.get('boot_sha256')!=bound['boot_sha256']:raise ValueError('prior boot SHA/clock does not match selected image')
+            if state.get('kernel_sha256')!=bound['payload_report']['kernel_sha256']:raise ValueError('prior kernel differs')
+            if state.get('boot_bytes')!=getattr(a,'boot'+str(clock)).stat().st_size:raise ValueError('prior boot size differs')
+            ids={key:state.get(key) for key in SOURCE_IDS}
+            if any(not isinstance(v,str) or not re.fullmatch('[0-9a-f]{40}',v) for v in ids.values()):raise ValueError('prior source IDs missing/invalid')
+            if common is not None and ids!=common:raise ValueError('prior source IDs differ')
+            common=ids
+            verdict=analyze(raw,clock)
+            if verdict['state']!='pass':raise ValueError(f'prior {state_path.name} not complete: '+verdict.get('reason','failed'))
+            records.append({'clock_request':clock,'state':'pass','origin':'imported_host_evidence',
+                'measurement':verdict,'source_ids':ids,'original_flash_state':state,
+                'epoch':{'start_offset':offset,'end_offset':end,'flash_requested_utc':state.get('at'),
+                         'uart_file':str(a.uart_log.resolve())},
+                'prior_evidence':{'state_path':str(state_path.resolve()),'log_path':str(log_path.resolve()),
+                                  'state_sha256':hashlib.sha256(state_bytes).hexdigest(),'log_sha256':hashlib.sha256(raw).hexdigest(),
+                                  'verified_collector_identity':[source_stat.st_dev,source_stat.st_ino]},
+                'recovery_status':'not inferred from imported measurement window','environment':{'temperature':'unobserved','power':'unobserved'}})
+            snapshots.append((state_bytes,raw));seen.add(offset);previous_end=end
+        current=a.uart_log.stat()
+        if (current.st_dev,current.st_ino)!=(source_stat.st_dev,source_stat.st_ino) or current.st_size<previous_end:
+            raise ValueError('collector rotated/truncated during prior validation')
+    return records,snapshots
+
+
+def stage_priors(out,records,snapshots):
+    for index,(record,(state,raw)) in enumerate(zip(records,snapshots),1):
+        folder=out/f'prior-{index:02d}-{record["clock_request"]}';folder.mkdir()
+        (folder/'flash-state.json').write_bytes(state);(folder/'first-boot.log').write_bytes(raw)
+        save(folder/'result.json',record)
+
 
 def analyze(raw,clock):
     # Accept raw collector bytes and the project's escaped saved UART transcripts.
@@ -190,12 +250,12 @@ def recover(io,a,folder,process=None):
     raise TimeoutError('no observed fastboot/transport completion after reset')
 
 
-def campaign(a,inputs,io):
-    result={'schedule':list(ORDER),'inputs':inputs,'rounds':[],'success':False}
+def campaign(a,inputs,io,priors=()):
+    result={'schedule':list(ORDER),'inputs':inputs,'rounds':list(priors),'remaining_schedule':list(ORDER[len(priors):]),'success':False}
     save(a.out/'campaign.json',result)
-    for index,clock in enumerate(ORDER,1):
+    for index,clock in enumerate(ORDER[len(priors):],len(priors)+1):
         folder=a.out/f'round-{index:02d}-{clock}';folder.mkdir()
-        round_result={'clock_request':clock,'state':'incomplete','epoch':{},'reset_cause':'not inferred from fastboot return'}
+        round_result={'clock_request':clock,'source_ids':priors[0]['source_ids'] if priors else {},'state':'incomplete','epoch':{},'reset_cause':'not inferred from fastboot return'}
         process=None;raw=bytearray()
         try:
             io.check_collector()
@@ -274,6 +334,8 @@ def campaign(a,inputs,io):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('boot26','boot380','payload26','payload380','uart-log','out'):p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--prior-epoch',nargs=2,action='append',default=[],metavar=('FLASH_STATE','FIRST_BOOT_LOG'),
+                   help='repeat for an ordered validated prefix; original --uart-log bytes at each state offset must match')
     p.add_argument('--collector-pid',type=int,help='existing process holding UART log open for writing; required for --execute on Linux')
     p.add_argument('--serial',required=True);p.add_argument('--uart',default='/dev/ttyUSB0')
     p.add_argument('--measurement-timeout',type=int,default=1800);p.add_argument('--recovery-timeout',type=int,default=180)
@@ -284,14 +346,18 @@ def main():
     if a.out.exists():p.error('output must be new; preserve incomplete campaigns')
     if min(a.measurement_timeout,a.recovery_timeout,a.post_success)<1 or a.settle<0:p.error('invalid time bounds')
     if not a.uart_log.is_file():p.error('existing collector log required')
-    if a.execute and (not a.collector_pid or a.collector_pid<1):p.error('--execute requires existing collector writer PID')
-    if a.execute and (not Path(a.uart).is_char_device() or any(shutil.which(x) is None for x in ('fastboot','timeout','stty'))):
-        p.error('execute requires UART character device and fastboot/timeout/stty')
     if a.environment_json:json.loads(a.environment_json.read_text())
-    inputs=validate_inputs(a);a.out.mkdir(parents=True)
+    inputs=validate_inputs(a)
+    priors,snapshots=import_priors(a,inputs)
+    remaining=ORDER[len(priors):]
+    if a.execute and remaining and (not a.collector_pid or a.collector_pid<1):p.error('--execute requires existing collector writer PID')
+    if a.execute and remaining and (not Path(a.uart).is_char_device() or any(shutil.which(x) is None for x in ('fastboot','timeout','stty'))):
+        p.error('execute requires UART character device and fastboot/timeout/stty')
+    a.out.mkdir(parents=True);stage_priors(a.out,priors,snapshots)
     save(a.out/'plan.json',{'source_commit':subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
          'script_sha256':sha(Path(__file__)), 'transport_sha256':sha(ROOT/'scripts/run-a04br3-unattended.sh'),
-         'reset_sha256':sha(ROOT/'scripts/a04br3-reset.sh'),'schedule':list(ORDER),'inputs':inputs,'execute':a.execute,'environment':'record same power/temperature/load externally; no thermal equivalence inferred'})
+         'reset_sha256':sha(ROOT/'scripts/a04br3-reset.sh'),'schedule':list(ORDER),
+         'prior_epochs':priors,'remaining_schedule':list(remaining),'inputs':inputs,'execute':a.execute,'environment':'record same power/temperature/load externally; no thermal equivalence inferred'})
     if not a.execute:print('PLAN ONLY; no fastboot/UART operations');return 0
-    return campaign(a,inputs,Transport(a))
+    return campaign(a,inputs,Transport(a),priors)
 if __name__=='__main__':sys.exit(main())

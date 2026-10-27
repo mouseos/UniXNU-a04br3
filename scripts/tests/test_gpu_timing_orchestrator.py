@@ -222,4 +222,78 @@ class Tests(unittest.TestCase):
         status,result,io,a=self.run_case(lambda b:b+b'panic(cpu0)\n')
         self.assertEqual(status,2);self.assertEqual(len(io.sequence),1);self.assertEqual(result['rounds'][0]['state'],'fail')
 
+
+class PriorTests(unittest.TestCase):
+    def fixture(self):
+        directory=tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup);r=Path(directory.name)
+        for clock in (26,380):(r/str(clock)).write_bytes(str(clock).encode())
+        log=r/'collector';raw=bytearray(b'older UART bytes\n');specs=[]
+        inputs={str(c):{'boot_sha256':m.sha(r/str(c)),'payload_report':{'kernel_sha256':'kernel'}} for c in (26,380)}
+        for index,clock in enumerate((26,380,380)):
+            data=boot(clock);state={'uart_offset':len(raw),'boot_sha256':inputs[str(clock)]['boot_sha256'],
+                'boot_bytes':(r/str(clock)).stat().st_size,'kernel_sha256':'kernel','at':'original-flash-time',
+                'hardware_verified':False,**{key:'a'*40 for key in m.SOURCE_IDS}}
+            state_path=r/f'state{index}.json';state_path.write_text(json.dumps(state))
+            log_path=r/f'first{index}.log';log_path.write_bytes(data);specs.append((state_path,log_path))
+            raw.extend(data);raw.extend(b'fastboot boundary gap\n')
+        log.write_bytes(raw)
+        a=SimpleNamespace(out=r/'campaign',uart_log=log,boot26=r/'26',boot380=r/'380',prior_epoch=specs,
+            recovery_timeout=5,measurement_timeout=10,settle=0,post_success=1,environment_json=None)
+        return a,inputs,r
+
+    def test_import_three_and_execute_only_remainder_with_fake(self):
+        a,inputs,r=self.fixture();priors,snapshots=m.import_priors(a,inputs)
+        self.assertEqual([x['clock_request'] for x in priors],[26,380,380])
+        self.assertEqual(priors[0]['epoch']['start_offset'],len(b'older UART bytes\n'))
+        self.assertEqual(priors[0]['source_ids']['base'],'a'*40)
+        a.out.mkdir();m.stage_priors(a.out,priors,snapshots)
+        self.assertEqual((a.out/'prior-01-26/flash-state.json').read_bytes(),snapshots[0][0])
+        io=Fake(a);io.present=False # P25 is still running: reset it, never reflash380 as another prior.
+        self.assertEqual(m.campaign(a,inputs,io,priors),0)
+        self.assertEqual(io.sequence,[26,26,380]);self.assertEqual(io.resets,4)
+        result=json.loads((a.out/'campaign.json').read_text())
+        self.assertEqual(len(result['rounds']),6);self.assertEqual(result['summary']['380']['UI_encode_ms']['n'],3)
+
+    def test_duplicate_and_mismatch_rejected(self):
+        for fault in ('duplicate','overlap','boot','source','offset','log','order'):
+            with self.subTest(fault=fault):
+                a,inputs,r=self.fixture()
+                if fault=='duplicate':a.prior_epoch[1]=a.prior_epoch[0]
+                elif fault=='order':a.prior_epoch[:2]=a.prior_epoch[1::-1]
+                elif fault=='log':a.prior_epoch[0][1].write_bytes(b'fabricated PASS')
+                else:
+                    p=a.prior_epoch[1][0];state=json.loads(p.read_text())
+                    if fault=='overlap':state['uart_offset']=json.loads(a.prior_epoch[0][0].read_text())['uart_offset']+1
+                    if fault=='boot':state['boot_sha256']='b'*64
+                    if fault=='source':state['metal']='b'*40
+                    if fault=='offset':state['uart_offset']=True
+                    p.write_text(json.dumps(state))
+                with self.assertRaises(ValueError):m.import_priors(a,inputs)
+
+    def test_fabricated_status_does_not_replace_runtime_evidence(self):
+        a,inputs,r=self.fixture();state_path,log_path=a.prior_epoch[0]
+        original=log_path.read_bytes();bad=original.replace(b'CP5 e200 r1',b'CP4 e200 r1')
+        log_path.write_bytes(bad);a.uart_log.write_bytes(a.uart_log.read_bytes().replace(original,bad,1))
+        state=json.loads(state_path.read_text());state['hardware_verified']=True;state['status']='PASS';state_path.write_text(json.dumps(state))
+        with self.assertRaisesRegex(ValueError,'not complete'):m.import_priors(a,inputs)
+
+    def test_pending_p25_cannot_execute(self):
+        a,inputs,r=self.fixture();state_path,log_path=a.prior_epoch[2]
+        original=log_path.read_bytes();bad=original.replace(b'CX x169 e2\n',b'')
+        log_path.write_bytes(bad);offset=json.loads(state_path.read_text())['uart_offset']
+        a.uart_log.write_bytes(a.uart_log.read_bytes()[:offset]+bad)
+        argv=['runner','--boot26',str(a.boot26),'--boot380',str(a.boot380),'--payload26','unused','--payload380','unused',
+              '--uart-log',str(a.uart_log),'--serial','unused','--out',str(a.out),'--execute']
+        for state,log in a.prior_epoch:argv+=['--prior-epoch',str(state),str(log)]
+        with mock.patch.object(sys,'argv',argv),mock.patch.object(m,'validate_inputs',return_value=inputs),mock.patch.object(m,'Transport') as transport:
+            with self.assertRaisesRegex(ValueError,'not complete'):m.main()
+            transport.assert_not_called()
+        self.assertFalse(a.out.exists())
+
+    def test_validated_snapshot_is_immutable(self):
+        a,inputs,r=self.fixture();priors,snapshots=m.import_priors(a,inputs)
+        a.prior_epoch[0][1].write_bytes(b'changed after validation')
+        a.out.mkdir();m.stage_priors(a.out,priors,snapshots)
+        self.assertEqual((a.out/'prior-01-26/first-boot.log').read_bytes(),snapshots[0][1])
+
 if __name__=='__main__':unittest.main()
