@@ -105,7 +105,7 @@ int main(void){
             subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',
                             '-Wno-address','-pthread','-fsanitize=address,undefined',
                             '-fno-omit-frame-pointer',str(source),'-o',str(binary)],check=True)
-            subprocess.run([str(binary)],check=True)
+            subprocess.run([str(binary)],check=True,timeout=15)
 
 if __name__ == '__main__':
     unittest.main()
