@@ -873,8 +873,10 @@ int IOEthernetInterface::syncSIOCSIFLLADDR( IONetworkController * ctr,
 	if(len != kIOEthernetAddressSize)
 		return EINVAL;
 	
-   if (_ctrEnabled != true)    /* reject if interface is down */
-        return (ENETDOWN);
+	if (_ctrEnabled != true)    /* reject if interface is down */
+	{
+		return (ENETDOWN);
+	}
 	// keep a backup in case stack refuses our change
 	hardAddr = OSDynamicCast(OSData, getProperty(kIOMACAddress));
 	if(hardAddr && hardAddr->getLength() == kIOEthernetAddressSize)
