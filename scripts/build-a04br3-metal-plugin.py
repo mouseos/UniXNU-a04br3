@@ -70,6 +70,13 @@ def main():
     parser.add_argument('--pool-block-mib', type=int, choices=(4, 8, 16, 32, 64),
                         help='opt in to a Metal runtime pool block size in MiB (default: upstream 64)')
     args = parser.parse_args()
+    if args.ui_latency:
+        plugin = ROOT / 'drivers/NativeMetal/NativeVulkanMetalPlugin.mm'
+        frontend = ROOT / 'drivers/NativeMetal/NativeBridgeMetalFrontend.mm'
+        if (not plugin.is_file() or not frontend.is_file() or
+                'PVR_METAL_LATENCY_DIAG' not in plugin.read_text() or
+                'native_bridge_metal_enable_latency' not in frontend.read_text()):
+            sys.exit('--ui-latency requires a NativeMetal frontend with UI latency instrumentation')
     builder = ROOT / 'scripts/build-vulkan-metal-plugin.py'
     if not builder.is_file():
         sys.exit('%s not found: run this in a UniXNU build tree (./unixnu tree -D <this repository>)' % builder)

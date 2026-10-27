@@ -67,11 +67,14 @@ int main(){
  board=root/'package/powervr/user/NativePowerVRMetalBoard.mm';board.parent.mkdir(parents=True);board.write_text('// board unchanged\n')
  library=root/'driver.dylib';library.write_bytes(b'fixture')
  out=root/'out'/'plugin';main.__globals__['ROOT']=root
+ metal=root/'drivers/NativeMetal';metal.mkdir(parents=True)
+ (metal/'NativeVulkanMetalPlugin.mm').write_text('PVR_METAL_LATENCY_DIAG\n')
+ (metal/'NativeBridgeMetalFrontend.mm').write_text('native_bridge_metal_enable_latency\n')
  # Keep the full independent flag matrix with no pool override. Then exercise
  # every accepted pool size both alone and with all flags, including exact 16.
  cases=[(bits,None) for bits in itertools.product((False,True),repeat=len(flags))]
  cases += [(bits,pool) for bits in ((False,)*len(flags),(True,)*len(flags)) for pool in (4,8,16,32,64)]
- cases += [((False,)*(len(flags)-1)+(True,),16)] # async + pool16 + skip-bridge
+ cases += [(tuple(flag=='--async-creation' for flag in flags),16)] # async + pool16 + skip-bridge
  cases += [((False,)*len(flags),None)] # stale pool constructor must not be reused
  for bits,pool in cases:
   skip=bool(sum(bits)%2);seen=[]
@@ -132,4 +135,10 @@ int main(){
   assert '--pool-block-mib' in errors.getvalue()
   assert before=={p.name:p.read_bytes() for p in out.parent.glob('*.mm')}
  assert board.read_text()=='// board unchanged\n'
+ (metal/'NativeVulkanMetalPlugin.mm').write_text('old frontend\n')
+ with patch.object(sys,'argv',['metal','--vulkan',str(library),'--out',str(out),'--ui-latency']),patch('subprocess.run') as build:
+  try:main()
+  except SystemExit as error:assert 'requires a NativeMetal frontend' in str(error)
+  else:raise AssertionError('old NativeMetal accepted for latency diagnostics')
+  build.assert_not_called()
 print('PASS actual Metal command preparation: 512 independent flag combinations; all 5 pool sizes alone/combined, exact pool16 constructor, pool16+async+skip-bridge, default absent/inherited unchanged, stale pool input unused, 10 invalid pool forms rejected before generation/build; OUT cleanup survival, skip-bridge preserved, strict board async gate; no GPU/build execution')
