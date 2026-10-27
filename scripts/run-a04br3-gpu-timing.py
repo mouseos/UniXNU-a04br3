@@ -53,6 +53,45 @@ def validate_inputs(a):
 
 SOURCE_IDS=('base','device','base_builder','device_builder','kernel_device','metal','uefi','loader')
 
+RESET_ACK=re.compile(rb'a04br3-autoreset: (?:reset requested on UART|[0-9]+ s elapsed), resetting into fastboot')
+
+def prior_tail(collector,record,measurement_raw,end,allow_following=False):
+    start=record['epoch']['end_offset']
+    if end<start:raise ValueError('prior log newer than collector snapshot; retry')
+    collector.seek(start);raw=collector.read(min(end-start,32*1024*1024+1))
+    reset=RESET_ACK.search(raw);previous_reset=RESET_ACK.search(measurement_raw)
+    positions=[raw.find(token) for token in (b'A04BR3 SEC:',b'Darwin Kernel Version ') if token in raw]
+    following=min(positions) if positions else None
+    if following is not None and previous_reset is None and (reset is None or following<reset.end()):raise ValueError('unrequested prior reboot after saved snapshot')
+    if following is not None and not allow_following:raise ValueError('unaccounted boot between prior epochs')
+    relevant=raw[:following] if following is not None else raw
+    if len(relevant)>32*1024*1024 or len(raw)<min(end-start,32*1024*1024+1):raise ValueError('prior tail exceeds bound or collector truncated')
+    text=relevant.decode(errors='replace')
+    if FAULT.search(text):raise ValueError('fault in prior tail after saved snapshot')
+    runtime=b'' if previous_reset else (relevant[:reset.start()] if reset else relevant)
+    if re.search(rb'Preloader Start|BOOT_REASON:',runtime):raise ValueError('prior reboot before intended reset')
+    verdict=analyze(measurement_raw+runtime,record['clock_request'])
+    if verdict['state']!='pass':raise ValueError('prior tail invalidates measurement: '+verdict.get('reason','failed'))
+    tail={'start_offset':start,'scanned_end_offset':start+len(relevant),'collector_cutoff_offset':end,
+          'sha256':hashlib.sha256(relevant).hexdigest(),'closed_by':'kernel reset acknowledgement' if reset or previous_reset else 'still running at observation',
+          'reset_ack_offset':record['epoch']['start_offset']+previous_reset.start() if previous_reset else (start+reset.start() if reset else None),'following_boot_observed':following is not None,
+          'following_boot_offset':start+following if following is not None else None}
+    return tail,relevant
+
+
+def refresh_last_prior(a,priors,snapshots,out=None,end=None):
+    if not priors:return
+    stat=a.uart_log.stat();last=priors[-1]
+    if [stat.st_dev,stat.st_ino]!=last['prior_evidence']['verified_collector_identity']:raise ValueError('prior collector identity changed')
+    with a.uart_log.open('rb') as source:
+        tail,raw=prior_tail(source,last,snapshots[-1][1],stat.st_size if end is None else end,True)
+    last['prior_tail']=tail
+    if tail['following_boot_observed']:raise ValueError('unimported newer boot observed; import its flash-state/log before execute')
+    if out is not None:
+        folder=out/f'prior-{len(priors):02d}-{last["clock_request"]}'
+        (folder/'tail.log').write_bytes(raw);save(folder/'result.json',last)
+
+
 def import_priors(a,inputs):
     """Validate an ordered prefix from actual log bytes, not claimed PASS flags.
     Return immutable bytes too, so an actively growing P25 file cannot change
@@ -98,6 +137,10 @@ def import_priors(a,inputs):
                                   'verified_collector_identity':[source_stat.st_dev,source_stat.st_ino]},
                 'recovery_status':'not inferred from imported measurement window','environment':{'temperature':'unobserved','power':'unobserved'}})
             snapshots.append((state_bytes,raw));seen.add(offset);previous_end=end
+        for index,record in enumerate(records):
+            end=records[index+1]['epoch']['start_offset'] if index+1<len(records) else source_stat.st_size
+            tail,raw=prior_tail(collector,record,snapshots[index][1],end,index==len(records)-1)
+            record['prior_tail']=tail;snapshots[index]=(*snapshots[index],raw)
         current=a.uart_log.stat()
         if (current.st_dev,current.st_ino)!=(source_stat.st_dev,source_stat.st_ino) or current.st_size<previous_end:
             raise ValueError('collector rotated/truncated during prior validation')
@@ -105,9 +148,9 @@ def import_priors(a,inputs):
 
 
 def stage_priors(out,records,snapshots):
-    for index,(record,(state,raw)) in enumerate(zip(records,snapshots),1):
+    for index,(record,(state,raw,tail)) in enumerate(zip(records,snapshots),1):
         folder=out/f'prior-{index:02d}-{record["clock_request"]}';folder.mkdir()
-        (folder/'flash-state.json').write_bytes(state);(folder/'first-boot.log').write_bytes(raw)
+        (folder/'flash-state.json').write_bytes(state);(folder/'first-boot.log').write_bytes(raw);(folder/'tail.log').write_bytes(tail)
         save(folder/'result.json',record)
 
 
@@ -250,7 +293,7 @@ def recover(io,a,folder,process=None):
     raise TimeoutError('no observed fastboot/transport completion after reset')
 
 
-def campaign(a,inputs,io,priors=()):
+def campaign(a,inputs,io,priors=(),prior_snapshots=()):
     result={'schedule':list(ORDER),'inputs':inputs,'rounds':list(priors),'remaining_schedule':list(ORDER[len(priors):]),'success':False}
     save(a.out/'campaign.json',result)
     for index,clock in enumerate(ORDER[len(priors):],len(priors)+1):
@@ -258,11 +301,14 @@ def campaign(a,inputs,io,priors=()):
         round_result={'clock_request':clock,'source_ids':priors[0]['source_ids'] if priors else {},'state':'incomplete','epoch':{},'reset_cause':'not inferred from fastboot return'}
         process=None;raw=bytearray()
         try:
+            if index==len(priors)+1 and priors:refresh_last_prior(a,priors,prior_snapshots,a.out)
             io.check_collector()
             recover(io,a,folder)
             io.sleep(a.settle)
             io.check_collector()
-            stat=a.uart_log.stat();offset=stat.st_size;identity=(stat.st_dev,stat.st_ino)
+            stat=a.uart_log.stat();offset=stat.st_size
+            if index==len(priors)+1 and priors:refresh_last_prior(a,priors,prior_snapshots,a.out,offset)
+            identity=(stat.st_dev,stat.st_ino)
             round_result['epoch']={'uart_file':str(a.uart_log.resolve()),'start_offset':offset,'identity':list(identity),'flash_requested_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
             round_result['environment']=json.loads(a.environment_json.read_text()) if a.environment_json else {'temperature':'unobserved','power':'unobserved','load':'UI+probe profile; no overlap inferred'}
             save(folder/'result.json',round_result)
@@ -350,6 +396,7 @@ def main():
     inputs=validate_inputs(a)
     priors,snapshots=import_priors(a,inputs)
     remaining=ORDER[len(priors):]
+    if a.execute and remaining and priors:refresh_last_prior(a,priors,snapshots)
     if a.execute and remaining and (not a.collector_pid or a.collector_pid<1):p.error('--execute requires existing collector writer PID')
     if a.execute and remaining and (not Path(a.uart).is_char_device() or any(shutil.which(x) is None for x in ('fastboot','timeout','stty'))):
         p.error('execute requires UART character device and fastboot/timeout/stty')
@@ -357,7 +404,8 @@ def main():
     save(a.out/'plan.json',{'source_commit':subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip(),
          'script_sha256':sha(Path(__file__)), 'transport_sha256':sha(ROOT/'scripts/run-a04br3-unattended.sh'),
          'reset_sha256':sha(ROOT/'scripts/a04br3-reset.sh'),'schedule':list(ORDER),
-         'prior_epochs':priors,'remaining_schedule':list(remaining),'inputs':inputs,'execute':a.execute,'environment':'record same power/temperature/load externally; no thermal equivalence inferred'})
+         'prior_epochs':priors,'remaining_schedule':list(remaining),
+         'execute_blocked_by_following_boot':bool(priors and priors[-1]['prior_tail']['following_boot_observed']),'inputs':inputs,'execute':a.execute,'environment':'record same power/temperature/load externally; no thermal equivalence inferred'})
     if not a.execute:print('PLAN ONLY; no fastboot/UART operations');return 0
-    return campaign(a,inputs,Transport(a),priors)
+    return campaign(a,inputs,Transport(a),priors,snapshots)
 if __name__=='__main__':sys.exit(main())

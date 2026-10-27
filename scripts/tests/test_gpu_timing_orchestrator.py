@@ -58,7 +58,7 @@ class Fake:
     def fastboot(self):return self.present
     def reset(self,folder):
         self.resets+=1;self.present=True;self.exit_code=0
-        with self.a.uart_log.open('ab') as f:f.write(b'\nBOOT_REASON: 2\n')
+        with self.a.uart_log.open('ab') as f:f.write(b'\na04br3-autoreset: reset requested on UART, resetting into fastboot\nBOOT_REASON: 2\n')
     def start(self,image,folder,limit):
         clock=int(image.stem);self.sequence.append(clock);self.present=False;self.exit_code=None
         with self.a.uart_log.open('ab') as f:f.write(self.mutation(boot(clock)))
@@ -235,7 +235,8 @@ class PriorTests(unittest.TestCase):
                 'hardware_verified':False,**{key:'a'*40 for key in m.SOURCE_IDS}}
             state_path=r/f'state{index}.json';state_path.write_text(json.dumps(state))
             log_path=r/f'first{index}.log';log_path.write_bytes(data);specs.append((state_path,log_path))
-            raw.extend(data);raw.extend(b'fastboot boundary gap\n')
+            raw.extend(data)
+            if index<2:raw.extend(b'a04br3-autoreset: reset requested on UART, resetting into fastboot\nBOOT_REASON: 2\n')
         log.write_bytes(raw)
         a=SimpleNamespace(out=r/'campaign',uart_log=log,boot26=r/'26',boot380=r/'380',prior_epoch=specs,
             recovery_timeout=5,measurement_timeout=10,settle=0,post_success=1,environment_json=None)
@@ -249,7 +250,7 @@ class PriorTests(unittest.TestCase):
         a.out.mkdir();m.stage_priors(a.out,priors,snapshots)
         self.assertEqual((a.out/'prior-01-26/flash-state.json').read_bytes(),snapshots[0][0])
         io=Fake(a);io.present=False # P25 is still running: reset it, never reflash380 as another prior.
-        self.assertEqual(m.campaign(a,inputs,io,priors),0)
+        self.assertEqual(m.campaign(a,inputs,io,priors,snapshots),0)
         self.assertEqual(io.sequence,[26,26,380]);self.assertEqual(io.resets,4)
         result=json.loads((a.out/'campaign.json').read_text())
         self.assertEqual(len(result['rounds']),6);self.assertEqual(result['summary']['380']['UI_encode_ms']['n'],3)
@@ -289,6 +290,46 @@ class PriorTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'not complete'):m.main()
             transport.assert_not_called()
         self.assertFalse(a.out.exists())
+
+    def test_reset_ack_in_saved_snapshot_is_preserved(self):
+        a,inputs,r=self.fixture();state,log=a.prior_epoch[0]
+        log.write_bytes(log.read_bytes()+b'a04br3-autoreset: reset requested on UART, resetting into fastboot\n')
+        priors,_=m.import_priors(a,inputs)
+        self.assertEqual(priors[0]['prior_tail']['closed_by'],'kernel reset acknowledgement')
+
+    def test_tail_faults_and_unrequested_reboot_rejected(self):
+        for marker in (b'panic(cpu0)\n',b'powervr: HWR counter 1\n',b'Preloader Start\n',b'A04BR3 SEC: unexpected\n'):
+            a,inputs,r=self.fixture()
+            with a.uart_log.open('ab') as f:f.write(marker)
+            with self.assertRaises(ValueError):m.import_priors(a,inputs)
+        a,inputs,r=self.fixture()
+        # Insert a fault between snapshot0 and its intended reset, while fixing
+        # subsequent original offsets so byte binding still succeeds.
+        state=json.loads(a.prior_epoch[0][0].read_text());end=state['uart_offset']+len(a.prior_epoch[0][1].read_bytes())
+        marker=b'panic(late prior0)\n';raw=a.uart_log.read_bytes();a.uart_log.write_bytes(raw[:end]+marker+raw[end:])
+        for path,_ in a.prior_epoch[1:]:
+            record=json.loads(path.read_text());record['uart_offset']+=len(marker);path.write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError,'prior tail'):m.import_priors(a,inputs)
+
+    def test_newer_unimported_boot_blocks_execute(self):
+        a,inputs,r=self.fixture()
+        with a.uart_log.open('ab') as f:f.write(b'a04br3-autoreset: reset requested on UART, resetting into fastboot\nBOOT_REASON: 2\n'+boot(26))
+        priors,snapshots=m.import_priors(a,inputs)
+        self.assertTrue(priors[-1]['prior_tail']['following_boot_observed'])
+        with self.assertRaisesRegex(ValueError,'unimported newer boot'):m.refresh_last_prior(a,priors,snapshots)
+        argv=['runner','--boot26',str(a.boot26),'--boot380',str(a.boot380),'--payload26','unused','--payload380','unused',
+              '--uart-log',str(a.uart_log),'--serial','unused','--out',str(a.out),'--execute']
+        for state,log in a.prior_epoch:argv+=['--prior-epoch',str(state),str(log)]
+        with mock.patch.object(sys,'argv',argv),mock.patch.object(m,'validate_inputs',return_value=inputs),mock.patch.object(m,'Transport') as transport:
+            with self.assertRaisesRegex(ValueError,'unimported newer boot'):m.main()
+            transport.assert_not_called()
+
+    def test_late_fault_between_import_and_resume_never_flashes(self):
+        a,inputs,r=self.fixture();priors,snapshots=m.import_priors(a,inputs)
+        with a.uart_log.open('ab') as f:f.write(b'panic(after import)\n')
+        a.out.mkdir();m.stage_priors(a.out,priors,snapshots);io=Fake(a);io.present=False
+        self.assertEqual(m.campaign(a,inputs,io,priors,snapshots),2)
+        self.assertFalse(io.sequence);self.assertEqual(io.resets,0)
 
     def test_validated_snapshot_is_immutable(self):
         a,inputs,r=self.fixture();priors,snapshots=m.import_priors(a,inputs)
