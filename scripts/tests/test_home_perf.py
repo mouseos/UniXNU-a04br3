@@ -90,7 +90,7 @@ int main(){bool down=true;unsigned edges=0;run(down,edges);
         self.assertIn('if (perf == 1)', board)
         self.assertIn('PE_parse_boot_argn("a04br3-home-perf"', board)
         source = (ROOT / 'package/BootProcessProbe.c').read_text()
-        body = source[source.index('#if PRECISE_USER_KERNEL_TIME'):]
+        body = source[source.index('#if PRECISE_USER_KERNEL_TIME'):source.index('// Optional timer-IRQ PC histogram.')]
         harness = r'''
 #include <assert.h>
 #include <stdbool.h>

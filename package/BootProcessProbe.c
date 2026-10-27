@@ -288,3 +288,65 @@ void boot_home_perf_sample(void) {
   }
  }
 }
+
+// Optional timer-IRQ PC histogram. Called by the generic, compile-gated XNU
+// timer hook with interrupts masked. Bounded atomics only: no log, allocation,
+// waiting, stack walk or lock. Slots retain the first 64 PC buckets; overflow
+// is visible, so a saturated histogram is not a complete profile.
+#define HOME_IRQ_SLOTS 64u
+#define HOME_IRQ_RATE 16u
+struct home_irq_slot { uint64_t pc, hits; };
+static struct home_irq_slot home_irq_slots[HOME_IRQ_SLOTS];
+static unsigned home_irq_pid;
+static uint64_t home_irq_ticks, home_irq_sampled, home_irq_overflow;
+int proc_getpid(proc_t);
+extern int native_irq_pc_hook_compiled(void) __attribute__((weak_import));
+unsigned boot_home_irq_hook_available(void) {
+ return native_irq_pc_hook_compiled ? (unsigned)native_irq_pc_hook_compiled() : 0u;
+}
+void boot_home_irq_init(unsigned pid) {
+ __atomic_store_n(&home_irq_pid,pid,__ATOMIC_RELEASE);
+}
+void native_irq_pc_sample(uint64_t pc,unsigned user) {
+ unsigned wanted=__atomic_load_n(&home_irq_pid,__ATOMIC_ACQUIRE);
+ if(!wanted || user || !pc)return;
+ proc_t p=(proc_t)get_bsdtask_info(current_task());
+ if(!p || proc_getpid(p)!=(int)wanted)return;
+ uint64_t tick=__atomic_fetch_add(&home_irq_ticks,1,__ATOMIC_RELAXED);
+ if(tick%HOME_IRQ_RATE)return;
+ __atomic_fetch_add(&home_irq_sampled,1,__ATOMIC_RELAXED);
+ uint64_t bucket=pc&~255ULL;
+ if(!bucket){__atomic_fetch_add(&home_irq_overflow,1,__ATOMIC_RELAXED);return;}
+ unsigned start=(unsigned)((bucket>>8)%HOME_IRQ_SLOTS);
+ for(unsigned i=0;i<HOME_IRQ_SLOTS;++i) {
+  struct home_irq_slot *slot=&home_irq_slots[(start+i)%HOME_IRQ_SLOTS];
+  uint64_t key=__atomic_load_n(&slot->pc,__ATOMIC_ACQUIRE);
+  if(!key) {
+   uint64_t expected=0;
+   if(__atomic_compare_exchange_n(&slot->pc,&expected,bucket,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))key=bucket;
+   else key=expected;
+  }
+  if(key==bucket){__atomic_fetch_add(&slot->hits,1,__ATOMIC_RELAXED);return;}
+ }
+ __atomic_fetch_add(&home_irq_overflow,1,__ATOMIC_RELAXED);
+}
+void boot_home_irq_report(void) {
+ unsigned pid=__atomic_load_n(&home_irq_pid,__ATOMIC_ACQUIRE);
+ if(!pid)return;
+ struct {uint64_t pc,hits;} top[8]={0};
+ for(unsigned i=0;i<HOME_IRQ_SLOTS;++i) {
+  uint64_t pc=__atomic_load_n(&home_irq_slots[i].pc,__ATOMIC_ACQUIRE);
+  uint64_t hits=__atomic_load_n(&home_irq_slots[i].hits,__ATOMIC_RELAXED);
+  if(!pc || !hits)continue;
+  for(unsigned j=0;j<8;++j)if(hits>top[j].hits){
+   for(unsigned k=7;k>j;--k)top[k]=top[k-1];
+   top[j].pc=pc;top[j].hits=hits;break;
+  }
+ }
+ uint64_t at=0;absolutetime_to_nanoseconds(mach_absolute_time(),&at);
+ printf("a04br3 irq pc pid=%u hook=%u at_ns=%llu ticks=%llu samples=%llu overflow=%llu shift=8 rate=%u\n",
+  pid,boot_home_irq_hook_available(),at,__atomic_load_n(&home_irq_ticks,__ATOMIC_RELAXED),__atomic_load_n(&home_irq_sampled,__ATOMIC_RELAXED),
+  __atomic_load_n(&home_irq_overflow,__ATOMIC_RELAXED),HOME_IRQ_RATE);
+ for(unsigned i=0;i<8 && top[i].hits;++i)
+  printf("a04br3 irq pc bucket=%llx hits=%llu\n",top[i].pc,top[i].hits);
+}

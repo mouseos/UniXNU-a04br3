@@ -555,3 +555,26 @@ scheduler locks omit samples. The sampler can enumerate at most the first 32
 threads and retains at most eight successful launchd observations per interval;
 output and sampling can perturb time. Raw kernel addresses require the exact
 matching kernel symbols. No user pages are faulted in by this addition.
+
+### Timer-interrupted kernel PC statistics (experimental)
+
+With the generic UniXNU timer hook compiled using `CONFIG_XNU_IRQ_PC_STATS=y`
+(or `XNU_IRQ_PC_STATS=1` if the selected defconfig leaves it unset), the
+existing `a04br3-home-perf=1` runtime opt-in enables PID 1 sampling. Explicit
+`native-irq-pid=<pid>` selects another PID; `native-irq-pid=0` disables it.
+Without the compiled hook, the existing performance monitor has no timer
+sampling. The monitor prints `hook=0` if an explicit PID is selected without
+that hook, so zero samples are not mistaken for an idle task.
+
+Every sixteenth target PID kernel-mode timer interrupt contributes the
+interrupted unslid PC rounded down to a 256-byte bucket. Fixed atomics, no
+allocation, no waiting, no stack walk and no UART output run in the interrupt.
+The existing process-monitor worker prints up to eight most frequent buckets,
+total target interrupts, sampled count and table overflow. The 64-slot table
+retains the first distinct buckets for the boot; later distinct buckets can be
+lost once it is full. In-progress writes can make a report nontransactional.
+Counts are cumulative and their sampling depends on timer scheduling and
+interrupt masking, so they are not percentages of CPU time. Addresses are
+unslid: symbolize bucket ranges against the exact kernel Mach-O and do not
+assume every address in a 256-byte bucket belongs to one function. The feature
+requires an image rebuild; it cannot inspect the already running P31 kernel.

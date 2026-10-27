@@ -31,6 +31,9 @@ void a04br3_registers_init(void);
 void a04br3_gpu_init(void);
 void boot_memory_snapshot(uint64_t out[7]);
 void boot_home_perf_sample(void);
+void boot_home_irq_init(unsigned);
+unsigned boot_home_irq_hook_available(void);
+void boot_home_irq_report(void);
 void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
 int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
@@ -192,6 +195,7 @@ void procLogThread(void *, wait_result_t)
       IOLog("a04br3 perf vm pagesize=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu throttled=%llu pageable_internal=%llu pageable_external=%llu mode=%d active_compressor=%u active_swap=%u\n",
             m[0],m[1],m[2],m[3],m[4],m[5],m[6],q.throttled,q.pageable_internal,q.pageable_external,q.compressor_mode,q.compressor_active,q.swap_active);
       boot_home_perf_sample();
+      boot_home_irq_report();
     }
     cacheReportSeconds += gProcLogSeconds;
     if (cacheReportSeconds >= 60) {
@@ -214,6 +218,13 @@ extern "C" void unixnu_board_init(void)
   a04br3_autoreset_init();
   a04br3_registers_init(); // shared I2C0/I2C2 mux lock before either thread
   a04br3_charger_init(); // explicit opt-in; separate I2C2 owner, no PWRAP
+  unsigned irqPid = 0;
+  if (!PE_parse_boot_argn("native-irq-pid", &irqPid, sizeof(irqPid))) {
+    unsigned perf = 0;
+    if (boot_home_irq_hook_available() && PE_parse_boot_argn("a04br3-home-perf", &perf, sizeof(perf)) && perf == 1)
+      irqPid = 1;  // diagnostic kernel + existing opt-in: sample launchd
+  }
+  boot_home_irq_init(irqPid);
   a04br3_proclog_init();
   a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)
   unsigned events = 0;
