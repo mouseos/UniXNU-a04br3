@@ -130,7 +130,14 @@ void clockDiagnosticSnapshot(volatile uint8_t *top)
 unsigned selectClockParent(uint32_t *hz)
 {
   unsigned requested = 0;
-  if (!PE_parse_boot_argn("a04br3-gpu-clock", &requested, sizeof(requested)) || requested == 0) return 4;
+  if (!PE_parse_boot_argn("a04br3-gpu-clock", &requested, sizeof(requested))) {
+    IOLog("a04br3 gpu clock: no clock request, selecting 26 MHz crystal\n");
+    return 4;
+  }
+  if (requested == 0) {
+    IOLog("a04br3 gpu clock: 26 MHz crystal explicitly requested\n");
+    return 4;
+  }
   if (requested != 380) { IOLog("a04br3 gpu clock: unsupported request %u; retaining 26 MHz\n", requested); return 4; }
   auto *pll = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10018000, 0x1000));
   auto *pwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1000f000, 0x1000));
