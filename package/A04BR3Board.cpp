@@ -95,7 +95,8 @@ static bool a04br3_row_absent(const char *row)
 extern "C" {
 extern volatile uint32_t armcpu_smp_requested, armcpu_smp_running, armcpu_smp_step[8];
 extern volatile int32_t armcpu_smp_psci_rc[8];
-extern volatile uint32_t armcpu_core_timer[8], armcpu_core_sgi[8];
+extern volatile uint32_t armcpu_core_timer[8], armcpu_core_sgi[8], armcpu_gic_boot[8];
+extern volatile uint64_t armcpu_ipi_sent, armcpu_ipi_dropped;
 }
 static void a04br3_thread_report(void)
 {
@@ -224,6 +225,8 @@ void cpuDiagnosticReport()
   IOLog("a04br3 perf irq counters timer=%u/%u/%u/%u ipi=%u/%u/%u/%u (per-core cumulative; non-atomic)\n",
         armcpu_core_timer[0], armcpu_core_timer[1], armcpu_core_timer[2], armcpu_core_timer[3],
         armcpu_core_sgi[0], armcpu_core_sgi[1], armcpu_core_sgi[2], armcpu_core_sgi[3]);
+  IOLog("a04br3 perf ipi sent=%llu dropped=%llu gic_typer=%08x (approx cumulative)\n",
+        armcpu_ipi_sent, armcpu_ipi_dropped, armcpu_gic_boot[3]);
 }
 
 void procLogThread(void *, wait_result_t)
