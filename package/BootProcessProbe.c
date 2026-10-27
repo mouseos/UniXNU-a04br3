@@ -398,6 +398,15 @@ void native_ipi_signal_record(unsigned source, unsigned target, unsigned signal,
 }
 void boot_ipi_reason_report(void) {
  if (!__atomic_load_n(&ipi_reason_enabled, __ATOMIC_RELAXED)) return;
+ unsigned observed=__atomic_load_n(&ipi_reason_out_of_range_seen,__ATOMIC_RELAXED);
+ for (unsigned source=0; source<4 && !observed; ++source)
+  for (unsigned target=0; target<4 && !observed; ++target)
+   for (unsigned kind=0; kind<6; ++kind)
+    if (__atomic_load_n(&ipi_reason_rows[source].counts[target][kind],__ATOMIC_RELAXED)) { observed=1; break; }
+ if (!observed) {
+  printf("a04br3 ipi reason unavailable: hook not observed (not built or no dispatch yet)\n");
+  return;
+ }
  for (unsigned source=0; source<4; ++source) {
   uint64_t kinds[7]={0},dest[4]={0};
   for (unsigned target=0; target<4; ++target) for (unsigned kind=0; kind<7; ++kind) {

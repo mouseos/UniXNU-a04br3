@@ -7,7 +7,7 @@ code='#include <stdint.h>\n#include <stdio.h>\n#include <assert.h>\n'+src[start:
 int main(void){
  assert(sizeof(struct ipi_reason_row)%64==0);
  native_ipi_signal_record(0,1,8,0);assert(!ipi_reason_rows[0].counts[1][3]);
- boot_ipi_reason_enable(1);native_ipi_signal_record(0,1,8,0);native_ipi_signal_record(0,1,0,1);
+ boot_ipi_reason_enable(1);boot_ipi_reason_report();native_ipi_signal_record(0,1,8,0);native_ipi_signal_record(0,1,0,1);
  native_ipi_signal_record(2,3,4,0);native_ipi_signal_record(3,0,0x200,0);native_ipi_signal_record(2,2,0x800,0);
  native_ipi_signal_record(4,0,4,0);native_ipi_signal_record(0,5,4,0);
  assert(ipi_reason_rows[0].counts[1][3]==1 && ipi_reason_rows[0].counts[1][0]==1 && ipi_reason_rows[0].counts[1][6]==1);
@@ -16,5 +16,5 @@ int main(void){
 }
 '''
 with tempfile.TemporaryDirectory() as d:
- p=Path(d);(p/'test.c').write_text(code);subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',str(p/'test.c'),'-o',str(p/'test')],check=True);subprocess.run([str(p/'test')],check=True)
+ p=Path(d);(p/'test.c').write_text(code);subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror',str(p/'test.c'),'-o',str(p/'test')],check=True);out=subprocess.check_output([str(p/'test')],text=True);assert 'hook not observed (not built or no dispatch yet)' in out and 'src=0 dest=' in out
 print('PASS IPI reason actual code: off/on, signal categories, defer, target bounds, report and disable')
