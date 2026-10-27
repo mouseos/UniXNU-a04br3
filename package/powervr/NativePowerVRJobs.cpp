@@ -83,6 +83,7 @@ constexpr uint32_t kCacheLine = 64;                         // Cortex-A53 L1/L2 
 constexpr uint32_t kHwrtReaders = 8;                        // reader queues remembered per HWRT data
 constexpr uint32_t kMaxUfosPerJob = 1 + kHwrtReaders;       // a geometry job waits for one writer and every reader
 constexpr uint32_t kFailedFences = 64;                      // bounded late-reset attribution history
+constexpr uint32_t kFailureRanges = 128;                    // bounded exact failure intervals per file
 constexpr uint32_t kResetNotes = 16;
 
 // A write-combined kernel mapping of physical memory.
@@ -207,10 +208,9 @@ struct RetiredFence {
 };
 }
 
-// File-owned failure records are accessed under gJobs.lock, then freed after file removal at close.
-struct FailedFence {
-  uint64_t fence;
-  FailedFence *next;
+// Sorted, non-overlapping failure intervals; accessed only under gJobs.lock.
+struct FailedFenceRange {
+  uint64_t first, last;
 };
 
 // The job part of struct pvr_file (native_powervr_jobs.h).
@@ -220,8 +220,9 @@ struct native_powervr_jobs_file {
   list_head link;    // gJobs.files
   list_head jobs;    // this file's queued jobs
   uint64_t nextFence;
-  FailedFence *failed;
-  uint64_t failureUncertainThrough; // allocation failure: older retired fences fail closed
+  FailedFenceRange failed[kFailureRanges];
+  uint32_t failedCount;
+  uint64_t failureUncertainThrough; // exhausted interval storage: older retired fences fail closed
   RetiredFence retired[kFailedFences];
   uint32_t retiredNext;
 };
@@ -1489,38 +1490,52 @@ void run_job(Job *job, HwrtTrack *track)
   }
 }
 
-// Caller holds gJobs.lock. If allocation fails, conservatively report every retired fence up to this ID as failed;
-// in particular, a failed fence is never turned into success by memory pressure or by a bounded history eviction.
+// Caller holds gJobs.lock. An exhausted interval table fails closed through the newly failed ID. Exact ranges
+// above that watermark remain available; successful fences below it may conservatively report an error.
 void recordFailed(native_powervr_jobs_file *f, uint64_t fence)
 {
   if (fence <= f->failureUncertainThrough) return;
-  for (const FailedFence *p = f->failed; p; p = p->next)
-    if (p->fence == fence) return;
-  auto *p = static_cast<FailedFence *>(kzalloc(sizeof(FailedFence), GFP_KERNEL));
-  if (!p) {
-    f->failureUncertainThrough = fence;
-    return;
+  uint32_t lo = 0, hi = f->failedCount;
+  while (lo < hi) {
+    const uint32_t mid = lo + (hi - lo) / 2;
+    if (f->failed[mid].first < fence) lo = mid + 1;
+    else hi = mid;
   }
-  p->fence = fence;
-  p->next = f->failed;
-  f->failed = p;
+  const uint32_t i = lo;
+  if (i < f->failedCount && f->failed[i].first == fence) return;
+  if (i && f->failed[i - 1].last >= fence) return;
+  const bool before = i && fence - f->failed[i - 1].last == 1;
+  const bool after = i < f->failedCount && f->failed[i].first - fence == 1;
+  if (before && after) {
+    f->failed[i - 1].last = f->failed[i].last;
+    for (uint32_t j = i + 1; j < f->failedCount; ++j) f->failed[j - 1] = f->failed[j];
+    --f->failedCount;
+  } else if (before) {
+    f->failed[i - 1].last = fence;
+  } else if (after) {
+    f->failed[i].first = fence;
+  } else if (f->failedCount < kFailureRanges) {
+    for (uint32_t j = f->failedCount; j > i; --j) f->failed[j] = f->failed[j - 1];
+    f->failed[i] = {fence, fence};
+    ++f->failedCount;
+  } else {
+    f->failureUncertainThrough = fence;
+    uint32_t keep = 0;
+    for (uint32_t j = 0; j < f->failedCount; ++j)
+      if (f->failed[j].last > fence) f->failed[keep++] = f->failed[j];
+    f->failedCount = keep;
+  }
 }
 bool wasFailed(const native_powervr_jobs_file *f, uint64_t fence)
 {
   if (fence <= f->failureUncertainThrough) return true;
-  for (const FailedFence *p = f->failed; p; p = p->next)
-    if (p->fence == fence) return true;
-  return false;
-}
-
-// The file has been removed from gJobs.files under gJobs.lock, and client teardown runs after external calls finish.
-void freeFailedFences(native_powervr_jobs_file *f)
-{
-  while (f->failed) {
-    FailedFence *p = f->failed;
-    f->failed = p->next;
-    kfree(p);
+  uint32_t lo = 0, hi = f->failedCount;
+  while (lo < hi) {
+    const uint32_t mid = lo + (hi - lo) / 2;
+    if (f->failed[mid].first <= fence) lo = mid + 1;
+    else hi = mid;
   }
+  return lo && fence <= f->failed[lo - 1].last;
 }
 
 // The primary queue identifies a live context incarnation without retaining pointers in history.
@@ -1800,7 +1815,6 @@ extern "C" void native_powervr_jobs_file_destroy(struct native_powervr_jobs_file
   xa_destroy(&file->pf.free_list_handles);
   xa_destroy(&file->pf.hwrt_handles);
   xa_destroy(&file->pf.vm_ctx_handles);
-  freeFailedFences(file);
   kfree(file);
 }
 

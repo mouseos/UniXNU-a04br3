@@ -20,6 +20,8 @@ h = r'''
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
+#include <random>
+#include <set>
 #include <thread>
 #include <unordered_map>
 using u32=uint32_t; using wait_result_t=int;
@@ -47,7 +49,7 @@ void IOSleep(unsigned){assert(!jobsHeld&&!fwHeld);++sleeps;if(stopSleep)throw St
 uint64_t nowAbs(){return std::chrono::steady_clock::now().time_since_epoch().count();}
 void nanoseconds_to_absolutetime(uint64_t x,uint64_t*p){*p=x;}
 void native_powervr_log(const char*,...){}
-constexpr uint32_t kFailedFences=64,kResetNotes=16,NativePowerVRTunnelMagic=0x50565254;
+constexpr uint32_t kFailedFences=64,kFailureRanges=128,kResetNotes=16,NativePowerVRTunnelMagic=0x50565254;
 constexpr uint32_t DRM_PVR_CTX_TYPE_RENDER=0,DRM_PVR_CTX_TYPE_COMPUTE=1,DRM_PVR_CTX_TYPE_TRANSFER_FRAG=2;
 constexpr uint32_t ROGUE_CONTEXT_RESET_REASON_GUILTY_LOCKUP=1,ROGUE_CONTEXT_RESET_REASON_GUILTY_OVERRUNING=2;
 constexpr uint32_t ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_PF=1,ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_ALL_CTXS=2;
@@ -66,7 +68,7 @@ int atomic_read(const int*p){return *p;}void atomic_set(int*p,int v){*p=v;}
 struct Xarray{std::unordered_map<u32,pvr_context*>items;};
 void xa_lock(Xarray*){}void xa_unlock(Xarray*){}void*xa_load(Xarray*x,u32 id){auto i=x->items.find(id);return i==x->items.end()?nullptr:i->second;}
 struct pvr_device{Xarray ctx_ids;};
-struct FailedFence {uint64_t fence;FailedFence *next;};
+struct FailedFenceRange {uint64_t first,last;};
 std::atomic<bool> failAlloc{false};std::atomic<int> liveAlloc{0};
 constexpr unsigned GFP_KERNEL=1;
 void *kzalloc(size_t n,unsigned){if(failAlloc)return nullptr;void *p=calloc(1,n);if(p)++liveAlloc;return p;}
@@ -75,7 +77,7 @@ struct FileData {Xarray ctx_handles,free_list_handles,hwrt_handles,vm_ctx_handle
 void pvr_destroy_contexts_for_file(FileData*){} void pvr_destroy_free_lists_for_file(FileData*){}
 void pvr_destroy_hwrt_datasets_for_file(FileData*){} void xa_destroy(Xarray*){}
 constexpr uint32_t kMaxDeadlineMs=2;
-struct native_powervr_jobs_file {FileData pf;list_head link,jobs;uint64_t nextFence=2;FailedFence *failed=nullptr;uint64_t failureUncertainThrough=0;RetiredFence retired[kFailedFences]{};uint32_t retiredNext=0;};
+struct native_powervr_jobs_file {FileData pf;list_head link,jobs;uint64_t nextFence=2;FailedFenceRange failed[kFailureRanges]{};uint32_t failedCount=0;uint64_t failureUncertainThrough=0;RetiredFence retired[kFailedFences]{};uint32_t retiredNext=0;};
 struct Job {list_head dev_link,file_link;native_powervr_jobs_file*file;uint64_t fence=1;pvr_context*ctx;pvr_queue*queue;uint32_t id=12,seqno=1;bool failed=false,timed_out=false;uint64_t kicked=0;int type=3;bool hosts_completed=false;};
 struct {pvr_device dev;IOLock*lock=&jobsLock,*fwccbLock=&fwLock;list_head jobs,files;rogue_fwif_ccb_ctl*fwccbCtl;rogue_fwif_fwccb_cmd*fwccb;uint32_t fwccbSlots=64;ResetNote resets[kResetNotes]{},resetReports[kResetNotes]{};uint32_t resetCount=0,resetReportCount=0,fwccbActive=0;uint64_t timeoutAbs=1000000000;}gJobs;
 uint32_t get_dm_type(pvr_queue*q){return q->dm;}
@@ -88,7 +90,7 @@ void pvr_free_list_process_reconstruct_req(pvr_device*,int*){assert(!jobsHeld&&!
 void pvr_free_list_process_grow_req(pvr_device*,int*){assert(!jobsHeld&&!fwHeld);++callbacks;}
 void applyResets(const ResetNote*,uint32_t);
 '''
-for sig in ['void recordFailed(', 'bool wasFailed(', 'void freeFailedFences(', 'uint64_t contextGeneration(', 'void rememberRetired(', 'void applyResets(',
+for sig in ['void recordFailed(', 'bool wasFailed(', 'uint64_t contextGeneration(', 'void rememberRetired(', 'void applyResets(',
             'void process_fwccb_command(', 'extern "C" void pvr_fwccb_process(', 'bool fwccbPendingLocked(',
             'bool tryLockJobsAfterResets(', 'void unlockJobsAfterResets()']:
     # skip forward declarations in the source
@@ -116,7 +118,7 @@ h+=r'''
 native_powervr_jobs_file file;Job job;pvr_queue queue;pvr_context ctx;uint32_t ufo=1;
 void setup(){assert(!jobsHeld&&!fwHeld);ctl.read_offset=ctl.write_offset=0;gJobs.fwccbCtl=&ctl;gJobs.fwccb=commands;
  gJobs.resetCount=gJobs.resetReportCount=gJobs.fwccbActive=0;INIT_LIST_HEAD(&gJobs.jobs);INIT_LIST_HEAD(&gJobs.files);
- freeFailedFences(&file);file={};failAlloc=false;file.nextFence=2;INIT_LIST_HEAD(&file.jobs);list_add_tail(&file.link,&gJobs.files);
+ file={};failAlloc=false;file.nextFence=2;INIT_LIST_HEAD(&file.jobs);list_add_tail(&file.link,&gJobs.files);
  queue={};queue.generation=7;queue.dm=3;queue.timeline_ufo.value=&ufo;ufo=1;
  ctx={};ctx.type=2;ctx.ctx_id=1;ctx.queues.transfer=&queue;gJobs.dev.ctx_ids.items.clear();gJobs.dev.ctx_ids.items[1]=&ctx;
  job={};job.file=&file;job.ctx=&ctx;job.queue=&queue;job.id=12;job.seqno=1;job.fence=1;job.kicked=nowAbs();
@@ -146,26 +148,50 @@ int main(){
  // Fixed window eviction and repeated error notifications do not grow/consume history.
  setup();worker();for(unsigned i=0;i<kFailedFences;i++){job.fence=2+i;rememberRetired(&job);}publish();pvr_fwccb_process(&gJobs.dev);bool ready;
  assert(tryLockJobsAfterResets(&ready));assert(!wasFailed(&file,1));unlockJobsAfterResets();
- setup();recordFailed(&file,1);for(unsigned i=0;i<100;i++)recordFailed(&file,1);assert(liveAlloc==1);
- // Retired failure outcomes must survive more than 64 distinct failures.
- setup();worker();file.nextFence=300;
- for(uint64_t i=1;i<=130;i++) recordFailed(&file,i*2-1);
- assert(liveAlloc==130);
- for(uint64_t i=1;i<=130;i++) assert(native_powervr_fence_wait(&file,i*2-1,0)==-EIO);
- assert(native_powervr_fence_wait(&file,2,0)==0);
- // Allocation failures conservatively cover old IDs without erasing later exact failures.
- setup();worker();file.nextFence=205;recordFailed(&file,175);failAlloc=true;recordFailed(&file,100);
- assert(native_powervr_fence_wait(&file,1,0)==-EIO&&native_powervr_fence_wait(&file,100,0)==-EIO);
- assert(native_powervr_fence_wait(&file,101,0)==0&&native_powervr_fence_wait(&file,175,0)==-EIO);
- recordFailed(&file,40);assert(file.failureUncertainThrough==100);
- recordFailed(&file,150);assert(file.failureUncertainThrough==150);failAlloc=false;
- assert(native_powervr_fence_wait(&file,149,0)==-EIO&&native_powervr_fence_wait(&file,151,0)==0);
- // Wait and failure publication serialize under the real jobs lock; completed failures stay failures.
+ setup();recordFailed(&file,1);for(unsigned i=0;i<100;i++)recordFailed(&file,1);assert(file.failedCount==1&&liveAlloc==0);
+ // Contiguous failures compress; recording in both orders merges the two adjacent intervals.
+ setup();worker();file.nextFence=5000;
+ for(uint64_t i=1;i<=512;i++) recordFailed(&file,i);
+ assert(file.failedCount==1&&file.failed[0].first==1&&file.failed[0].last==512);
+ for(uint64_t i=1;i<=512;i++) assert(native_powervr_fence_wait(&file,i,0)==-EIO);
+ assert(native_powervr_fence_wait(&file,513,0)==0);
+ setup();recordFailed(&file,1);recordFailed(&file,3);recordFailed(&file,2);
+ assert(file.failedCount==1&&file.failed[0].first==1&&file.failed[0].last==3);
+ // 128 sparse records are exact. Exhaustion fails closed through the new failed ID.
+ setup();worker();file.nextFence=1000;
+ for(uint64_t i=0;i<128;i++) recordFailed(&file,2*i+1);
+ assert(file.failedCount==128&&native_powervr_fence_wait(&file,2,0)==0);
+ recordFailed(&file,257);assert(file.failedCount==0&&file.failureUncertainThrough==257);
+ for(uint64_t i=1;i<=257;i++) assert(native_powervr_fence_wait(&file,i,0)==-EIO);
+ assert(native_powervr_fence_wait(&file,258,0)==0);
+ // Out-of-order exhaustion below all existing ranges preserves every higher exact failure.
+ setup();worker();file.nextFence=1000;
+ for(uint64_t i=0;i<128;i++) recordFailed(&file,300+2*i);
+ recordFailed(&file,11);assert(file.failureUncertainThrough==11&&file.failedCount==128);
+ for(uint64_t i=0;i<128;i++) assert(native_powervr_fence_wait(&file,300+2*i,0)==-EIO);
+ assert(native_powervr_fence_wait(&file,299,0)==0);
+ // Exhaustion in the middle discards only ranges covered by the fail-closed watermark.
+ setup();worker();file.nextFence=1000;
+ for(uint64_t i=0;i<128;i++) recordFailed(&file,4*i+1);
+ recordFailed(&file,259);assert(file.failureUncertainThrough==259&&file.failedCount==63);
+ for(uint64_t i=0;i<128;i++) assert(native_powervr_fence_wait(&file,4*i+1,0)==-EIO);
+ assert(native_powervr_fence_wait(&file,260,0)==0);
+ // Deterministic random insertions: every recorded failure remains failed; before exhaustion all answers are exact.
+ setup();std::mt19937 rng(42);std::set<uint64_t> expected;
+ for(unsigned n=0;n<5000;n++) {uint64_t v=1+rng()%1000;expected.insert(v);recordFailed(&file,v);
+   assert(file.failedCount<=kFailureRanges);
+   for(uint64_t x:expected) assert(wasFailed(&file,x));
+   for(uint32_t j=1;j<file.failedCount;j++) assert(file.failed[j-1].last+1<file.failed[j].first);
+   if(!file.failureUncertainThrough) for(uint64_t x=1;x<=1000;x++) assert(wasFailed(&file,x)==(expected.count(x)!=0));
+ }
+ // UINT64_MAX does not overflow adjacent-interval comparisons.
+ setup();recordFailed(&file,UINT64_MAX);recordFailed(&file,UINT64_MAX-2);recordFailed(&file,UINT64_MAX-1);
+ assert(file.failedCount==1&&file.failed[0].first==UINT64_MAX-2&&file.failed[0].last==UINT64_MAX);
+ // Concurrent WaitFence and publication remain serialized by gJobs.lock.
  setup();worker();file.nextFence=205;
  std::thread writer([]{for(uint64_t i=1;i<200;i+=2){IOLockLock(&jobsLock);recordFailed(&file,i);IOLockUnlock(&jobsLock);}});
  std::thread reader([]{for(unsigned i=0;i<400;i++) (void)native_powervr_fence_wait(&file,1,0);});
  writer.join();reader.join();assert(native_powervr_fence_wait(&file,1,0)==-EIO);
- freeFailedFences(&file);assert(liveAlloc==0);
  // A note published by FW during host sync is rechecked at the verdict/retire boundary.
  setup();injectDuringSync=true;assert(poll()==-ETIMEDOUT);worker();assert(poll()==-EIO);
  setup();injectDuringSync=true;worker();assert(released==0&&!list_empty(&file.jobs));worker();assert(poll()==-EIO);
@@ -189,21 +215,21 @@ int main(){
  // A concurrent worker and waiter arbitrate the same queued guilty notification.
  setup();publish();std::thread completion([]{worker();});
  int result=native_powervr_fence_wait(&file,1,1000000000);completion.join();assert(result==-EIO&&poll()==-EIO);
- freeFailedFences(&file);assert(liveAlloc==0);
+ assert(liveAlloc==0);
  // Real close function detaches and frees file-owned failure nodes; queued jobs are detached, not freed.
  auto *closing=static_cast<native_powervr_jobs_file*>(kzalloc(sizeof(native_powervr_jobs_file),GFP_KERNEL));
  assert(closing);INIT_LIST_HEAD(&closing->jobs);INIT_LIST_HEAD(&gJobs.files);list_add_tail(&closing->link,&gJobs.files);
  Job pending{};pending.file=closing;list_add_tail(&pending.file_link,&closing->jobs);
- recordFailed(closing,1);recordFailed(closing,2);assert(liveAlloc==3);
+ recordFailed(closing,1);recordFailed(closing,2);assert(liveAlloc==1&&closing->failedCount==1);
  native_powervr_jobs_file_destroy(closing);assert(pending.file==nullptr&&liveAlloc==0&&list_empty(&gJobs.files));
- puts("PASS actual FWCCB/WaitFence/close: 130 failures, OOM fail-closed, concurrent waits, cleanup, reset and timeout; ASan/UBSan");
+ puts("PASS actual FWCCB/WaitFence/close: compressed ranges, saturation fail-closed, concurrent waits, close, reset and timeout; ASan/UBSan");
 }
 '''
 # Guard the real ID-reuse integration and callback lock separation, not merely the model.
 create=fn('int create_job(')
 assert 'if (r.job == job->id) r.eligible = false' in create
 close=fn('extern "C" void native_powervr_jobs_file_destroy(')
-assert close.index('list_del(&file->link)') < close.index('freeFailedFences(file)') < close.index('kfree(file)')
+assert close.index('list_del(&file->link)') < close.index('kfree(file)')
 callback=fn('void process_fwccb_command(')
 assert 'IOLockLock(gJobs.lock)' not in callback
 wait=fn('extern "C" int native_powervr_fence_wait(')
