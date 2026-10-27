@@ -16,6 +16,8 @@ class IrqPcTest(unittest.TestCase):
 #include <stdint.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
 struct proc { int pid; };typedef struct proc *proc_t;
 static struct proc proc={1};static uint64_t test_uid=42;
 static uint64_t proc_uniqueid(proc_t p){(void)p;return test_uid;}
@@ -25,10 +27,19 @@ int proc_getpid(proc_t p){return p->pid;}
 int native_irq_pc_hook_compiled(void){return 1;}
 static uint64_t mach_absolute_time(void){return 123;}
 static void absolutetime_to_nanoseconds(uint64_t n,uint64_t *out){*out=n*2;}
-static int sink(const char *s,...){(void)s;return 0;}
+static uint64_t reported_stored;
+static int sink(const char *s,...){
+ if(strstr(s,"irq pc pid=")){
+  va_list ap;va_start(ap,s);(void)va_arg(ap,unsigned);(void)va_arg(ap,uint64_t);
+  (void)va_arg(ap,unsigned);(void)va_arg(ap,uint64_t);(void)va_arg(ap,uint64_t);
+  __atomic_fetch_add(&reported_stored,va_arg(ap,uint64_t),__ATOMIC_RELAXED);va_end(ap);
+ }
+ return 0;
+}
 #define printf sink
 ''' + body + r'''
 static void *worker(void *p){(void)p;for(unsigned i=0;i<16000;++i)native_irq_pc_sample(0x8001,0);return 0;}
+static void *reporter(void *p){(void)p;for(unsigned i=0;i<2000;++i)boot_home_irq_report();return 0;}
 int main(void){
  native_irq_pc_sample(0x8001,0);assert(home_irq_ticks==0);
  boot_home_irq_init(1);native_irq_pc_sample(0x8001,1);native_irq_pc_sample(0,0);
@@ -37,7 +48,7 @@ int main(void){
  pthread_t threads[4];for(unsigned i=0;i<4;++i)assert(!pthread_create(&threads[i],0,worker,0));
  for(unsigned i=0;i<4;++i)assert(!pthread_join(threads[i],0));
  assert(home_irq_ticks==64000 && home_irq_sampled==4000 && home_irq_overflow==0);
- unsigned used=0;for(unsigned i=0;i<64;++i)if(home_irq_slots[i].pc){++used;assert(home_irq_slots[i].pc==0x8000 && home_irq_slots[i].hits==4000);}
+ unsigned used=0;for(unsigned i=0;i<64;++i)if(home_irq_slots[i].pc){++used;assert(home_irq_slots[i].pc==0x8000 && home_irq_slots[i].hits+home_irq_contended==4000);}
  assert(used==1 && home_irq_uniqueid==42);
  test_uid=43;
  for(unsigned i=0;i<16;++i)native_irq_pc_sample(0x8001,0);
@@ -45,7 +56,23 @@ int main(void){
  test_uid=42;
  for(unsigned i=0;i<64;++i)for(unsigned j=0;j<16;++j)native_irq_pc_sample(0x10000+(uint64_t)i*256,0);
  assert(home_irq_sampled==4064 && home_irq_overflow==1);
- boot_home_irq_report();boot_home_irq_init(0);uint64_t old=home_irq_ticks;
+ boot_home_irq_report();assert(home_irq_epoch==1);
+ for(unsigned i=0;i<64;++i)assert(home_irq_slots[i].pc==0 && home_irq_slots[i].hits==0);
+ uint64_t busy=home_irq_contended;home_irq_table_lock=1;
+ for(unsigned i=0;i<16;++i)native_irq_pc_sample(0x33000,0);
+ assert(home_irq_contended==busy+1);boot_home_irq_report();assert(home_irq_epoch==1);
+ home_irq_table_lock=0;
+ for(unsigned i=0;i<16;++i)native_irq_pc_sample(0x33000,0);
+ unsigned recovered=0;for(unsigned i=0;i<64;++i)if(home_irq_slots[i].pc==0x33000)recovered++;
+ assert(recovered==1);boot_home_irq_report();assert(home_irq_epoch==2);
+ uint64_t before_samples=home_irq_sampled,before_busy=home_irq_contended,before_reported=reported_stored;
+ pthread_t reporter_thread;assert(!pthread_create(&reporter_thread,0,reporter,0));
+ for(unsigned i=0;i<4;++i)assert(!pthread_create(&threads[i],0,worker,0));
+ for(unsigned i=0;i<4;++i)assert(!pthread_join(threads[i],0));
+ assert(!pthread_join(reporter_thread,0));boot_home_irq_report();
+ assert(home_irq_sampled-before_samples==4000);
+ assert(reported_stored-before_reported+home_irq_contended-before_busy==4000);
+ boot_home_irq_init(0);uint64_t old=home_irq_ticks;
  native_irq_pc_sample(0x8000,0);assert(home_irq_ticks==old);
  return 0;
 }

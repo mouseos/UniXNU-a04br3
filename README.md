@@ -570,14 +570,18 @@ that hook, so zero samples are not mistaken for an idle task. A nonzero
 Every sixteenth target PID kernel-mode timer interrupt contributes the
 interrupted unslid PC rounded down to a 256-byte bucket. Fixed atomics, no
 allocation, no waiting, no stack walk and no UART output run in the interrupt.
-The existing process-monitor worker prints up to eight most frequent buckets,
-total target interrupts, sampled count and table overflow. The first sampled process unique ID is pinned; samples for a later process
-that reuses the PID increment `other` and do not enter the histogram. `ticks`
-includes all PID generations and `other` counts only rejected sampled ticks;
-therefore these counters are not the same population. The 64-slot table
-retains the first distinct buckets for the boot; later distinct buckets can be
-lost once it is full. In-progress writes can make a report nontransactional.
-Counts are cumulative and their sampling depends on timer scheduling and
+The existing process-monitor worker copies and clears the 64-slot table each
+interval, releases its try-lock, then prints up to eight most frequent buckets.
+IRQ samples that find the table busy are dropped and counted in `busy`; a full
+table increments `overflow`. Both counters are cumulative, while bucket hits
+and `stored` belong to the reported `epoch`. The first sampled process unique
+ID is pinned; samples for a later process reusing the PID increment `other`
+and do not enter the histogram. `ticks` includes all PID generations and
+`other` counts only rejected sampled ticks, so these do not share a population.
+Reports are not transactional across counters. This rotation permits new PC
+buckets in later intervals even if the previous table filled. The atomic
+exclusive instructions can retry and have no strict execution-time bound.
+Sampling depends on timer scheduling and
 interrupt masking, so they are not percentages of CPU time. Addresses are
 unslid: symbolize bucket ranges against the exact kernel Mach-O and do not
 assume every address in a 256-byte bucket belongs to one function. The feature
