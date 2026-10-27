@@ -82,7 +82,7 @@ constexpr uint32_t kKccbTimeoutMs = 1000;
 constexpr uint32_t kCacheLine = 64;                         // Cortex-A53 L1/L2 line
 constexpr uint32_t kHwrtReaders = 8;                        // reader queues remembered per HWRT data
 constexpr uint32_t kMaxUfosPerJob = 1 + kHwrtReaders;       // a geometry job waits for one writer and every reader
-constexpr uint32_t kFailedFences = 64;                      // failed fences remembered per file after retirement
+constexpr uint32_t kFailedFences = 64;                      // bounded late-reset attribution history
 constexpr uint32_t kResetNotes = 16;
 
 // A write-combined kernel mapping of physical memory.
@@ -207,6 +207,12 @@ struct RetiredFence {
 };
 }
 
+// File-owned failure records are accessed under gJobs.lock, then freed after file removal at close.
+struct FailedFence {
+  uint64_t fence;
+  FailedFence *next;
+};
+
 // The job part of struct pvr_file (native_powervr_jobs.h).
 struct native_powervr_jobs_file {
   pvr_file pf;
@@ -214,8 +220,8 @@ struct native_powervr_jobs_file {
   list_head link;    // gJobs.files
   list_head jobs;    // this file's queued jobs
   uint64_t nextFence;
-  uint64_t failed[kFailedFences];
-  uint32_t failedNext;
+  FailedFence *failed;
+  uint64_t failureUncertainThrough; // allocation failure: older retired fences fail closed
   RetiredFence retired[kFailedFences];
   uint32_t retiredNext;
 };
@@ -1483,17 +1489,38 @@ void run_job(Job *job, HwrtTrack *track)
   }
 }
 
+// Caller holds gJobs.lock. If allocation fails, conservatively report every retired fence up to this ID as failed;
+// in particular, a failed fence is never turned into success by memory pressure or by a bounded history eviction.
 void recordFailed(native_powervr_jobs_file *f, uint64_t fence)
 {
-  for (const auto saved : f->failed) if (saved == fence) return;
-  f->failed[f->failedNext % kFailedFences] = fence;
-  f->failedNext++;
+  if (fence <= f->failureUncertainThrough) return;
+  for (const FailedFence *p = f->failed; p; p = p->next)
+    if (p->fence == fence) return;
+  auto *p = static_cast<FailedFence *>(kzalloc(sizeof(FailedFence), GFP_KERNEL));
+  if (!p) {
+    f->failureUncertainThrough = fence;
+    return;
+  }
+  p->fence = fence;
+  p->next = f->failed;
+  f->failed = p;
 }
 bool wasFailed(const native_powervr_jobs_file *f, uint64_t fence)
 {
-  for (uint32_t i = 0; i < kFailedFences; i++)
-    if (f->failed[i] == fence) return true;
+  if (fence <= f->failureUncertainThrough) return true;
+  for (const FailedFence *p = f->failed; p; p = p->next)
+    if (p->fence == fence) return true;
   return false;
+}
+
+// The file has been removed from gJobs.files under gJobs.lock, and client teardown runs after external calls finish.
+void freeFailedFences(native_powervr_jobs_file *f)
+{
+  while (f->failed) {
+    FailedFence *p = f->failed;
+    f->failed = p->next;
+    kfree(p);
+  }
 }
 
 // The primary queue identifies a live context incarnation without retaining pointers in history.
@@ -1773,6 +1800,7 @@ extern "C" void native_powervr_jobs_file_destroy(struct native_powervr_jobs_file
   xa_destroy(&file->pf.free_list_handles);
   xa_destroy(&file->pf.hwrt_handles);
   xa_destroy(&file->pf.vm_ctx_handles);
+  freeFailedFences(file);
   kfree(file);
 }
 
