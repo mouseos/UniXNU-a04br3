@@ -36,6 +36,7 @@ extern kmod_info_t g_kernel_kmod_info;
 extern "C" {
 kern_return_t OSKextLoadKextWithIdentifier(const char *);
 void proc_selfname(char *, int);
+int proc_selfpid(void);
 kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
 void thread_deallocate(thread_t);
 // NativePowerVRGpu.cpp
@@ -198,7 +199,7 @@ extern "C" void native_powervr_metal_note_property_read(const char *key)
     // Unlocked counter: the discovery runs at process start; the first reads say which processes look for a Metal device.
     const uint32_t reads = native_powervr_metal_name_reads;
     native_powervr_metal_name_reads = reads + 1;
-    if (reads < 32) IOLog("powervr-metal: MetalPluginName read by %s\n", name);
+    if (reads < 32) IOLog("powervr-metal: MetalPluginName read by %s pid=%d\n", name, proc_selfpid());
   }
 }
 
