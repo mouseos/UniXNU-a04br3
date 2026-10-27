@@ -420,3 +420,54 @@ void boot_ipi_reason_report(void) {
  }
  printf("a04br3 ipi reason out_of_range_seen=%u\n",__atomic_load_n(&ipi_reason_out_of_range_seen,__ATOMIC_RELAXED));
 }
+
+// Optional AST call-site histogram. Caller supplies the current CPU with local
+// interrupts masked; each per-CPU row has one writer and bounded linear scan.
+#define AST_CALLER_CPUS 4u
+#define AST_CALLER_SLOTS 32u
+#define AST_CALLER_RATE 64u
+struct ast_caller_slot { uint64_t pc, count; };
+struct ast_caller_row { uint64_t seen, dropped; struct ast_caller_slot slots[AST_CALLER_SLOTS]; } __attribute__((aligned(64)));
+static struct ast_caller_row ast_caller_rows[AST_CALLER_CPUS];
+unsigned native_ast_caller_enabled;
+static unsigned ast_caller_bad_cpu;
+void boot_ast_caller_enable(unsigned enabled) { __atomic_store_n(&native_ast_caller_enabled, enabled == 1, __ATOMIC_RELAXED); }
+void native_ast_caller_sample(unsigned cpu, uint64_t pc) {
+ if (!__atomic_load_n(&native_ast_caller_enabled,__ATOMIC_RELAXED)) return;
+ if (cpu >= AST_CALLER_CPUS) { __atomic_store_n(&ast_caller_bad_cpu,1U,__ATOMIC_RELAXED); return; }
+ struct ast_caller_row *row=&ast_caller_rows[cpu];
+ uint64_t seen=__atomic_load_n(&row->seen,__ATOMIC_RELAXED);
+ __atomic_store_n(&row->seen,seen+1,__ATOMIC_RELAXED);
+ if (seen % AST_CALLER_RATE) return;
+ if (!pc) { uint64_t n=__atomic_load_n(&row->dropped,__ATOMIC_RELAXED);__atomic_store_n(&row->dropped,n+1,__ATOMIC_RELAXED);return; }
+ for (unsigned i=0;i<AST_CALLER_SLOTS;i++) {
+  uint64_t key=__atomic_load_n(&row->slots[i].pc,__ATOMIC_RELAXED);
+  if (!key) { __atomic_store_n(&row->slots[i].pc,pc,__ATOMIC_RELAXED); key=pc; }
+  if (key==pc) { uint64_t n=__atomic_load_n(&row->slots[i].count,__ATOMIC_RELAXED);__atomic_store_n(&row->slots[i].count,n+1,__ATOMIC_RELAXED);return; }
+ }
+ uint64_t n=__atomic_load_n(&row->dropped,__ATOMIC_RELAXED);__atomic_store_n(&row->dropped,n+1,__ATOMIC_RELAXED);
+}
+void boot_ast_caller_report(void) {
+ if (!__atomic_load_n(&native_ast_caller_enabled,__ATOMIC_RELAXED)) return;
+ unsigned observed=__atomic_load_n(&ast_caller_bad_cpu,__ATOMIC_RELAXED);
+ for (unsigned c=0;c<AST_CALLER_CPUS;c++) if (__atomic_load_n(&ast_caller_rows[c].seen,__ATOMIC_RELAXED)) observed=1;
+ if (!observed) { printf("a04br3 ast caller unavailable: hook not observed (not built or no calls yet)\n"); return; }
+ for (unsigned c=0;c<AST_CALLER_CPUS;c++) {
+  struct ast_caller_row *row=&ast_caller_rows[c];
+  printf("a04br3 ast caller cpu=%u seen=%llu dropped=%llu rate=%u (cumulative non-atomic)\n",c,
+   (unsigned long long)__atomic_load_n(&row->seen,__ATOMIC_RELAXED),(unsigned long long)__atomic_load_n(&row->dropped,__ATOMIC_RELAXED),AST_CALLER_RATE);
+  struct ast_caller_slot top[4]={0};
+  for (unsigned i=0;i<AST_CALLER_SLOTS;i++) {
+   uint64_t pc=__atomic_load_n(&row->slots[i].pc,__ATOMIC_RELAXED);
+   uint64_t n=__atomic_load_n(&row->slots[i].count,__ATOMIC_RELAXED);
+   if (!pc || !n) continue;
+   for (unsigned j=0;j<4;j++) if (n>top[j].count) {
+    for (unsigned k=3;k>j;k--) top[k]=top[k-1];
+    top[j].pc=pc;top[j].count=n;break;
+   }
+  }
+  for (unsigned i=0;i<4 && top[i].count;i++)
+   printf("a04br3 ast caller cpu=%u pc=%llx samples=%llu\n",c,(unsigned long long)top[i].pc,(unsigned long long)top[i].count);
+ }
+ printf("a04br3 ast caller bad_cpu=%u (cumulative)\n",__atomic_load_n(&ast_caller_bad_cpu,__ATOMIC_RELAXED));
+}
