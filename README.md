@@ -571,7 +571,8 @@ Every sixteenth target PID kernel-mode timer interrupt contributes the
 interrupted unslid PC rounded down to a 256-byte bucket. Fixed atomics, no
 allocation, no waiting, no stack walk and no UART output run in the interrupt.
 The existing process-monitor worker prints up to eight most frequent buckets,
-total target interrupts, sampled count and table overflow. The 64-slot table
+total target interrupts, sampled count and table overflow. The first sampled process unique ID is pinned; samples for a later process
+that reuses the PID increment `other` and do not enter the histogram. The 64-slot table
 retains the first distinct buckets for the boot; later distinct buckets can be
 lost once it is full. In-progress writes can make a report nontransactional.
 Counts are cumulative and their sampling depends on timer scheduling and

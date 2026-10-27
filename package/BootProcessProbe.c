@@ -298,7 +298,7 @@ void boot_home_perf_sample(void) {
 struct home_irq_slot { uint64_t pc, hits; };
 static struct home_irq_slot home_irq_slots[HOME_IRQ_SLOTS];
 static unsigned home_irq_pid;
-static uint64_t home_irq_ticks, home_irq_sampled, home_irq_overflow;
+static uint64_t home_irq_ticks, home_irq_sampled, home_irq_overflow, home_irq_uniqueid, home_irq_other_generation;
 int proc_getpid(proc_t);
 extern int native_irq_pc_hook_compiled(void) __attribute__((weak_import));
 unsigned boot_home_irq_hook_available(void) {
@@ -314,6 +314,13 @@ void native_irq_pc_sample(uint64_t pc,unsigned user) {
  if(!p || proc_getpid(p)!=(int)wanted)return;
  uint64_t tick=__atomic_fetch_add(&home_irq_ticks,1,__ATOMIC_RELAXED);
  if(tick%HOME_IRQ_RATE)return;
+ uint64_t uid=proc_uniqueid(p);
+ if(!uid){__atomic_fetch_add(&home_irq_other_generation,1,__ATOMIC_RELAXED);return;}
+ uint64_t expected=0;
+ __atomic_compare_exchange_n(&home_irq_uniqueid,&expected,uid,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE);
+ if(__atomic_load_n(&home_irq_uniqueid,__ATOMIC_ACQUIRE)!=uid){
+  __atomic_fetch_add(&home_irq_other_generation,1,__ATOMIC_RELAXED);return;
+ }
  __atomic_fetch_add(&home_irq_sampled,1,__ATOMIC_RELAXED);
  uint64_t bucket=pc&~255ULL;
  if(!bucket){__atomic_fetch_add(&home_irq_overflow,1,__ATOMIC_RELAXED);return;}
@@ -344,9 +351,9 @@ void boot_home_irq_report(void) {
   }
  }
  uint64_t at=0;absolutetime_to_nanoseconds(mach_absolute_time(),&at);
- printf("a04br3 irq pc pid=%u hook=%u at_ns=%llu ticks=%llu samples=%llu overflow=%llu shift=8 rate=%u\n",
-  pid,boot_home_irq_hook_available(),at,__atomic_load_n(&home_irq_ticks,__ATOMIC_RELAXED),__atomic_load_n(&home_irq_sampled,__ATOMIC_RELAXED),
-  __atomic_load_n(&home_irq_overflow,__ATOMIC_RELAXED),HOME_IRQ_RATE);
+ printf("a04br3 irq pc pid=%u uid=%llu hook=%u at_ns=%llu ticks=%llu samples=%llu overflow=%llu other=%llu shift=8 rate=%u\n",
+  pid,__atomic_load_n(&home_irq_uniqueid,__ATOMIC_ACQUIRE),boot_home_irq_hook_available(),at,__atomic_load_n(&home_irq_ticks,__ATOMIC_RELAXED),__atomic_load_n(&home_irq_sampled,__ATOMIC_RELAXED),
+  __atomic_load_n(&home_irq_overflow,__ATOMIC_RELAXED),__atomic_load_n(&home_irq_other_generation,__ATOMIC_RELAXED),HOME_IRQ_RATE);
  for(unsigned i=0;i<8 && top[i].hits;++i)
   printf("a04br3 irq pc bucket=%llx hits=%llu\n",top[i].pc,top[i].hits);
 }

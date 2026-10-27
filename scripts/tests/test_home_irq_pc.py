@@ -17,7 +17,8 @@ class IrqPcTest(unittest.TestCase):
 #include <pthread.h>
 #include <stdio.h>
 struct proc { int pid; };typedef struct proc *proc_t;
-static struct proc proc={1};
+static struct proc proc={1};static uint64_t test_uid=42;
+static uint64_t proc_uniqueid(proc_t p){(void)p;return test_uid;}
 static void *current_task(void){return &proc;}
 static void *get_bsdtask_info(void *p){return p;}
 int proc_getpid(proc_t p){return p->pid;}
@@ -37,7 +38,11 @@ int main(void){
  for(unsigned i=0;i<4;++i)assert(!pthread_join(threads[i],0));
  assert(home_irq_ticks==64000 && home_irq_sampled==4000 && home_irq_overflow==0);
  unsigned used=0;for(unsigned i=0;i<64;++i)if(home_irq_slots[i].pc){++used;assert(home_irq_slots[i].pc==0x8000 && home_irq_slots[i].hits==4000);}
- assert(used==1);
+ assert(used==1 && home_irq_uniqueid==42);
+ test_uid=43;
+ for(unsigned i=0;i<16;++i)native_irq_pc_sample(0x8001,0);
+ assert(home_irq_other_generation==1 && home_irq_sampled==4000);
+ test_uid=42;
  for(unsigned i=0;i<64;++i)for(unsigned j=0;j<16;++j)native_irq_pc_sample(0x10000+(uint64_t)i*256,0);
  assert(home_irq_sampled==4064 && home_irq_overflow==1);
  boot_home_irq_report();boot_home_irq_init(0);uint64_t old=home_irq_ticks;
