@@ -35,6 +35,8 @@ void a04br3_gpu_init(void);
 void boot_memory_snapshot(uint64_t out[7]);
 void boot_home_perf_sample(void);
 void boot_home_irq_init(unsigned);
+void boot_user_irq_init(unsigned, unsigned);
+void boot_user_irq_report(void);
 unsigned boot_home_irq_hook_available(void);
 void boot_home_irq_report(void);
 void boot_ipi_reason_enable(unsigned);
@@ -264,6 +266,7 @@ void procLogThread(void *, wait_result_t)
     boot_home_irq_report();
     boot_ipi_reason_report();
     boot_ast_caller_report();
+    boot_user_irq_report();
     native_powervr_submit_perf_report();
     msdcRootTimingReport(rootTiming);
     cacheReportSeconds += gProcLogSeconds;
@@ -300,6 +303,9 @@ extern "C" void unixnu_board_init(void)
   unsigned astCaller = 0;
   PE_parse_boot_argn("asc", &astCaller, sizeof(astCaller));
   boot_ast_caller_enable(astCaller);
+  unsigned userIrq = 0;
+  PE_parse_boot_argn("ucp", &userIrq, sizeof(userIrq));
+  boot_user_irq_init(irqPid, boot_home_irq_hook_available() ? userIrq : 0);
   unsigned gpuSubmitPerf = 0;
   // Existing diagnostic option avoids extending a near-capacity boot command line.
   // An explicit GPU setting takes precedence, including 0 to disable it.

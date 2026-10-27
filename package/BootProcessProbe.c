@@ -18,6 +18,7 @@
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
 #include "BootMemoryQueueSnapshot.h"
+#include "BootIrqCorrelation.h"
 
 // Nontransactional page counters, as in host_statistics64. Called only by
 // the board's explicitly enabled stack diagnostics, with no VM lock held.
@@ -193,6 +194,48 @@ void boot_process_snapshot(void) {
  __atomic_store_n(&publish_lock,0,__ATOMIC_RELEASE);
 }
 
+// Separate opt-in: same-thread user/kernel IRQ PC records. No upcb or
+// stack reads here: only the interrupt frame PC supplied by the timer hook.
+// Stack traces come only from the existing stopped-thread worker.
+int proc_getpid(proc_t);
+int proc_pidversion(proc_t);
+static struct uirq_state uirq;
+static unsigned uirq_pid;
+static uint64_t uirq_epoch, uirq_start, uirq_skipped;
+void boot_user_irq_init(unsigned pid, unsigned enabled) {
+ __atomic_store_n(&uirq_pid,enabled == 1 ? pid : 0,__ATOMIC_RELEASE);
+}
+void native_irq_correlation_sample(uint64_t pc, unsigned user) {
+ unsigned wanted=__atomic_load_n(&uirq_pid,__ATOMIC_ACQUIRE);
+ if(!wanted || !pc)return;
+ proc_t p=(proc_t)get_bsdtask_info(current_task());
+ if(!p || proc_getpid(p)!=(int)wanted)return;
+ if(!uirq_due(&uirq))return;
+ thread_t th=current_thread();
+ if(!th)return;
+ uirq_record(&uirq,proc_uniqueid(p),th->thread_id,pc,user ? 1u : 0u,
+             (unsigned)proc_pidversion(p));
+}
+void boot_user_irq_report(void) {
+ unsigned pid=__atomic_load_n(&uirq_pid,__ATOMIC_ACQUIRE);
+ if(!pid)return;
+ struct uirq_record rows[UIRQ_SLOTS];uint64_t full=0,end=0;
+ if(!uirq_take(&uirq,rows,&full,&end,mach_absolute_time)){++uirq_skipped;return;}
+ uint64_t start_ns=0,end_ns=0;
+ if(uirq_start)absolutetime_to_nanoseconds(uirq_start,&start_ns);
+ absolutetime_to_nanoseconds(end,&end_ns);uirq_start=end;
+ uint64_t epoch=++uirq_epoch;
+ printf("a04br3 uirq pid=%u uid=%llu epoch=%llu start_ns=%llu at_ns=%llu full=%llu skipped=%llu rate=%u shift=8\n",
+  pid,__atomic_load_n(&uirq.uid,__ATOMIC_ACQUIRE),epoch,start_ns,end_ns,full,uirq_skipped,UIRQ_RATE);
+ uirq_skipped=0;
+ printf("a04br3 uirq counts epoch=%llu ticks=%llu samples=%llu busy=%llu wrong_uid=%llu\n",epoch,
+  __atomic_load_n(&uirq.ticks,__ATOMIC_RELAXED),__atomic_load_n(&uirq.sampled,__ATOMIC_RELAXED),
+  __atomic_load_n(&uirq.busy,__ATOMIC_RELAXED),__atomic_load_n(&uirq.wrong_uid,__ATOMIC_RELAXED));
+ for(unsigned i=0;i<UIRQ_SLOTS;++i)if(rows[i].hits)
+  printf("a04br3 uirq row epoch=%llu tid=%llu version=%u user=%u pc=%llx hits=%llu\n",
+   epoch,rows[i].tid,rows[i].version,rows[i].user,rows[i].pc,rows[i].hits);
+}
+
 // Default-off sampler, invoked only by the existing heartbeat worker. No UI
 // stack walk or printing while task/scheduler locks are held.
 #if PRECISE_USER_KERNEL_TIME
@@ -209,6 +252,7 @@ struct home_perf_row {
  char name[24]; int pid; unsigned threads, running, waiting, busy, sampled, state, detail_count;
  uint64_t uniqueid, wait, cpu_ticks, cpu_at, resident, compressed, footprint;
  uint64_t user_ticks, system_ticks;
+ uint64_t map_at, image_addr; unsigned map_valid, map_version, cache_slide; unsigned char cache_uuid[16];
  struct home_perf_thread detail[HOME_PERF_THREADS];
 };
 // Capture saved kernel state only for a thread that is not runnable. A running
@@ -244,6 +288,17 @@ static int home_perf_capture(proc_t p, void *unused) {
  r->resident=get_task_resident_size(task);
  r->compressed=get_task_compressed(task);r->footprint=get_task_phys_footprint(task);
  if(!task_lock_try(task)){r->busy=1;return PROC_RETURNED;}
+ if (r->pid==1 && __atomic_load_n(&uirq_pid,__ATOMIC_ACQUIRE)==1) {
+  /* Telemetry caches these fields without a publication lock. Two reads detect
+   * some races, not an exec transition or an ABA update. Never access user memory. */
+  unsigned v1=(unsigned)proc_pidversion(p), s1=task->task_shared_region_slide;
+  unsigned char first[16]; memcpy(first,task->task_shared_region_uuid,sizeof(first));
+  r->image_addr=task->mach_header_vm_address;
+  memcpy(r->cache_uuid,task->task_shared_region_uuid,sizeof(r->cache_uuid));
+  unsigned s2=task->task_shared_region_slide, v2=(unsigned)proc_pidversion(p);
+  r->map_at=mach_absolute_time(); r->map_version=v2; r->cache_slide=s2;
+  r->map_valid=(s1==s2 && s2!=UINT32_MAX && v1==v2 && !memcmp(first,r->cache_uuid,sizeof(first)));
+ }
  r->threads=task->thread_count; thread_t th; unsigned scanned=0;
  queue_iterate(&task->threads,th,thread_t,task_threads){
   if(scanned++>=32)break;
@@ -276,6 +331,13 @@ void boot_home_perf_sample(void) {
   printf("a04br3 perf task p%d %.23s uid=%llu cpu_ns=%llu cpu_at_ns=%llu resident=%llu compressed=%llu footprint=%llu threads=%u run=%u wait=%u busy=%u sampled=%u state=%x event=%llx\n",
    r->pid,r->name,r->uniqueid,cpu,at,r->resident,r->compressed,r->footprint,r->threads,r->running,r->waiting,r->busy,r->sampled,r->state,r->wait);
   if(r->pid==1) {
+   if (__atomic_load_n(&uirq_pid,__ATOMIC_ACQUIRE)==1 && r->map_at) {
+    uint64_t map_ns=0; absolutetime_to_nanoseconds(r->map_at,&map_ns);
+    printf("a04br3 uirq mapping pid=%d uid=%llu version=%u at_ns=%llu stable=%u slide=%x image=%llx uuid=",
+      r->pid,r->uniqueid,r->map_version,map_ns,r->map_valid,r->cache_slide,r->image_addr);
+    for(unsigned k=0;k<16;k++) printf("%02x",r->cache_uuid[k]);
+    printf(" (telemetry cache, non-atomic)\n");
+   }
    printf("a04br3 perf launchd times split=%u user_ns=%llu system_ns=%llu\n",HOME_PERF_PRECISE,user,system);
    for(unsigned j=0;j<r->detail_count;++j){
     struct home_perf_thread *d=&r->detail[j];uint64_t tu=0,ts=0;
