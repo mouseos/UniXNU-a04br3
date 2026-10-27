@@ -16,6 +16,7 @@ IOLock *IOLockAlloc(){return new IOLock;}
 void IOLockLock(IOLock *p){p->lock();}
 bool IOLockTryLock(IOLock *p){return p->try_lock();}
 void IOLockUnlock(IOLock *p){p->unlock();}
+extern "C" int get_preemption_level(){return 0;}
 struct BoardIO {
  volatile uint8_t *base;std::map<unsigned,unsigned> r;
  BoardIO(volatile uint8_t *b):base(b){r[0x10000000]=0x10;r[0x10000024]=1U<<16;}

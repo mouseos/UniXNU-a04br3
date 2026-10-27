@@ -57,10 +57,11 @@ bool clockDiagnosticWait(volatile uint8_t *pwrap, unsigned fsm)
   // Like Input's pwWait: at most 1000 polls / 10 ms per FSM phase.
   for (unsigned n = 0; n < 1000; n++) {
     const uint32_t status = clockDiagnosticRead(pwrap, 0xa4);
-    if (!(status & (1U << 21))) return false;   // WACS2 INIT_DONE
+    if (!(status & (1U << 21))) { a04br3_wacs_poison(); return false; }   // WACS2 INIT_DONE
     if (((status >> 16) & 7) == fsm) return true;
     IODelay(10);
   }
+  a04br3_wacs_poison();
   return false;
 }
 const char *clockDiagnosticPmicRead(volatile uint8_t *pwrap, unsigned address, uint16_t *value)

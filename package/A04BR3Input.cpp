@@ -94,7 +94,16 @@ void iwr(unsigned o, uint16_t v) { *reinterpret_cast<volatile uint16_t *>(gI2c +
 uint16_t krd(unsigned o) { uint16_t v = *reinterpret_cast<volatile uint16_t *>(gKeypad + o); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
 void kwr(unsigned o, uint16_t v) { *reinterpret_cast<volatile uint16_t *>(gKeypad + o) = v; __asm__ volatile("dsb oshst" ::: "memory"); }
 
-int pwWait(unsigned fsm) { for (unsigned n = 0; n < 1000; n++) { if (((rd(gPwrap, 0xa4) >> 16) & 7) == fsm) return 0; IODelay(10); } return -1; }
+int pwWait(unsigned fsm) {
+  for (unsigned n = 0; n < 1000; n++) {
+    const uint32_t status = rd(gPwrap, 0xa4);
+    if (!(status & (1U << 21))) { a04br3_wacs_poison(); return -1; }
+    if (((status >> 16) & 7) == fsm) return 0;
+    IODelay(10);
+  }
+  a04br3_wacs_poison();
+  return -1;
+}
 int pwRead(unsigned addr, uint16_t *value)
 {
   if (pwWait(0)) return -1;

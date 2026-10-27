@@ -274,7 +274,8 @@ void cpuRailReport()
     if (guard) {
       CpuRailIO io = {base};
       result = a04br3rail::capture(io, s);
-      if (result == a04br3rail::timeout_after_command) a04br3_wacs_poison();
+      if (result == a04br3rail::timeout_before_command || result == a04br3rail::timeout_after_command ||
+          result == a04br3rail::unavailable) a04br3_wacs_poison();
       reason = "capture";
     }
   }

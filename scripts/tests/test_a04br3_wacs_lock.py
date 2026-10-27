@@ -13,6 +13,8 @@ code = r'''
 #include <vector>
 #include "A04BR3RegisterLock.cpp"
 int allocations;
+thread_local int preempt_level;
+extern "C" int get_preemption_level(){return preempt_level;}
 IOLock *IOLockAlloc(){ ++allocations; return new IOLock; }
 void IOLockLock(IOLock *p){p->lock();}
 bool IOLockTryLock(IOLock *p){return p->try_lock();}
@@ -23,6 +25,7 @@ int main(){
  a04br3_registers_init(); assert(allocations == 2);
  irq_context=true; assert(!a04br3_wacs_lock() && !a04br3_wacs_try_lock()); irq_context=false;
  irq_enabled=false; assert(!a04br3_wacs_lock() && !a04br3_wacs_try_lock()); irq_enabled=true;
+ preempt_level=1; assert(!a04br3_wacs_lock() && !a04br3_wacs_try_lock()); preempt_level=0;
  assert(a04br3_wacs_lock());
  std::atomic<bool> denied{false};
  std::thread other([&]{ A04BR3WacsGuard g(true); denied = !bool(g); });

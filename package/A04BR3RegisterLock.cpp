@@ -4,6 +4,7 @@
 #include <IOKit/IOLib.h>
 #include <machine/machine_routines.h>
 #include "A04BR3RegisterLock.h"
+extern "C" int get_preemption_level(void);
 static IOLock *infraLock;
 static IOLock *wacsLock;
 static bool wacsPoisoned;
@@ -12,13 +13,13 @@ extern "C" void a04br3_registers_init(void) {
   wacsLock = IOLockAlloc();
 }
 extern "C" bool a04br3_wacs_lock(void) {
-  if (!wacsLock || ml_at_interrupt_context() || !ml_get_interrupts_enabled()) return false;
+  if (!wacsLock || ml_at_interrupt_context() || !ml_get_interrupts_enabled() || get_preemption_level() != 0) return false;
   IOLockLock(wacsLock);
   if (wacsPoisoned) { IOLockUnlock(wacsLock); return false; }
   return true;
 }
 extern "C" bool a04br3_wacs_try_lock(void) {
-  if (!wacsLock || ml_at_interrupt_context() || !ml_get_interrupts_enabled() || !IOLockTryLock(wacsLock)) return false;
+  if (!wacsLock || ml_at_interrupt_context() || !ml_get_interrupts_enabled() || get_preemption_level() != 0 || !IOLockTryLock(wacsLock)) return false;
   if (wacsPoisoned) { IOLockUnlock(wacsLock); return false; }
   return true;
 }

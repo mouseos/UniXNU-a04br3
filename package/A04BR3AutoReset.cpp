@@ -108,7 +108,7 @@ bool wacs(bool write, uint32_t address, uint32_t data, uint32_t *out)
 {
   for (unsigned spin = 0;; spin++) {
     const uint32_t status = rd(gPwrap, kWacsRdata);
-    if ((status & (1U << 21)) == 0 || spin > 1000000) { return false; }  // INIT_DONE
+    if ((status & (1U << 21)) == 0 || spin > 1000000) { a04br3_wacs_poison(); return false; }  // INIT_DONE
     const uint32_t fsm = (status >> 16) & 7;
     if (fsm == 0) { break; }
     if (fsm == 6) { wr(gPwrap, kWacsVldclr, 1); }
@@ -117,7 +117,7 @@ bool wacs(bool write, uint32_t address, uint32_t data, uint32_t *out)
   if (write) { return true; }
   for (unsigned spin = 0;; spin++) {
     const uint32_t status = rd(gPwrap, kWacsRdata);
-    if (spin > 1000000) { return false; }
+    if ((status & (1U << 21)) == 0 || spin > 1000000) { a04br3_wacs_poison(); return false; }
     if (((status >> 16) & 7) == 6) {
       *out = status & 0xffff;
       wr(gPwrap, kWacsVldclr, 1);

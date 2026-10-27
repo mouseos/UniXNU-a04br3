@@ -56,6 +56,15 @@ static unsigned fixtures;
 static alignas(8) uint8_t top[4096],pll[4096],pwrap[4096],other[4096],core[65536];
 static unsigned requested=380,maps,reads,writes,pmicReads,powerCalls,fwCalls,phase;
 static bool present=true,pllMap=true,pwrapMap=true,init=true,failPmic=false,muxMismatch=false;
+static bool lockAvailable=true,lockHeld=false,poisoned=false;
+static unsigned stallPhase;
+struct A04BR3WacsGuard {
+ bool held;
+ A04BR3WacsGuard():held(lockAvailable&&!poisoned){if(held){assert(!lockHeld);lockHeld=true;}}
+ ~A04BR3WacsGuard(){if(held){assert(lockHeld);lockHeld=false;}}
+ explicit operator bool() const{return held;}
+};
+static void a04br3_wacs_poison(){assert(lockHeld);poisoned=true;}
 static unsigned unstableOffset,unstableSeen,requestSnapshot;
 static uint32_t con0=0x11,con1=0x020e9d8a,power=5;
 static uint16_t rail[4]={2,0x3001,0x4e,0x4e},reply;
@@ -68,7 +77,7 @@ static bool PE_parse_boot_argn(const char *n,void *v,int size){assert(size==size
 static void IOLog(const char *fmt,...){char t[1024];va_list a;va_start(a,fmt);vsnprintf(t,sizeof t,fmt,a);va_end(a);logs+=t;}
 static void IODelay(unsigned us){assert(us==10);}
 static vm_offset_t ml_io_map(vm_offset_t a,vm_size_t size){++maps;assert(size==4096||size==65536);if(a==0x10018000)return pllMap?(uintptr_t)pll:0;if(a==0x1000f000)return pwrapMap?(uintptr_t)pwrap:0;if(a==0x10000000)return (uintptr_t)top;if(a==0x13000000)return (uintptr_t)core;return (uintptr_t)other;}
-static uint32_t clockDiagnosticRead(volatile uint8_t *base,unsigned off){++reads;if(base==top){assert(off==0||off==4);return 0;}if(base==pll){uint32_t v=off==0x160?con0:off==0x164?con1:power;assert(off==0x160||off==0x164||off==0x170);if(off==unstableOffset&&++unstableSeen==2)v^=1;return v;}assert(base==pwrap);if(off==0x98||off==0x9c)return init?1:0;assert(off==0xa4);return (1u<<21)|((phase==1?6u:0u)<<16)|reply;}
+static uint32_t clockDiagnosticRead(volatile uint8_t *base,unsigned off){++reads;if(base==top){assert(off==0||off==4);return 0;}if(base==pll){uint32_t v=off==0x160?con0:off==0x164?con1:power;assert(off==0x160||off==0x164||off==0x170);if(off==unstableOffset&&++unstableSeen==2)v^=1;return v;}assert(base==pwrap&&lockHeld);if(off==0x98||off==0x9c)return init?1:0;assert(off==0xa4);return (1u<<21)|(((stallPhase==phase+1?1u:(phase==1?6u:0u)))<<16)|reply;}
 static void clockDiagnosticWrite(volatile uint8_t *base,unsigned off,uint32_t v){assert(base==pwrap);++writes;if(off==0xa0){assert(!(v&0x8000ffffu));assert(!failPmic);unsigned addr=(v>>16)*2;unsigned i=addr==0x30a?0:addr==0x30e?1:addr==0x312?2:3;assert(addr==0x30a||addr==0x30e||addr==0x312||addr==0x314);reply=rail[i];phase=1;++pmicReads;}else{assert(off==0xa8&&v==1);phase=2;}}
 '''
 # Use real waits and PMIC reader, changing only the injected failure result through a wrapper.
@@ -91,7 +100,7 @@ h+=next(x.strip() for x in fw.splitlines() if 'sys->initial_core_clock_speed = c
 h+='assert(rt->core_clock_speed==a04br3_gpu_core_hz && sys->initial_core_clock_speed==a04br3_gpu_core_hz);}\n'
 h+=definition(gpu,'void a04br3_gpu_init(void)\n{').replace('__asm__ volatile("dmb oshld" ::: "memory");','/* host-only load barrier omission */')+'\n'
 h+=r'''
-static void reset(){requested=380;present=pllMap=pwrapMap=init=true;failPmic=muxMismatch=false;maps=reads=writes=pmicReads=powerCalls=fwCalls=phase=unstableOffset=unstableSeen=requestSnapshot=0;con0=0x11;con1=0x020e9d8a;power=5;rail[0]=2;rail[1]=0x3001;rail[2]=rail[3]=0x4e;logs.clear();state=fresh();a04br3_gpu_core_hz=26000000;}
+static void reset(){requested=380;present=pllMap=pwrapMap=init=lockAvailable=true;failPmic=muxMismatch=lockHeld=poisoned=false;maps=reads=writes=pmicReads=powerCalls=fwCalls=phase=unstableOffset=unstableSeen=requestSnapshot=stallPhase=0;con0=0x11;con1=0x020e9d8a;power=5;rail[0]=2;rail[1]=0x3001;rail[2]=rail[3]=0x4e;logs.clear();state=fresh();a04br3_gpu_core_hz=26000000;}
 int main(){
  // Independent oracle for the Linux two-roundup formula, across all divisors.
  linux_data data{21};mtk_clk_pll linuxPll{&data};
@@ -112,6 +121,8 @@ int main(){
  for(unsigned request:{0u,26u,379u,381u}){reset();requested=request;uint32_t hz=26000000;assert(selectClockParent(&hz)==4&&hz==26000000&&!maps&&!reads&&!writes);++fixtures;}
  reset();present=false;uint32_t hz=26000000;assert(selectClockParent(&hz)==4&&!maps&&!reads&&!writes);++fixtures;
  reset();hz=26000000;assert(selectClockParent(&hz)==7&&hz==380000062&&writes==8&&pmicReads==4);++fixtures;
+ reset();lockAvailable=false;hz=26000000;assert(selectClockParent(&hz)==4&&hz==26000000&&!reads&&!writes&&!lockHeld);++fixtures;
+ for(unsigned phaseToStall:{1u,2u,3u}){reset();stallPhase=phaseToStall;hz=26000000;assert(selectClockParent(&hz)==4&&hz==26000000&&poisoned&&!lockHeld);++fixtures;}
  for(unsigned reason=0;reason<11;reason++){reset();if(reason==0)pllMap=false;if(reason==1)pwrapMap=false;if(reason==2)init=false;if(reason==3)failPmic=true;if(reason==4)con0=0x10;if(reason==5)power=7;if(reason==6)rail[1]=1;if(reason==7)rail[3]=0x47;if(reason==8)unstableOffset=0x160;if(reason==9)unstableOffset=0x164;if(reason==10)unstableOffset=0x170;hz=26000000;assert(selectClockParent(&hz)==4&&hz==26000000);++fixtures;}
  // Actual init publishes the frequency only after successful mux readback; then both FW fields see it.
  *(uint32_t*)(core+0x20)=0x0036001e;*(uint32_t*)(core+0x24)=0x00160028;
