@@ -218,9 +218,10 @@ void touchThread(void *, wait_result_t)
         if (perf == 1 && perfEdges < 32) before = mach_absolute_time();
         publish(false, lastx, lasty); down = false;
         if (perf == 1 && perfEdges < 32) {
+          const uint64_t after = mach_absolute_time();
           uint64_t startNs = 0, elapsedNs = 0;
           absolutetime_to_nanoseconds(before, &startNs);
-          absolutetime_to_nanoseconds(mach_absolute_time() - before, &elapsedNs);
+          absolutetime_to_nanoseconds(after - before, &elapsedNs);
           IOLog("a04br3 perf input edge=0 error=%d seq=%u start_ns=%llu publish_ns=%llu reports=%u\n",
                 e, native_touch_seq, startNs, elapsedNs, native_touch_hid_reports);
           ++perfEdges;
