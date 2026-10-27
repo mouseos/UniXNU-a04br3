@@ -113,6 +113,7 @@ static int thread_lck_grp, interrupted, task_acquires, task_releases, sched_acqu
 static unsigned strlcpy(char *d,const char *s,unsigned n) {snprintf(d,n,"%s",s);return strlen(s);}
 static const char *proc_best_name(proc_t p){return p->name;}
 static int proc_pid(proc_t p){return p->pid;}
+static uint64_t proc_uniqueid(proc_t p){return 1000u+(unsigned)p->pid;}
 static task_t proc_task(proc_t p){return p->task;}
 static uint64_t get_task_cpu_time(task_t t){(void)t;return 17;}
 static uint64_t get_task_resident_size(task_t t){(void)t;return 21;}
@@ -144,9 +145,11 @@ int main(void){
  assert(home_perf_rows[0].pid==25 && home_perf_rows[0].threads==40);
  assert(home_perf_rows[0].busy==1 && home_perf_rows[0].running==1 && home_perf_rows[0].waiting==30);
  assert(home_perf_rows[0].sampled==1 && home_perf_rows[0].wait==101 && !interrupted);
- assert(strstr(output,"p25 SpringBoard cpu_ns=34 cpu_at_ns=200"));
- assert(strstr(output,"p56 backboardd cpu_ns=34 cpu_at_ns=202"));
+ assert(strstr(output,"p25 SpringBoard uid=1025 cpu_ns=34 cpu_at_ns=200"));
+ assert(strstr(output,"p56 backboardd uid=1056 cpu_ns=34 cpu_at_ns=202"));
  assert(task_acquires==task_releases && sched_acquires==sched_releases);
+ struct proc changed={"unselected_worker",25,&task};unsigned saved=home_perf_count;
+ assert(home_perf_capture(&changed,NULL)==PROC_RETURNED && home_perf_count==saved);
  task.locked=1;boot_home_perf_sample();assert(home_perf_rows[0].busy==1 && !home_perf_rows[0].sampled);
  task.locked=0;for(unsigned i=0;i<16;++i)procs[i]=(struct proc){"logd",(int)i+1,&task};
  boot_home_perf_sample();assert(home_perf_count==10);

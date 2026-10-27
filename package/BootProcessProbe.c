@@ -49,6 +49,7 @@ void boot_memory_queue_snapshot(struct boot_memory_queue_record *out) {
 struct proc;typedef struct proc *proc_t;
 char *proc_best_name(proc_t);
 int proc_pid(proc_t);
+uint64_t proc_uniqueid(proc_t);
 task_t proc_task(proc_t);
 void proc_iterate(unsigned,int (*)(proc_t,void *),void *,int (*)(proc_t,void *),void *);
 #define PROC_RETURNED 0
@@ -195,7 +196,7 @@ void boot_process_snapshot(void) {
 // stack walk or printing while task/scheduler locks are held.
 struct home_perf_row {
  char name[24]; int pid; unsigned threads, running, waiting, busy, sampled, state;
- uint64_t wait, cpu_ticks, cpu_at, resident, compressed, footprint;
+ uint64_t uniqueid, wait, cpu_ticks, cpu_at, resident, compressed, footprint;
 };
 static struct home_perf_row home_perf_rows[10];
 static unsigned home_perf_count;
@@ -207,9 +208,9 @@ static int home_perf_selected(proc_t p, void *unused) {
 }
 static int home_perf_capture(proc_t p, void *unused) {
  (void)unused;
- if(home_perf_count>=10)return PROC_RETURNED;
+ if(home_perf_count>=10 || !home_perf_selected(p,NULL))return PROC_RETURNED;
  struct home_perf_row *r=&home_perf_rows[home_perf_count++];
- memset(r,0,sizeof(*r));strlcpy(r->name,proc_best_name(p),sizeof(r->name));r->pid=proc_pid(p);
+ memset(r,0,sizeof(*r));strlcpy(r->name,proc_best_name(p),sizeof(r->name));r->pid=proc_pid(p);r->uniqueid=proc_uniqueid(p);
  task_t task=proc_task(p);if(!task){r->busy=1;return PROC_RETURNED;}
  r->cpu_ticks=get_task_cpu_time(task);r->cpu_at=mach_absolute_time();r->resident=get_task_resident_size(task);
  r->compressed=get_task_compressed(task);r->footprint=get_task_phys_footprint(task);
@@ -233,7 +234,7 @@ void boot_home_perf_sample(void) {
  for(unsigned i=0;i<home_perf_count;++i){
   struct home_perf_row *r=&home_perf_rows[i];uint64_t cpu=0, at=0;
   absolutetime_to_nanoseconds(r->cpu_ticks,&cpu);absolutetime_to_nanoseconds(r->cpu_at,&at);
-  printf("a04br3 perf task p%d %.23s cpu_ns=%llu cpu_at_ns=%llu resident=%llu compressed=%llu footprint=%llu threads=%u run=%u wait=%u busy=%u sampled=%u state=%x event=%llx\n",
-   r->pid,r->name,cpu,at,r->resident,r->compressed,r->footprint,r->threads,r->running,r->waiting,r->busy,r->sampled,r->state,r->wait);
+  printf("a04br3 perf task p%d %.23s uid=%llu cpu_ns=%llu cpu_at_ns=%llu resident=%llu compressed=%llu footprint=%llu threads=%u run=%u wait=%u busy=%u sampled=%u state=%x event=%llx\n",
+   r->pid,r->name,r->uniqueid,cpu,at,r->resident,r->compressed,r->footprint,r->threads,r->running,r->waiting,r->busy,r->sampled,r->state,r->wait);
  }
 }

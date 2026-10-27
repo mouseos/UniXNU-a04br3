@@ -502,7 +502,8 @@ interval where UART traffic itself would affect observation. Global VM pages
 are approximate independent reads; task resident, compressed, and footprint
 are separate ledger quantities, not additive totals. The per-task `cpu_at_ns` timestamp and CPU counter are nanoseconds since boot
 and cumulative CPU time respectively;
-compare matching pid and process name across samples (pid reuse is possible).
+compare matching pid, name and `uid` across samples; CPU reset or exec still
+requires discarding that interval.
 The task ledger is charged on scheduling and is not a wall clock. Rates can
 exceed 100% on SMP. At most ten named tasks and 32 threads per task are
 sampled; `busy` marks failed try-locks, `sampled=0` means no wait state, and
