@@ -229,7 +229,10 @@ extern "C" void unixnu_board_init(void)
   }
   boot_home_irq_init(irqPid);
   unsigned gpuSubmitPerf = 0;
-  PE_parse_boot_argn("a04br3-gpu-submit-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf));
+  // Existing diagnostic option avoids extending a near-capacity boot command line.
+  // An explicit GPU setting takes precedence, including 0 to disable it.
+  if (!PE_parse_boot_argn("a04br3-gpu-submit-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf)))
+    PE_parse_boot_argn("a04br3-home-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf));
   native_powervr_submit_perf_enable(gpuSubmitPerf);
   a04br3_proclog_init();
   a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)
