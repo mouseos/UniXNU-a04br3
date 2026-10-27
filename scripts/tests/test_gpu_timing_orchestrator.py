@@ -8,6 +8,11 @@ import tempfile
 import struct
 import zlib
 import unittest
+from unittest import mock
+import os
+import sys
+import contextlib
+import io
 
 ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('timing',ROOT/'scripts/run-a04br3-gpu-timing.py')
@@ -16,6 +21,7 @@ m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 def boot(clock=26):
     return ('''A04BR3 SEC: RTC fastboot verified
 Darwin Kernel Version 23.6
+a04br3-autoreset: fastboot flag set
 '''+f'a04br3 gpu clock: active parent {4 if clock==26 else 7} core {26000000 if clock==26 else 380000062} Hz\n'+'''powervrprobed: start: pid 2 uid 0
 powervrprobed: vk buffer-rows: rows=1280 width=3152 srcPitch=3328 dstPitch=3200 prefix=4096
 powervrprobed: vk buffer-rows allocation 0 requested=4268032 actual=4268032
@@ -48,8 +54,11 @@ class Fake:
     def __init__(self,a,mutation=lambda b:b):self.a=a;self.time=0;self.present=True;self.exit_code=None;self.sequence=[];self.resets=0;self.mutation=mutation
     def now(self):return self.time
     def sleep(self,n):self.time+=n
+    def check_collector(self):pass
     def fastboot(self):return self.present
-    def reset(self,folder):self.resets+=1;self.present=True;self.exit_code=0
+    def reset(self,folder):
+        self.resets+=1;self.present=True;self.exit_code=0
+        with self.a.uart_log.open('ab') as f:f.write(b'\nBOOT_REASON: 2\n')
     def start(self,image,folder,limit):
         clock=int(image.stem);self.sequence.append(clock);self.present=False;self.exit_code=None
         with self.a.uart_log.open('ab') as f:f.write(self.mutation(boot(clock)))
@@ -79,11 +88,46 @@ class Tests(unittest.TestCase):
             data=json.loads(args.payload380.read_text());data['payload_sha256']='wrong';args.payload380.write_text(json.dumps(data))
             with self.assertRaises(ValueError):m.validate_inputs(args)
 
+    def test_live_collector_writer_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'collector'
+            with path.open('a'):
+                t=m.Transport(SimpleNamespace(collector_pid=os.getpid(),uart_log=path))
+                t.check_collector()
+            with self.assertRaises(RuntimeError):t.check_collector()
+
+    def test_transport_and_offline_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            r=Path(directory);log=r/'collector';log.write_bytes(b'old')
+            a=SimpleNamespace(serial='only-this-device',uart='/dev/fixture',uart_log=log)
+            t=m.Transport(a)
+            with mock.patch.dict(os.environ,{'UART':'bad-reader','USERDATA':'never-flash','NEXT_IMAGE_CMD':'never-run'}), \
+                 mock.patch.object(m.subprocess,'Popen') as popen:
+                t.start(r/'26.img',r,123)
+                argv=popen.call_args.args[0];options=popen.call_args.kwargs
+                self.assertEqual(argv[1],str(m.ROOT/'scripts/run-a04br3-unattended.sh'))
+                self.assertEqual(options['env']['MODE'],'flash');self.assertEqual(options['env']['ROUNDS'],'1')
+                self.assertFalse({'UART','USERDATA','NEXT_IMAGE_CMD'} & options['env'].keys())
+                self.assertTrue(options['start_new_session'])
+            argv=['fixture','--boot26','x','--boot380','y','--payload26','a','--payload380','b',
+                  '--uart-log',str(log),'--out',str(r/'plan'),'--serial','only-this-device']
+            with mock.patch.object(sys,'argv',argv),mock.patch.object(m,'validate_inputs',return_value={}), \
+                 mock.patch.object(m,'Transport',side_effect=RuntimeError('must not execute')),contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(m.main(),0)
+            self.assertFalse(json.loads((r/'plan/plan.json').read_text())['execute'])
+
     def test_parser(self):
         for c in (26,380):self.assertEqual(m.analyze(boot(c),c)['state'],'pass')
         for token in ('CP5 e200 r1','CE p5 q1 b2 t3','CX x169 e2'):
             self.assertEqual(m.analyze(boot().replace((token+'\n').encode(),b''),26)['state'],'pending')
-        failures=[boot()+b'Darwin Kernel Version next\n',boot()+b'A04BR3 SEC: next\n',boot()+b'panic(cpu0)\n',boot()+b'panic(cpu0)',
+        failures=[
+                  boot().replace(b'A04BR3 SEC:',b'A04BR3 SEC: previous\nA04BR3 SEC:',1),
+                  boot().replace(b'Darwin Kernel Version',b'BOOT_REASON: 2\nDarwin Kernel Version',1),
+                  boot().replace(b'Darwin Kernel Version',b'Preloader Start\nDarwin Kernel Version',1),
+                  b'Synchronous Exception at 0x123\n'+boot(),b'ASSERT [ArmCpuDxe] failure\n'+boot(),
+                  boot()+b'powervr-metal[backboardd]: PF 2/1 r3 v1/0 t2 a2\n',
+                  boot().replace(b'PF 1/0 r0 v1/0',b'PF 1/0 r0 v0/0'),
+                  boot()+b'Darwin Kernel Version next\n',boot()+b'A04BR3 SEC: next\n',boot()+b'panic(cpu0)\n',boot()+b'panic(cpu0)',
                   boot()+b'powervr: HWR counter 1\n',boot()+b'powervr: context reset 4\n',
                   boot().replace(b'77 passed, 0 failed',b'76 passed, 1 failed'),
                   boot().replace(b'checked=69632 mismatches=0',b'checked=69632 mismatches=1'),
@@ -112,12 +156,55 @@ class Tests(unittest.TestCase):
         previous=len(boot())
         for item in result['rounds']:
             self.assertEqual(item['epoch']['start_offset'],previous);self.assertGreater(item['epoch']['end_offset'],previous)
-            previous=item['epoch']['end_offset'];self.assertEqual(item['state'],'pass')
+            previous=item['epoch']['recovery_end_offset'];self.assertEqual(item['state'],'pass')
+            self.assertEqual(item['recovery_boot_reasons'],['2'])
 
     def test_missing_measurement_never_passes_despite_recovery(self):
         status,result,io,a=self.run_case(lambda b:b.replace(b'CX x169 e2\n',b''))
         self.assertEqual(status,2);self.assertFalse(result['success']);self.assertEqual(len(result['rounds']),1)
         self.assertIn('timeout',result['rounds'][0]['error']);self.assertEqual(io.resets,1)
+
+    def test_uart_rotation_stops_schedule(self):
+        class Rotating(Fake):
+            def start(self,image,folder,limit):
+                self.a.uart_log.rename(self.a.uart_log.with_suffix('.old'))
+                self.a.uart_log.write_bytes(b'')
+                return super().start(image,folder,limit)
+        directory=tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup);r=Path(directory.name)
+        log=r/'collector';log.write_bytes(b'old')
+        image=r/'26';image.write_bytes(b'image');out=r/'out';out.mkdir()
+        a=SimpleNamespace(out=out,uart_log=log,boot26=image,boot380=image,measurement_timeout=10,
+                          recovery_timeout=5,settle=0,post_success=1,environment_json=None)
+        inputs={'26':{'boot_sha256':m.sha(image)}}
+        self.assertEqual(m.campaign(a,inputs,Rotating(a)),2)
+        result=json.loads((out/'campaign.json').read_text())
+        self.assertIn('rotated',result['rounds'][0]['error'])
+
+    def test_transient_listing_and_transport_error(self):
+        directory=tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup);root=Path(directory.name)
+        log=root/'collector';log.write_bytes(boot())
+        folder=root/'round';folder.mkdir()
+        m.save(folder/'result.json',{'epoch':{'identity':[log.stat().st_dev,log.stat().st_ino],'start_offset':0}})
+        a=SimpleNamespace(uart_log=log,recovery_timeout=10)
+        class Transient(Fake):
+            def __init__(self,a):super().__init__(a);self.checks=0
+            def fastboot(self):
+                self.checks+=1
+                return self.checks==1 or self.present
+        io=Transient(a);io.present=False;io.exit_code=None
+        m.recover(io,a,folder,Process(io));self.assertEqual(io.resets,1)
+        io.exit_code=2
+        with self.assertRaises(RuntimeError):m.recover(io,a,folder,Process(io))
+
+    def test_dead_collector_preflight_has_no_device_effect(self):
+        directory=tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup);r=Path(directory.name)
+        log=r/'collector';log.write_bytes(boot());out=r/'out';out.mkdir()
+        a=SimpleNamespace(out=out,uart_log=log,recovery_timeout=5)
+        class Dead(Fake):
+            def check_collector(self):raise RuntimeError('dead collector')
+        io=Dead(a);io.present=False
+        self.assertEqual(m.campaign(a,{},io),2)
+        self.assertEqual(io.resets,0);self.assertFalse(io.sequence)
 
     def test_panic_stops_schedule(self):
         status,result,io,a=self.run_case(lambda b:b+b'panic(cpu0)\n')

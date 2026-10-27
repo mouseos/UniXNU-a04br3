@@ -56,7 +56,11 @@ def analyze(raw,clock):
     boots=list(re.finditer(r'Darwin Kernel Version ',text))
     if len(boots)>1:return {'state':'fail','reason':'multiple XNU boots in measurement epoch'}
     if not boots:return {'state':'pending','reason':'waiting for XNU boot marker'}
-    if 'A04BR3 SEC:' not in text[:boots[0].start()]:return {'state':'fail','reason':'no fresh firmware marker before XNU'}
+    prefix=text[:boots[0].start()]
+    if prefix.count('A04BR3 SEC:')!=1:return {'state':'fail','reason':'expected exactly one fresh firmware epoch before XNU'}
+    after_sec=prefix[prefix.index('A04BR3 SEC:'):]
+    if re.search(r'Preloader Start|BOOT_REASON:',after_sec) or re.search(r'Synchronous Exception at|ASSERT \[|panic\(',prefix,re.I):
+        return {'state':'fail','reason':'firmware fault/reboot before XNU'}
     text=text[boots[0].start():]
     if re.search(r'A04BR3 SEC:|Preloader Start|BOOT_REASON:',text):return {'state':'fail','reason':'reboot boundary before complete measurement'}
     fault=re.search(r'panic\(|Panicked|Kernel panic|Synchronous Exception at|context reset\s+[1-9]|HWR counter [1-9]|\bfaults [1-9]|MMU fault|powervr[^\n]*\bFAULT\b',text,re.I)
@@ -93,6 +97,7 @@ def analyze(raw,clock):
     # Require one actual backboardd instance and one ordered copy-report block.
     images=re.findall(r'powervr-metal\[backboardd\]: IM main=',text)
     if len(images)>1:return {'state':'fail','reason':'backboardd restarted in epoch'}
+    if not images:return {'state':'pending','reason':'waiting for backboardd process identity'}
     messages=re.findall(r'powervr-metal\[backboardd\]: ([^\n]+)',text)
     block={};complete=None
     patterns=[('CG',r'CG w800 h1280 a16 r2'),('CS',r'CS s3328 d3200'),
@@ -106,8 +111,12 @@ def analyze(raw,clock):
                 block[key]=[int(v) for v in match.groups()]
                 if key=='CX':complete=dict(block)
     if not complete:return {'state':'pending','reason':'waiting for matched CP5/CT/CE/CX report'}
-    ui=re.search(r'PF (\d+)/0 r0 v([1-9]\d*)/0 t\d+ a\d+',text)
-    if not ui or int(ui.group(1))<1:return {'state':'pending','reason':'waiting for successful verified UI copy'}
+    pf=[re.fullmatch(r'PF (\d+)/(\d+) r(-?\d+) v(\d+)/(\d+) t(\d+) a(\d+)',message.strip()) for message in messages if message.startswith('PF ')]
+    if any(not record for record in pf):return {'state':'fail','reason':'malformed PF result'}
+    if any(int(record[2]) or int(record[3]) or int(record[5]) or not int(record[4]) for record in pf):
+        return {'state':'fail','reason':'UI PF failure or unverified copy'}
+    # PF is emitted by scanout, CP/CE/CX by status: either thread may print first.
+    if not any(int(record[1])==1 for record in pf):return {'state':'pending','reason':'waiting for first verified UI PF'}
     elapsed=complete['CP'][0];intervals=complete['CT']
     if sum(intervals)>elapsed or sum(complete['CE']+complete['CX'])>intervals[1]+4:
         return {'state':'fail','reason':'inconsistent phase intervals'}
@@ -121,6 +130,17 @@ class Transport:
     now=staticmethod(time.monotonic)
     sleep=staticmethod(time.sleep)
     def __init__(self,a):self.a=a
+    def check_collector(self):
+        pid=self.a.collector_pid
+        os.kill(pid,0)
+        expected=self.a.uart_log.stat()
+        for fd in Path(f'/proc/{pid}/fd').iterdir():
+            try:
+                info=fd.stat()
+                flags=int(re.search(r'^flags:\s+(\d+)',Path(f'/proc/{pid}/fdinfo/{fd.name}').read_text(),re.M)[1],8)
+                if (info.st_dev,info.st_ino)==(expected.st_dev,expected.st_ino) and flags & os.O_ACCMODE in (os.O_WRONLY,os.O_RDWR):return
+            except (OSError,TypeError):continue
+        raise RuntimeError('collector PID does not hold UART log open for writing')
     def fastboot(self):
         result=subprocess.run(['fastboot','devices'],capture_output=True,text=True,timeout=10,check=True)
         return any(line.split() and line.split()[0]==self.a.serial for line in result.stdout.splitlines())
@@ -140,18 +160,33 @@ class Transport:
             except subprocess.TimeoutExpired:pass
 
 
+def kernel_ready(a,folder):
+    try:
+        epoch=json.loads((folder/'result.json').read_text())['epoch'];stat=a.uart_log.stat()
+        if [stat.st_dev,stat.st_ino]!=epoch['identity']:return False
+        with a.uart_log.open('rb') as stream:
+            stream.seek(epoch['start_offset']);raw=stream.read(32*1024*1024)
+        text=raw.decode(errors='replace').replace('\\r','\r').replace('\\n','\n')
+        return 'a04br3-autoreset:' in text.rsplit('Darwin Kernel Version ',1)[-1]
+    except (OSError,KeyError):return False
+
+
 def recover(io,a,folder,process=None):
-    if not io.fastboot():
-        save(folder/'reset-request.json',{'utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
-             'uart_offset':a.uart_log.stat().st_size,'method':'existing a04br3-reset.sh','cause':'host requested; not autonomous recovery proof'})
-        io.reset(folder)
-    end=io.now()+a.recovery_timeout
+    end=io.now()+a.recovery_timeout;sent=False
     while io.now()<end:
-        if io.fastboot() and (process is None or process.poll() is not None):
+        present=io.fastboot()
+        if present and (process is None or process.poll() is not None):
             if process is not None and process.poll()!=0:raise RuntimeError('unattended transport failed: '+str(process.poll()))
             return
+        # Do not reset a flash transfer. Wait for the new kernel listener, or
+        # autonomous recovery, before sending at most one UART reset request.
+        if not present and not sent and (process is None or kernel_ready(a,folder)):
+            save(folder/'reset-request.json',{'utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
+                 'uart_offset':a.uart_log.stat().st_size,'method':'existing a04br3-reset.sh','cause':'host requested; not autonomous recovery proof'})
+            io.reset(folder);sent=True
         io.sleep(2)
     raise TimeoutError('no observed fastboot/transport completion after reset')
+
 
 def campaign(a,inputs,io):
     result={'schedule':list(ORDER),'inputs':inputs,'rounds':[],'success':False}
@@ -161,10 +196,12 @@ def campaign(a,inputs,io):
         round_result={'clock_request':clock,'state':'incomplete','epoch':{},'reset_cause':'not inferred from fastboot return'}
         process=None;raw=bytearray()
         try:
+            io.check_collector()
             recover(io,a,folder)
             io.sleep(a.settle)
+            io.check_collector()
             stat=a.uart_log.stat();offset=stat.st_size;identity=(stat.st_dev,stat.st_ino)
-            round_result['epoch']={'uart_file':str(a.uart_log.resolve()),'start_offset':offset,'flash_requested_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
+            round_result['epoch']={'uart_file':str(a.uart_log.resolve()),'start_offset':offset,'identity':list(identity),'flash_requested_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
             round_result['environment']=json.loads(a.environment_json.read_text()) if a.environment_json else {'temperature':'unobserved','power':'unobserved','load':'UI+probe profile; no overlap inferred'}
             save(folder/'result.json',round_result)
             image=getattr(a,'boot'+str(clock))
@@ -174,6 +211,7 @@ def campaign(a,inputs,io):
             with a.uart_log.open('rb') as source,(folder/'measurement-uart.log').open('wb') as capture:
                 source.seek(offset)
                 while io.now()<end:
+                    io.check_collector()
                     current=a.uart_log.stat()
                     if (current.st_dev,current.st_ino)!=identity or current.st_size<source.tell():raise RuntimeError('UART log rotated/truncated')
                     block=source.read(262144)
@@ -195,13 +233,28 @@ def campaign(a,inputs,io):
             round_result.update(state='fail',error=str(error))
             round_result['epoch']['end_offset']=round_result['epoch'].get('start_offset',0)+len(raw)
             # Recovery is best-effort and never changes a failed measurement to PASS.
-            try:recover(io,a,folder,process)
-            except Exception as recovery:round_result['recovery_error']=str(recovery)
+            if process is not None:
+                try:recover(io,a,folder,process)
+                except Exception as recovery:round_result['recovery_error']=str(recovery)
         finally:
             if process is not None:
                 try:io.stop(process)
                 except OSError as stop_error:round_result.update(state='fail',stop_error=str(stop_error))
-            round_result['epoch']['recovery_end_offset']=a.uart_log.stat().st_size if a.uart_log.exists() else None
+            try:
+                round_result['epoch']['recovery_end_offset']=a.uart_log.stat().st_size if a.uart_log.exists() else None
+                epoch=round_result['epoch']
+                if 'start_offset' in epoch:
+                    stat=a.uart_log.stat()
+                    if [stat.st_dev,stat.st_ino]==epoch['identity']:
+                        with a.uart_log.open('rb') as stream:
+                            stream.seek(epoch.get('end_offset',epoch['start_offset']));recovery=stream.read(32*1024*1024+1)
+                        (folder/'recovery-uart.log').write_bytes(recovery)
+                        recovery_text=recovery.decode(errors='replace')
+                        round_result['recovery_boot_reasons']=re.findall(r'BOOT_REASON[:=]\s*(\d+)',recovery_text)
+                        if len(recovery)>32*1024*1024 or re.search(r'panic\(|Synchronous Exception at|context reset\s+[1-9]|HWR counter [1-9]',recovery_text,re.I):
+                            round_result.update(state='fail',recovery_error='fault or overflow in recovery UART')
+            except OSError as capture_error:
+                round_result.update(state='fail',recovery_capture_error=str(capture_error))
             save(folder/'result.json',round_result);result['rounds'].append(round_result);save(a.out/'campaign.json',result)
         if round_result['state']!='pass':return 2
     result['summary']={}
@@ -219,6 +272,7 @@ def campaign(a,inputs,io):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('boot26','boot380','payload26','payload380','uart-log','out'):p.add_argument('--'+name,type=Path,required=True)
+    p.add_argument('--collector-pid',type=int,help='existing process holding UART log open for writing; required for --execute on Linux')
     p.add_argument('--serial',required=True);p.add_argument('--uart',default='/dev/ttyUSB0')
     p.add_argument('--measurement-timeout',type=int,default=1800);p.add_argument('--recovery-timeout',type=int,default=180)
     p.add_argument('--settle',type=int,default=30);p.add_argument('--post-success',type=int,default=5)
@@ -228,6 +282,7 @@ def main():
     if a.out.exists():p.error('output must be new; preserve incomplete campaigns')
     if min(a.measurement_timeout,a.recovery_timeout,a.post_success)<1 or a.settle<0:p.error('invalid time bounds')
     if not a.uart_log.is_file():p.error('existing collector log required')
+    if a.execute and (not a.collector_pid or a.collector_pid<1):p.error('--execute requires existing collector writer PID')
     if a.execute and (not Path(a.uart).is_char_device() or any(shutil.which(x) is None for x in ('fastboot','timeout','stty'))):
         p.error('execute requires UART character device and fastboot/timeout/stty')
     if a.environment_json:json.loads(a.environment_json.read_text())
