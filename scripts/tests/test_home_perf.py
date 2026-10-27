@@ -113,7 +113,8 @@ static int thread_lck_grp, interrupted, task_acquires, task_releases, sched_acqu
 static unsigned strlcpy(char *d,const char *s,unsigned n) {snprintf(d,n,"%s",s);return strlen(s);}
 static const char *proc_best_name(proc_t p){return p->name;}
 static int proc_pid(proc_t p){return p->pid;}
-static uint64_t proc_uniqueid(proc_t p){return 1000u+(unsigned)p->pid;}
+static unsigned uid_generation=1;
+static uint64_t proc_uniqueid(proc_t p){return 1000u*uid_generation+(unsigned)p->pid;}
 static task_t proc_task(proc_t p){return p->task;}
 static uint64_t get_task_cpu_time(task_t t){(void)t;return 17;}
 static uint64_t get_task_resident_size(task_t t){(void)t;return 21;}
@@ -148,6 +149,9 @@ int main(void){
  assert(strstr(output,"p25 SpringBoard uid=1025 cpu_ns=34 cpu_at_ns=200"));
  assert(strstr(output,"p56 backboardd uid=1056 cpu_ns=34 cpu_at_ns=202"));
  assert(task_acquires==task_releases && sched_acquires==sched_releases);
+ uid_generation=2;output_used=0;output[0]=0;boot_home_perf_sample();
+ assert(strstr(output,"p25 SpringBoard uid=2025"));
+ uid_generation=1;
  struct proc changed={"unselected_worker",25,&task};unsigned saved=home_perf_count;
  assert(home_perf_capture(&changed,NULL)==PROC_RETURNED && home_perf_count==saved);
  task.locked=1;boot_home_perf_sample();assert(home_perf_rows[0].busy==1 && !home_perf_rows[0].sampled);
