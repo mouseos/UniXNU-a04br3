@@ -9,6 +9,7 @@
 #include <kern/recount.h>
 #include <kern/simple_lock.h>
 #include <machine/machine_routines.h>
+#include <machine/cpu_number.h>
 #include <mach/mach_time.h>
 #include <arm/thread.h>
 #include <string.h>
@@ -490,52 +491,72 @@ void boot_ast_caller_report(void) {
 }
 
 // Separate opt-in timer-interrupted samples; saved thread UPCBs are not used.
-#define LIVE_PC_SLOTS 128u
+#define LIVE_PC_CPUS 4u
+#define LIVE_PC_SLOTS 64u
 #define LIVE_PC_RATE 16u
-struct live_pc_row { uint64_t pc, lr, tid, hits; unsigned user, version; };
+struct live_pc_row { uint64_t stamp,pc,lr,tid,uid; unsigned user,exec_version; };
+struct live_pc_cpu { uint64_t ticks,written; struct live_pc_row rows[LIVE_PC_SLOTS]; } __attribute__((aligned(64)));
 int proc_pidversion(proc_t);
-static struct live_pc_row live_pc_rows[LIVE_PC_SLOTS];
-static unsigned live_pc_pid, live_pc_lock;
-static uint64_t live_pc_seen, live_pc_busy, live_pc_full, live_pc_uid, live_pc_other, live_pc_epoch, live_pc_start;
+proc_t proc_find(int);
+int proc_rele(proc_t);
+static struct live_pc_cpu live_pc_cpus[LIVE_PC_CPUS];
+static unsigned live_pc_pid,live_pc_bad_cpu;
+static uint64_t live_pc_previous[LIVE_PC_CPUS],live_pc_epoch,live_pc_start;
 extern char bootsessionuuid_string[37] __attribute__((weak_import));
 void boot_live_pc_init(unsigned pid) { __atomic_store_n(&live_pc_pid,pid,__ATOMIC_RELEASE); }
+// IRQs masked: the current CPU is the sole writer of its ring. Only bounded
+// loads/stores are used: no retrying RMW, lock, allocation, scan, or logging.
 void native_live_pc_sample(uint64_t pc,uint64_t lr,unsigned user) {
  unsigned pid=__atomic_load_n(&live_pc_pid,__ATOMIC_ACQUIRE);
  if(!pid || !pc)return;
  proc_t p=(proc_t)get_bsdtask_info(current_task());
  if(!p || proc_getpid(p)!=(int)pid)return;
- uint64_t seq=__atomic_fetch_add(&live_pc_seen,1,__ATOMIC_RELAXED);
- if(seq%LIVE_PC_RATE)return;
- uint64_t uid=proc_uniqueid(p),zero=0;
- if(!uid){__atomic_fetch_add(&live_pc_other,1,__ATOMIC_RELAXED);return;}
- __atomic_compare_exchange_n(&live_pc_uid,&zero,uid,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE);
- if(__atomic_load_n(&live_pc_uid,__ATOMIC_ACQUIRE)!=uid){__atomic_fetch_add(&live_pc_other,1,__ATOMIC_RELAXED);return;}
- uint64_t tid=current_thread()->thread_id;unsigned version=(unsigned)proc_pidversion(p);
- if(__atomic_exchange_n(&live_pc_lock,1,__ATOMIC_ACQUIRE)){__atomic_fetch_add(&live_pc_busy,1,__ATOMIC_RELAXED);return;}
- for(unsigned i=0;i<LIVE_PC_SLOTS;i++) {
-  struct live_pc_row *r=&live_pc_rows[i];
-  if(!r->hits){r->pc=pc;r->lr=lr;r->tid=tid;r->user=user;r->version=version;r->hits=1;goto done;}
-  if(r->pc==pc && r->lr==lr && r->tid==tid && r->user==user && r->version==version){r->hits++;goto done;}
- }
- __atomic_fetch_add(&live_pc_full,1,__ATOMIC_RELAXED);
- done: __atomic_store_n(&live_pc_lock,0,__ATOMIC_RELEASE);
+ unsigned cpu=(unsigned)cpu_number();
+ if(cpu>=LIVE_PC_CPUS){__atomic_store_n(&live_pc_bad_cpu,1,__ATOMIC_RELAXED);return;}
+ struct live_pc_cpu *c=&live_pc_cpus[cpu];
+ uint64_t ticks=__atomic_load_n(&c->ticks,__ATOMIC_RELAXED);
+ __atomic_store_n(&c->ticks,ticks+1,__ATOMIC_RELAXED);
+ if(ticks%LIVE_PC_RATE)return;
+ uint64_t seq=__atomic_load_n(&c->written,__ATOMIC_RELAXED);
+ struct live_pc_row *r=&c->rows[seq%LIVE_PC_SLOTS];
+ __atomic_store_n(&r->stamp,2*seq+1,__ATOMIC_SEQ_CST);
+ __atomic_thread_fence(__ATOMIC_SEQ_CST);
+ __atomic_store_n(&r->pc,pc,__ATOMIC_RELAXED);
+ __atomic_store_n(&r->lr,lr,__ATOMIC_RELAXED);
+ __atomic_store_n(&r->tid,current_thread()->thread_id,__ATOMIC_RELAXED);
+ __atomic_store_n(&r->uid,proc_uniqueid(p),__ATOMIC_RELAXED);
+ __atomic_store_n(&r->exec_version,(unsigned)proc_pidversion(p),__ATOMIC_RELAXED);
+ __atomic_store_n(&r->user,user,__ATOMIC_RELAXED);
+ __atomic_store_n(&r->stamp,2*seq+2,__ATOMIC_RELEASE);
+ __atomic_store_n(&c->written,seq+1,__ATOMIC_RELEASE);
 }
 static void live_pc_image_report(unsigned pid,uint64_t epoch);
 void boot_live_pc_report(void) {
  unsigned pid=__atomic_load_n(&live_pc_pid,__ATOMIC_ACQUIRE);
  if(!pid)return;
- if(__atomic_exchange_n(&live_pc_lock,1,__ATOMIC_ACQUIRE))return;
- struct live_pc_row rows[LIVE_PC_SLOTS];
- memcpy(rows,live_pc_rows,sizeof(rows));memset(live_pc_rows,0,sizeof(live_pc_rows));
  uint64_t now=mach_absolute_time(),start=live_pc_start;live_pc_start=now;
- uint64_t epoch=++live_pc_epoch;
- __atomic_store_n(&live_pc_lock,0,__ATOMIC_RELEASE);
- uint64_t ns=0,start_ns=0;absolutetime_to_nanoseconds(now,&ns);if(start)absolutetime_to_nanoseconds(start,&start_ns);
+ uint64_t epoch=++live_pc_epoch,ns=0,start_ns=0;
+ absolutetime_to_nanoseconds(now,&ns);if(start)absolutetime_to_nanoseconds(start,&start_ns);
  const char *boot=(bootsessionuuid_string && bootsessionuuid_string[0])?bootsessionuuid_string:"unavailable";
- printf("a04br3 livepc boot=%s pid=%u uid=%llu epoch=%llu start_ns=%llu end_ns=%llu hook=%u rate=%u seen=%llu busy=%llu full=%llu other=%llu\n",boot,pid,(unsigned long long)__atomic_load_n(&live_pc_uid,__ATOMIC_ACQUIRE),(unsigned long long)epoch,(unsigned long long)start_ns,(unsigned long long)ns,boot_home_irq_hook_available(),LIVE_PC_RATE,(unsigned long long)__atomic_load_n(&live_pc_seen,__ATOMIC_RELAXED),(unsigned long long)__atomic_load_n(&live_pc_busy,__ATOMIC_RELAXED),(unsigned long long)__atomic_load_n(&live_pc_full,__ATOMIC_RELAXED),(unsigned long long)__atomic_load_n(&live_pc_other,__ATOMIC_RELAXED));
+ printf("a04br3 livepc boot=%s pid=%u epoch=%llu previous_report_start_ns=%llu report_start_ns=%llu sample_time=unavailable hook=%u rate=%u bad_cpu=%u\n",boot,pid,(unsigned long long)epoch,(unsigned long long)start_ns,(unsigned long long)ns,boot_home_irq_hook_available(),LIVE_PC_RATE,__atomic_load_n(&live_pc_bad_cpu,__ATOMIC_RELAXED));
+ for(unsigned cpu=0;cpu<LIVE_PC_CPUS;cpu++) {
+  struct live_pc_cpu *c=&live_pc_cpus[cpu];
+  uint64_t end=__atomic_load_n(&c->written,__ATOMIC_ACQUIRE),begin=live_pc_previous[cpu],lost=0,torn=0;
+  if(end-begin>LIVE_PC_SLOTS){lost=end-begin-LIVE_PC_SLOTS;begin=end-LIVE_PC_SLOTS;}
+  live_pc_previous[cpu]=end;
+  for(uint64_t seq=begin;seq<end;seq++) {
+   struct live_pc_row *r=&c->rows[seq%LIVE_PC_SLOTS];
+   uint64_t stamp=__atomic_load_n(&r->stamp,__ATOMIC_ACQUIRE);
+   uint64_t pc=__atomic_load_n(&r->pc,__ATOMIC_RELAXED),lr=__atomic_load_n(&r->lr,__ATOMIC_RELAXED);
+   uint64_t tid=__atomic_load_n(&r->tid,__ATOMIC_RELAXED),uid=__atomic_load_n(&r->uid,__ATOMIC_RELAXED);
+   unsigned user=__atomic_load_n(&r->user,__ATOMIC_RELAXED),version=__atomic_load_n(&r->exec_version,__ATOMIC_RELAXED);
+   __atomic_thread_fence(__ATOMIC_ACQUIRE);
+   if(stamp!=2*seq+2 || __atomic_load_n(&r->stamp,__ATOMIC_ACQUIRE)!=stamp){torn++;continue;}
+   printf("a04br3 livepc sample epoch=%llu cpu=%u seq=%llu uid=%llu exec_version=%u tid=%llu mode=%s pc=%llx lr=%llx\n",(unsigned long long)epoch,cpu,(unsigned long long)seq,(unsigned long long)uid,version,(unsigned long long)tid,user?"user":"kernel-unslid",(unsigned long long)pc,(unsigned long long)lr);
+  }
+  printf("a04br3 livepc cpu=%u epoch=%llu ticks=%llu end=%llu lost=%llu torn=%llu\n",cpu,(unsigned long long)epoch,(unsigned long long)__atomic_load_n(&c->ticks,__ATOMIC_RELAXED),(unsigned long long)end,(unsigned long long)lost,(unsigned long long)torn);
+ }
  live_pc_image_report(pid,epoch);
- for(unsigned i=0;i<LIVE_PC_SLOTS;i++)if(rows[i].hits)
-  printf("a04br3 livepc sample epoch=%llu tid=%llu version=%u mode=%s pc=%llx lr=%llx count=%llu\n",(unsigned long long)epoch,(unsigned long long)rows[i].tid,rows[i].version,rows[i].user?"user":"kernel-unslid",(unsigned long long)rows[i].pc,(unsigned long long)rows[i].lr,(unsigned long long)rows[i].hits);
 }
 
 // dyld_all_image_infos prefix and dyld_image_info are the 64-bit ABI. Only
@@ -544,7 +565,7 @@ void boot_live_pc_report(void) {
 struct live_image_info { uint64_t addr,path,mod; };
 struct live_info_head { uint32_t version,count; uint64_t array,notify; uint8_t detached,initialized,pad[6]; uint64_t dyld; };
 struct live_macho_head { uint32_t magic,cputype,subtype,filetype,ncmds,sizeofcmds,flags,reserved; };
-struct live_image_row { uint64_t addr,text_vm,text_size; uint8_t uuid[16]; unsigned valid,uuid_valid,text_valid; };
+struct live_image_row { uint64_t addr,text_vm,text_size; uint8_t uuid[16]; unsigned valid,uuid_valid,text_valid,complete; };
 static struct live_image_row live_image_rows[LIVE_IMAGES_MAX+1];
 static struct live_image_info live_image_entries[LIVE_IMAGES_MAX];
 static int live_read(vm_map_t map,uint64_t addr,void *buf,unsigned len) {
@@ -555,67 +576,72 @@ static void live_image_decode(vm_map_t map,uint64_t addr,struct live_image_row *
  struct live_macho_head h={0};row->addr=addr;
  if(live_read(map,addr,&h,sizeof(h)) || h.magic!=0xfeedfacf || h.ncmds>1024 || h.sizeofcmds>65536)return;
  row->valid=1;uint64_t off=sizeof(h),end=off+h.sizeofcmds;
- for(unsigned i=0;i<h.ncmds && off+8<=end;i++) {
-  if(addr+off<addr || addr+off+8<addr+off)break;
-  uint32_t c[2];if(live_read(map,addr+off,c,sizeof(c)) || c[1]<8 || off+c[1]>end)break;
-  if(c[0]==0x1b && c[1]>=24) {
-   if(!live_read(map,addr+off+8,row->uuid,16))row->uuid_valid=1;
-  } else if(c[0]==0x19 && c[1]>=72) {
+ for(unsigned i=0;i<h.ncmds;i++) {
+  if(off+8>end || addr+off<addr || addr+off+8<addr+off)return;
+  uint32_t c[2];if(live_read(map,addr+off,c,sizeof(c)) || c[1]<8 || off+c[1]>end)return;
+  if(c[0]==0x1b) {
+   if(c[1]<24 || live_read(map,addr+off+8,row->uuid,16))return;
+   row->uuid_valid=1;
+  } else if(c[0]==0x19) {
    struct {uint32_t cmd,size;char name[16];uint64_t vmaddr,vmsize;} segment;
-   if(!live_read(map,addr+off,&segment,sizeof(segment)) && !memcmp(segment.name,"__TEXT\0",7)) {
+   if(c[1]<72 || live_read(map,addr+off,&segment,sizeof(segment)))return;
+   if(!memcmp(segment.name,"__TEXT\0",7)) {
     row->text_vm=segment.vmaddr;row->text_size=segment.vmsize;row->text_valid=1;
    }
   }
   off+=c[1];
  }
+ if(off==end)row->complete=1;
 }
-struct live_image_request {unsigned pid;uint64_t epoch;unsigned seen;};
-static int live_image_selected(proc_t p,void *arg) {return proc_pid(p)==(int)((struct live_image_request *)arg)->pid;}
-static int live_image_capture(proc_t p,void *arg) {
- struct live_image_request *req=arg;req->seen=1;uint64_t uid=proc_uniqueid(p),observed=__atomic_load_n(&live_pc_uid,__ATOMIC_ACQUIRE);
- unsigned version=(unsigned)proc_pidversion(p);task_t task=proc_task(p);uint64_t start=mach_absolute_time(),start_ns=0,end_ns=0;
- if(!task || !uid || !observed || uid!=observed || !task_lock_try(task)) {
-  printf("a04br3 livepc images epoch=%llu unavailable=task_or_generation\n",(unsigned long long)req->epoch);return PROC_RETURNED;
- }
+// Follow XNU's task_for_pid pattern: proc_find supplies an exec-stable proc
+// reference; obtain a task reference while it is held, then release the proc
+// before user memory reads. Re-find and compare identity afterwards.
+static void live_pc_image_report(unsigned pid,uint64_t epoch) {
+ uint64_t start=mach_absolute_time(),start_ns=0,end_ns=0;
+ proc_t p=proc_find((int)pid);
+ if(!p){printf("a04br3 livepc images epoch=%llu status=failed reason=proc_unavailable\n",(unsigned long long)epoch);return;}
+ uint64_t uid=proc_uniqueid(p);unsigned exec_version=(unsigned)proc_pidversion(p);
+ task_t task=proc_task(p);
+ if(!uid || !task){proc_rele(p);printf("a04br3 livepc images epoch=%llu status=failed reason=task_unavailable\n",(unsigned long long)epoch);return;}
  task_reference(task);
+ proc_rele(p);
+ if(!task_lock_try(task)){task_deallocate(task);printf("a04br3 livepc images epoch=%llu status=failed reason=task_busy\n",(unsigned long long)epoch);return;}
  vm_map_t map=task->map;uint64_t info=task_get_all_image_info_addr(task);unsigned slide=task->task_shared_region_slide;
  if(map)vm_map_reference(map);
  task_unlock(task);
- struct live_info_head first={0},last={0};unsigned read_count=0,failed=0;
+ struct live_info_head first={0},last={0};unsigned read_count=0,failed=0,details_failed=0,changed=0;
  memset(live_image_rows,0,sizeof(live_image_rows));
  if(!map || live_read(map,info,&first,sizeof(first)) || !first.array || first.count>4096)failed=1;
  if(!failed) {
-  read_count=first.count<LIVE_IMAGES_MAX?first.count:LIVE_IMAGES_MAX;
-  for(unsigned i=0;i<read_count;i++) {
+  unsigned limit=first.count<LIVE_IMAGES_MAX?first.count:LIVE_IMAGES_MAX;
+  for(unsigned i=0;i<limit;i++) {
    struct live_image_info image;
    if(live_read(map,first.array+(uint64_t)i*sizeof(image),&image,sizeof(image))){failed=1;break;}
    live_image_entries[i]=image;live_image_decode(map,image.addr,&live_image_rows[i]);
+   if(!live_image_rows[i].complete)details_failed++;
+   read_count++;
   }
-  if(first.dyld)live_image_decode(map,first.dyld,&live_image_rows[read_count]);
+  if(!failed && first.dyld){live_image_decode(map,first.dyld,&live_image_rows[read_count]);if(!live_image_rows[read_count].complete)details_failed++;}
   for(unsigned i=0;i<read_count && !failed;i++) {
    struct live_image_info check;
-   if(live_read(map,first.array+(uint64_t)i*sizeof(check),&check,sizeof(check)) || memcmp(&check,&live_image_entries[i],sizeof(check)))failed=1;
+   if(live_read(map,first.array+(uint64_t)i*sizeof(check),&check,sizeof(check)))failed=1;
+   else if(memcmp(&check,&live_image_entries[i],sizeof(check)))changed=1;
   }
-  if(live_read(map,info,&last,sizeof(last)) || memcmp(&first,&last,sizeof(first)))failed=1;
+  if(live_read(map,info,&last,sizeof(last)))failed=1;
+  else if(memcmp(&first,&last,sizeof(first)))changed=1;
  }
- if((unsigned)proc_pidversion(p)!=version || proc_task(p)!=task)failed=1;
- if(!task_lock_try(task))failed=1;
- else {
-  if(task->map!=map || task_get_all_image_info_addr(task)!=info || task->task_shared_region_slide!=slide)failed=1;
-  task_unlock(task);
- }
+ p=proc_find((int)pid);
+ if(!p)changed=1;
+ else {if(proc_uniqueid(p)!=uid || (unsigned)proc_pidversion(p)!=exec_version || proc_task(p)!=task)changed=1;proc_rele(p);}
+ if(!task_lock_try(task))changed=1;
+ else {if(task->map!=map || task_get_all_image_info_addr(task)!=info || task->task_shared_region_slide!=slide)changed=1;task_unlock(task);}
  if(map)vm_map_deallocate(map);
  task_deallocate(task);
  absolutetime_to_nanoseconds(start,&start_ns);absolutetime_to_nanoseconds(mach_absolute_time(),&end_ns);
- printf("a04br3 livepc images epoch=%llu pid=%u uid=%llu version=%u start_ns=%llu end_ns=%llu info=%llx cache_slide=%x cache_slide_valid=%u version=%u count=%u captured=%u truncated=%u headers_entries_unchanged=%u\n",(unsigned long long)req->epoch,req->pid,(unsigned long long)uid,version,(unsigned long long)start_ns,(unsigned long long)end_ns,(unsigned long long)info,slide,slide!=0xffffffffU,first.version,first.count,read_count,first.count>LIVE_IMAGES_MAX,!failed);
- if(!failed) for(unsigned i=0;i<read_count+!!first.dyld;i++) {
+ const char *status=failed?"failed":changed?"changed":(first.count>LIVE_IMAGES_MAX || details_failed)?"partial":"complete";
+ printf("a04br3 livepc images epoch=%llu pid=%u uid=%llu exec_version=%u start_ns=%llu end_ns=%llu info=%llx cache_slide=%x cache_slide_valid=%u dyld_version=%u count=%u captured=%u truncated=%u detail_incomplete=%u status=%s snapshot=nonatomic mapping_at_sample=unknown\n",(unsigned long long)epoch,pid,(unsigned long long)uid,exec_version,(unsigned long long)start_ns,(unsigned long long)end_ns,(unsigned long long)info,slide,slide!=0xffffffffU,first.version,first.count,read_count,first.count>LIVE_IMAGES_MAX,details_failed,status);
+ if(!failed && !changed) for(unsigned i=0;i<read_count+!!first.dyld;i++) {
   struct live_image_row *r=&live_image_rows[i];
-  printf("a04br3 livepc image epoch=%llu index=%u dyld=%u load=%llx text_vm=%llx text_size=%llx text_valid=%u macho=%u uuid_valid=%u uuid=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",(unsigned long long)req->epoch,i,i==read_count,(unsigned long long)r->addr,(unsigned long long)r->text_vm,(unsigned long long)r->text_size,r->text_valid,r->valid,r->uuid_valid,r->uuid[0],r->uuid[1],r->uuid[2],r->uuid[3],r->uuid[4],r->uuid[5],r->uuid[6],r->uuid[7],r->uuid[8],r->uuid[9],r->uuid[10],r->uuid[11],r->uuid[12],r->uuid[13],r->uuid[14],r->uuid[15]);
+  printf("a04br3 livepc image epoch=%llu index=%u dyld=%u mapping_at_sample=unknown load=%llx text_vm=%llx text_size=%llx text_valid=%u macho=%u detail_complete=%u uuid_valid=%u uuid=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",(unsigned long long)epoch,i,i==read_count,(unsigned long long)r->addr,(unsigned long long)r->text_vm,(unsigned long long)r->text_size,r->text_valid,r->valid,r->complete,r->uuid_valid,r->uuid[0],r->uuid[1],r->uuid[2],r->uuid[3],r->uuid[4],r->uuid[5],r->uuid[6],r->uuid[7],r->uuid[8],r->uuid[9],r->uuid[10],r->uuid[11],r->uuid[12],r->uuid[13],r->uuid[14],r->uuid[15]);
  }
- return PROC_RETURNED;
-}
-static void live_pc_image_report(unsigned pid,uint64_t epoch) {
- struct live_image_request req={pid,epoch,0};
- proc_iterate(PROC_ALLPROCLIST|PROC_NOWAITTRANS,live_image_capture,&req,live_image_selected,&req);
- if(!req.seen)printf("a04br3 livepc images epoch=%llu unavailable=process_absent_or_transition\n",(unsigned long long)epoch);
 }
