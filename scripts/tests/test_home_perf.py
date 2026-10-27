@@ -209,8 +209,12 @@ int main(void){
  frames[0]=(uintptr_t)frames;fake_ks.machine.ss.fp=(uintptr_t)frames;d=(struct home_perf_thread){0};
  home_perf_kernel_stack(&th[2],&d);assert(d.kernel[1]==0x11 && d.kernel[2]==0);
  th[1].kernel_stack=th[2].kernel_stack=0;
+ procs[0]=(struct proc){"Preferences",400,&task};procs[1]=(struct proc){"iconservicesagent",401,&task};
+ procs[2]=(struct proc){"iconservicesagen",402,&task};for(unsigned i=3;i<16;++i)procs[i].name=0;
+ output_used=0;output[0]=0;boot_home_perf_sample();assert(home_perf_count==3);
+ assert(strstr(output,"p400 Preferences") && strstr(output,"p401 iconservicesagent") && strstr(output,"p402 iconservicesagen"));
  for(unsigned i=0;i<16;++i)procs[i]=(struct proc){"logd",(int)i+1,&task};
- boot_home_perf_sample();assert(home_perf_count==10);
+ output_used=0;output[0]=0;boot_home_perf_sample();assert(home_perf_count==12);
  assert(task_acquires==task_releases && sched_acquires==sched_releases);
  return 0;
 }

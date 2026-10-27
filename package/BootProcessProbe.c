@@ -224,17 +224,17 @@ static void home_perf_kernel_stack(thread_t th, struct home_perf_thread *d) {
   uint64_t next=frame[0];if(next<=fp)break;fp=next;
  }
 }
-static struct home_perf_row home_perf_rows[10];
+static struct home_perf_row home_perf_rows[12];
 static unsigned home_perf_count;
 static int home_perf_selected(proc_t p, void *unused) {
  (void)unused; const char *n=proc_best_name(p);
- static const char *const names[]={"launchd","backboardd","SpringBoard","runningboardd","logd","kernel_task","WindowServer","mediaserverd","lsd","UserEventAgent"};
+ static const char *const names[]={"launchd","backboardd","SpringBoard","runningboardd","logd","kernel_task","WindowServer","mediaserverd","lsd","UserEventAgent","Preferences","iconservicesagent","iconservicesagen"};
  for (unsigned i=0;i<sizeof(names)/sizeof(names[0]);++i) if (!strcmp(n,names[i])) return 1;
  return proc_pid(p)==0;
 }
 static int home_perf_capture(proc_t p, void *unused) {
  (void)unused;
- if(home_perf_count>=10 || !home_perf_selected(p,NULL))return PROC_RETURNED;
+ if(home_perf_count>=12 || !home_perf_selected(p,NULL))return PROC_RETURNED;
  struct home_perf_row *r=&home_perf_rows[home_perf_count++];
  memset(r,0,sizeof(*r));strlcpy(r->name,proc_best_name(p),sizeof(r->name));r->pid=proc_pid(p);r->uniqueid=proc_uniqueid(p);
  task_t task=proc_task(p);if(!task){r->busy=1;return PROC_RETURNED;}
