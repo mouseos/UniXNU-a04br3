@@ -29,6 +29,10 @@ void IOLockUnlock(IOLock *p) { locked = false; p->unlock(); }
 volatile uint32_t native_touch_seq, native_touch_count;
 volatile int native_touch_xs[12], native_touch_ys[12], native_touch_ids[12];
 std::atomic<unsigned> notifications{0};
+bool gUiLatencyEnabled=false;
+uint64_t mach_absolute_time(){return 0;}
+void uiLatency(uint32_t,uint64_t,uint64_t){assert(!locked);}
+
 void native_touch_published() {
     assert(!locked); // work loop を呼ぶ際はロックを保持しない。
     ++notifications;

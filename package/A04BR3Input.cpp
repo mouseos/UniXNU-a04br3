@@ -18,6 +18,9 @@
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include "A04BR3RegisterLock.h"
+#include "A04BR3UiLatencyTrace.h"
+#include <kern/clock.h>
+extern "C" void native_gop_set_latency_observer(void (*)(uint32_t,uint64_t,uint64_t)) __attribute__((weak_import));
 
 extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
 extern "C" void thread_deallocate(thread_t);
@@ -159,12 +162,32 @@ int point(unsigned x, unsigned y, unsigned z, unsigned *px, unsigned *py)
   return 1;
 }
 
+static bool gUiLatencyEnabled;
+static uilatency::Trace gUiLatency;
+static void uiLatency(uint32_t kind,uint64_t id,uint64_t tick) {
+  if(gUiLatencyEnabled)gUiLatency.push({tick,id,kind,0});
+}
+static void uiLatencyThread(void *,wait_result_t) {
+  uint64_t lost=0;
+  mach_timebase_info_data_t base={};clock_timebase_info(&base);
+  IOLog("UIK clock n%u d%u\n",base.numer,base.denom);
+  for(;;) {
+    IOSleep(1000);
+    uilatency::Event e;
+    for(unsigned n=0;n<256 && gUiLatency.pop(e);++n)
+      IOLog("UIK e%u i%llx t%llx\n",e.kind,(unsigned long long)e.id,(unsigned long long)e.tick);
+    const uint64_t current=gUiLatency.lost();
+    if(current!=lost) {IOLog("UIK lost %llu\n",(unsigned long long)current);lost=current;}
+  }
+}
 void publish(bool down, unsigned px, unsigned py)
 {
   // Both the panel and the optional self-test publish here. A sequence lock
   // protects readers only: writers must exclude one another or their increments
   // can be lost, leaving an odd sequence that touchSend rejects indefinitely.
+  const uint64_t began=gUiLatencyEnabled?mach_absolute_time():0;
   IOLockLock(gPublishLock);
+  const bool edge=(native_touch_count!=0)!=down;
   native_touch_seq = native_touch_seq + 1;   // odd: writing
   __asm__ volatile("dmb ish" ::: "memory");
   native_touch_count = down ? 1 : 0;
@@ -173,10 +196,13 @@ void publish(bool down, unsigned px, unsigned py)
   native_touch_ys[0] = int((py * 20319U) / 1279U);
   __asm__ volatile("dmb ish" ::: "memory");
   native_touch_seq = native_touch_seq + 1;   // even: published
+  const uint32_t publishedSequence=native_touch_seq;
   IOLockUnlock(gPublishLock);
+  if(edge)uiLatency(down?1:2,publishedSequence,began);
   // The sink enters NativeHidInput's work loop. Never hold the writer lock
   // across this synchronous callback.
   native_touch_published();
+  if(edge && gUiLatencyEnabled)uiLatency(down?3:4,publishedSequence,mach_absolute_time());
 }
 
 void touchThread(void *, wait_result_t)
@@ -324,6 +350,12 @@ void a04br3_input_start(void)
   if (!gI2c || !gGpio || !gTop || !gInfra || !gPwrap || !gKeypad) { IOLog("a04br3 input: register mapping failed\n"); return; }
   gPublishLock = IOLockAlloc();
   if (!gPublishLock) { IOLog("a04br3 input: publisher lock allocation failed\n"); return; }
+  unsigned latency=0;
+  gUiLatencyEnabled=PE_parse_boot_argn("native-ui-latency",&latency,sizeof latency) && latency==1;
+  if(gUiLatencyEnabled) {
+    if(native_gop_set_latency_observer)native_gop_set_latency_observer(uiLatency);
+    start(uiLatencyThread);
+  }
   start(touchThread);
   start(keyThread);
   if (PE_parse_boot_argn("a04br3-input-selftest", &gSelftestSeconds, sizeof(gSelftestSeconds)) && gSelftestSeconds) start(selftestThread);
