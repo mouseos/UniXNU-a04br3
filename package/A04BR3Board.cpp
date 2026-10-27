@@ -37,6 +37,8 @@ void boot_home_irq_report(void);
 void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
 int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
+void native_powervr_submit_perf_enable(unsigned);
+void native_powervr_submit_perf_report(void);
 void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
 extern volatile uint64_t native_msdc_verified_cache_stats[3] __attribute__((weak_import));
 extern volatile uint32_t native_keyevents_stage;
@@ -197,6 +199,7 @@ void procLogThread(void *, wait_result_t)
       boot_home_perf_sample();
     }
     boot_home_irq_report();
+    native_powervr_submit_perf_report();
     cacheReportSeconds += gProcLogSeconds;
     if (cacheReportSeconds >= 60) {
       cacheReportSeconds %= 60;
@@ -225,6 +228,9 @@ extern "C" void unixnu_board_init(void)
       irqPid = 1;  // diagnostic kernel + existing opt-in: sample launchd
   }
   boot_home_irq_init(irqPid);
+  unsigned gpuSubmitPerf = 0;
+  PE_parse_boot_argn("a04br3-gpu-submit-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf));
+  native_powervr_submit_perf_enable(gpuSubmitPerf);
   a04br3_proclog_init();
   a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)
   unsigned events = 0;

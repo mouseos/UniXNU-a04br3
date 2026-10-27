@@ -441,11 +441,46 @@ struct UfoList {
   uint32_t n;
 };
 
+// Best-effort cumulative wall intervals. Reports are deliberately non-transactional:
+// inflight counts may be transiently inconsistent with totals on other CPUs.
+enum PerfStage { PerfLock, PerfSpace, PerfBo, PerfKick, PerfKccb, PerfHwrt, PerfStages };
+struct PerfCounter { uint64_t entered, finished, ticks; };
+PerfCounter gSubmitPerf[PerfStages];
+unsigned gSubmitPerfEnabled;
 uint64_t nowAbs() { return mach_absolute_time(); }
+uint64_t perfBegin(PerfStage s)
+{
+  if (!__atomic_load_n(&gSubmitPerfEnabled, __ATOMIC_RELAXED)) return 0;
+  __atomic_fetch_add(&gSubmitPerf[s].entered, 1ULL, __ATOMIC_RELAXED);
+  return nowAbs();
+}
+void perfEnd(PerfStage s, uint64_t start)
+{
+  if (!start) return;
+  __atomic_fetch_add(&gSubmitPerf[s].ticks, nowAbs() - start, __ATOMIC_RELAXED);
+  __atomic_fetch_add(&gSubmitPerf[s].finished, 1ULL, __ATOMIC_RELAXED);
+}
 
 bool queueReached(pvr_queue *q, uint32_t seqno) { return int32_t(READ_ONCE(*q->timeline_ufo.value) - seqno) >= 0; }
 bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); }
 }  // namespace
+
+extern "C" void native_powervr_submit_perf_enable(unsigned enabled)
+{
+  __atomic_store_n(&gSubmitPerfEnabled, enabled == 1, __ATOMIC_RELAXED);
+}
+extern "C" void native_powervr_submit_perf_report(void)
+{
+  if (!__atomic_load_n(&gSubmitPerfEnabled, __ATOMIC_RELAXED)) return;
+  const char *names[PerfStages] = {"lock", "space", "bo", "kick", "kccb", "hwrt"};
+  for (unsigned i = 0; i < PerfStages; ++i) {
+    const uint64_t entered = __atomic_load_n(&gSubmitPerf[i].entered, __ATOMIC_RELAXED);
+    const uint64_t finished = __atomic_load_n(&gSubmitPerf[i].finished, __ATOMIC_RELAXED);
+    const uint64_t ticks = __atomic_load_n(&gSubmitPerf[i].ticks, __ATOMIC_RELAXED);
+    IOLog("a04br3 gpu submit perf: stage=%s entered=%llu finished=%llu ticks=%llu\n", names[i],
+          (unsigned long long)entered, (unsigned long long)finished, (unsigned long long)ticks);
+  }
+}
 
 // ---- The Linux API shim (compat/native_powervr_linux_jobs.h) ----
 extern "C" void native_powervr_lock_init(void **lock)
@@ -714,11 +749,13 @@ extern "C" int pvr_fw_structure_cleanup(struct pvr_device *pvr_dev, u32 type, st
 extern "C" void pvr_kccb_send_cmd_reserved_powered(struct pvr_device *pvr_dev, struct rogue_fwif_kccb_cmd *cmd, u32 *kccb_slot)
 {
   (void)pvr_dev;
+  const uint64_t perf = perfBegin(PerfKccb);
   int err = -EBUSY;
   for (uint32_t ms = 0; err == -EBUSY && ms <= kKccbTimeoutMs; ms++) {
     err = native_powervr_kccb_submit(cmd, kKccbTimeoutMs);
     if (err == -EBUSY) IOSleep(1);
   }
+  perfEnd(PerfKccb, perf);
   if (err) native_powervr_log("powervr: jobs: KCCB command %x: %d\n", cmd->cmd_type, err);
   if (kccb_slot) *kccb_slot = 0;
 }
@@ -1424,7 +1461,9 @@ void hwrtUpdate(const Job *j, HwrtTrack *t)
     // More reader queues than remembered: wait here for the oldest to finish (the firmware makes progress without
     // this lock).
     native_powervr_log("powervr: jobs: more than %u reader queues on one HWRT data; waiting on the CPU\n", kHwrtReaders);
+    const uint64_t perf = perfBegin(PerfHwrt);
     while (!depDone(t->reads[0])) IOSleep(1);
+    perfEnd(PerfHwrt, perf);
     t->reads[0] = t->reads[--t->nreads];
   }
   t->reads[t->nreads++] = {j->queue, j->seqno};
@@ -1917,7 +1956,10 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
   uint64_t deadline;
   nanoseconds_to_absolutetime(uint64_t(kSchedTimeoutMs) * 1000000ULL, &deadline);
   deadline += nowAbs();
+  const uint64_t lockPerf = perfBegin(PerfLock);
   IOLockLock(gJobs.lock);
+  perfEnd(PerfLock, lockPerf);
+  const uint64_t spacePerf = perfBegin(PerfSpace);
   for (;;) {
     pvr_queue *queues[NativePowerVRAbiMaxJobs];
     u32 need[NativePowerVRAbiMaxJobs];
@@ -1949,8 +1991,11 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     IOSleep(1);
     IOLockLock(gJobs.lock);
   }
+  perfEnd(PerfSpace, spacePerf);
   if (!err && !reserveTracks(count)) err = -ENOMEM;
+  const uint64_t boPerf = perfBegin(PerfBo);
   for (uint32_t i = 0; i < count && !err; i++) err = native_powervr_hosts_sync(js[i]->hosts);
+  perfEnd(PerfBo, boPerf);
   if (err) {
     IOLockUnlock(gJobs.lock);
     for (uint32_t i = 0; i < count; i++) pvr_job_release(js[i]);
@@ -1961,11 +2006,13 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     if (uint32_t(file->nextFence) == NativePowerVRTunnelMagic) file->nextFence++;
     js[i]->fence = file->nextFence++;
   }
+  const uint64_t kickPerf = perfBegin(PerfKick);
   for (uint32_t i = 0; i < count; i++) {
     Job *j = js[i];
     if (j->type == DRM_PVR_JOB_TYPE_FRAGMENT && j->paired) continue;   // written with its geometry job
     run_job(j, j->hwrt ? trackFor(j->hwrt) : nullptr);
   }
+  perfEnd(PerfKick, kickPerf);
   const uint64_t kicked = nowAbs();
   for (uint32_t i = 0; i < count; i++) {
     Job *j = js[i];
