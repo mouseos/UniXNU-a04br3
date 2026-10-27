@@ -82,6 +82,8 @@
 #include "native_powervr_bo_stats.h"
 #define NATIVE_POWERVR_JOBS_API __attribute__((weak))
 #include "native_powervr_jobs.h"
+extern "C" uint64_t native_powervr_submit_perf_ioctl_begin(unsigned);
+extern "C" void native_powervr_submit_perf_ioctl_end(unsigned, uint64_t);
 #undef min
 #undef max
 
@@ -1624,8 +1626,13 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
   static_assert(sizeof(NativePowerVRAbiImportHost) <= sizeof(args), "argument buffer");
   memcpy(args, input, shape->input);
   NativePowerVRAbiSubmitReply reply = {};
+  const bool submitPerf = method == NativePowerVRMethodSubmitJobs;
+  const uint64_t lockPerf = submitPerf ? native_powervr_submit_perf_ioctl_begin(0) : 0;
   IOLockLock(lock_);
+  if (submitPerf) native_powervr_submit_perf_ioctl_end(0, lockPerf);
+  const uint64_t callPerf = submitPerf ? native_powervr_submit_perf_ioctl_begin(1) : 0;
   const int err = closing_ ? -ENODEV : call(method, args, &reply);
+  if (submitPerf) native_powervr_submit_perf_ioctl_end(1, callPerf);
   IOLockUnlock(lock_);
   if (closing_) return kIOReturnNotReady;
   if (err) return ioReturnOf(err);

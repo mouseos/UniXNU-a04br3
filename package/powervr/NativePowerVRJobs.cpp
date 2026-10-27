@@ -443,7 +443,7 @@ struct UfoList {
 
 // Best-effort cumulative wall intervals. Reports are deliberately non-transactional:
 // inflight counts may be transiently inconsistent with totals on other CPUs.
-enum PerfStage { PerfLock, PerfSpace, PerfBo, PerfKick, PerfKccb, PerfHwrt, PerfStages };
+enum PerfStage { PerfLock, PerfSpace, PerfBo, PerfKick, PerfKccb, PerfHwrt, PerfSubmit, PerfIoctlLock, PerfIoctlCall, PerfStages };
 struct PerfCounter { uint64_t entered, finished, ticks; };
 PerfCounter gSubmitPerf[PerfStages];
 unsigned gSubmitPerfEnabled;
@@ -469,10 +469,21 @@ extern "C" void native_powervr_submit_perf_enable(unsigned enabled)
 {
   __atomic_store_n(&gSubmitPerfEnabled, enabled == 1, __ATOMIC_RELAXED);
 }
+// Entry points used by the user-client for the submit ioctl only. Stable IDs are
+// local to these two translation units, not part of the user ABI.
+extern "C" uint64_t native_powervr_submit_perf_ioctl_begin(unsigned stage)
+{
+  return stage == 0 ? perfBegin(PerfIoctlLock) : stage == 1 ? perfBegin(PerfIoctlCall) : 0;
+}
+extern "C" void native_powervr_submit_perf_ioctl_end(unsigned stage, uint64_t start)
+{
+  if (stage == 0) perfEnd(PerfIoctlLock, start);
+  else if (stage == 1) perfEnd(PerfIoctlCall, start);
+}
 extern "C" void native_powervr_submit_perf_report(void)
 {
   if (!__atomic_load_n(&gSubmitPerfEnabled, __ATOMIC_RELAXED)) return;
-  const char *names[PerfStages] = {"lock", "space", "bo", "kick", "kccb", "hwrt"};
+  const char *names[PerfStages] = {"lock", "space", "bo", "kick", "kccb", "hwrt", "submit", "ioctl_lock", "ioctl_call"};
   for (unsigned i = 0; i < PerfStages; ++i) {
     const uint64_t entered = __atomic_load_n(&gSubmitPerf[i].entered, __ATOMIC_RELAXED);
     const uint64_t finished = __atomic_load_n(&gSubmitPerf[i].finished, __ATOMIC_RELAXED);
@@ -1915,6 +1926,11 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
                                           uint32_t count, uint64_t *fences, native_powervr_pte_phase pte_phase, void *pte_cookie)
 {
   if (!file || !jobs || !fences || !count || count > NativePowerVRAbiMaxJobs) return -EINVAL;
+  struct PerfScope {
+    uint64_t start;
+    PerfScope() : start(perfBegin(PerfSubmit)) {}
+    ~PerfScope() { perfEnd(PerfSubmit, start); }
+  } perfScope;
   Job *js[NativePowerVRAbiMaxJobs] = {};
   int err = 0;
   // pvr_job_data_init(): every job is created (and checked) before any is queued.
