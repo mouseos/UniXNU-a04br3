@@ -49,6 +49,7 @@ def main():
     parser.add_argument('--out', type=Path, default=ROOT / 'build/a04br3-metal-plugin')
     parser.add_argument('--ui-latency', action='store_true', help='enable bounded input/render/handoff timestamp correlation (default off)')
     parser.add_argument('--runtime-commit-trace', action='store_true', help='compile opt-in runtime commit phase instrumentation')
+    parser.add_argument('--deferred-submit', action='store_true', help='opt in to scheduler worker submission')
     parser.add_argument('--skip-bridge', action='store_true')
     parser.add_argument('--sipf1-dump', action='store_true',
                         help='enable bounded CPU-owned SIPF1 command snapshots in this diagnostic bundle only')
@@ -92,6 +93,8 @@ def main():
                '--board-source', str(board), '--out', str(args.out.resolve()), '--portable-sha2']
     if args.runtime_commit_trace:
         command += ['--runtime-commit-trace']
+    if args.deferred_submit:
+        command += ['--deferred-submit']
     if args.sipf1_dump:
         # The generic builder recreates OUT; generated input must be its sibling.
         args.out.resolve().parent.mkdir(parents=True, exist_ok=True)

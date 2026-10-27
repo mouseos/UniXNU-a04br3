@@ -143,6 +143,9 @@ int main(){
  with patch.object(sys,'argv',['metal','--vulkan',str(library),'--out',str(out),'--ui-latency','--runtime-commit-trace']),patch('subprocess.run') as build:
   main()
   assert build.call_args.args[0].count('--runtime-commit-trace')==1
+ with patch.object(sys,'argv',['metal','--vulkan',str(library),'--out',str(out),'--deferred-submit']),patch('subprocess.run') as build:
+  main()
+  assert build.call_args.args[0].count('--deferred-submit')==1
  (metal/'NativeVulkanMetalPlugin.mm').write_text('old frontend\n')
  with patch.object(sys,'argv',['metal','--vulkan',str(library),'--out',str(out),'--ui-latency']),patch('subprocess.run') as build:
   try:main()
