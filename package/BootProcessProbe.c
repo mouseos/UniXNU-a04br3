@@ -465,6 +465,9 @@ void boot_ast_caller_report(void) {
   struct ast_caller_slot top[4]={0}; uint64_t sampled=0;
   for (unsigned i=0;i<AST_CALLER_SLOTS;i++) {
    uint64_t pc=__atomic_load_n(&row->slots[i].pc,__ATOMIC_RELAXED);
+   // If the writer publishes a new slot during this snapshot, leave its
+   // previous value untouched until the PC is visible to the reporter.
+   if (!pc) continue;
    uint64_t current=__atomic_load_n(&row->slots[i].count,__ATOMIC_RELAXED);
    uint64_t previous=ast_caller_report_previous[c][i];
    ast_caller_report_previous[c][i]=current;
