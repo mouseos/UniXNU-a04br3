@@ -82,7 +82,7 @@ static inline int a04_wmt_channel_exchange(struct a04_sdio_transport *t,struct a
   if((e=a04_wmt_channel_status(t,c)))return e;
   if(c->status&2){
    c->rx_length=c->status>>16;
-   if(c->rx_length<=4 || c->rx_length>2304)return a04_wmt_channel_fail(t,c,A04_WMT_CHANNEL_CODEC+A04_WMT_LENGTH);
+   if(c->rx_length<=4 || c->rx_length>2304)return a04_wmt_channel_fail(t,c,A04_WMT_CHANNEL_CODEC+(int)A04_WMT_LENGTH);
    unsigned bus=(c->rx_length+3)&~3u;if(bus>512)bus=(bus+511)&~511u;
    if((e=a04_sdio_transfer(t,2,0x1c,0,0,c->rx,bus)))return a04_wmt_channel_fail(t,c,e);
    c->rx_packets++;
@@ -92,12 +92,12 @@ static inline int a04_wmt_channel_exchange(struct a04_sdio_transport *t,struct a
     if(frame.task==5 || frame.task==6)return a04_wmt_channel_fail(t,c,A04_WMT_CHANNEL_DEVICE);
     if(frame.task!=A04_STP_WMT){c->skipped++;continue;}
     if(c->expected && c->event_length==c->expected)return a04_wmt_channel_fail(t,c,A04_WMT_CHANNEL_STALE);
-    if(frame.payload.length>sizeof(c->event)-c->event_length)return a04_wmt_channel_fail(t,c,A04_WMT_CHANNEL_CODEC+A04_WMT_LENGTH);
+    if(frame.payload.length>sizeof(c->event)-c->event_length)return a04_wmt_channel_fail(t,c,A04_WMT_CHANNEL_CODEC+(int)A04_WMT_LENGTH);
     for(unsigned i=0;i<frame.payload.length;i++)c->event[c->event_length++]=frame.payload.data[i];
     if(c->event_length>=4){
      c->expected=4+a04_wmt_le16(c->event+2);
      if(c->expected<5 || c->expected>sizeof(c->event) || c->event_length>c->expected)
-      return a04_wmt_channel_fail(t,c,A04_WMT_CHANNEL_CODEC+A04_WMT_LENGTH);
+      return a04_wmt_channel_fail(t,c,A04_WMT_CHANNEL_CODEC+(int)A04_WMT_LENGTH);
     }
    }
    if(e!=A04_WMT_DONE)return a04_wmt_channel_fail(t,c,A04_WMT_CHANNEL_CODEC+e);
@@ -131,7 +131,7 @@ static inline int a04_wmt_version_reply(const uint8_t *command,const uint8_t *ev
  /* Board RD_EVT template has stale length4 although sizeof=16 and address/
   * value at8/12. Require the actual wire length12; do not normalize bad bytes. */
  if(reply.length!=11 || reply.data[0] || reply.data[1] || reply.data[2]!=1 ||
-    a04_wmt_get32(event+8)!=a04_wmt_get32(command+8))return A04_WMT_CHANNEL_CODEC+A04_WMT_MISMATCH;
+    a04_wmt_get32(event+8)!=a04_wmt_get32(command+8))return A04_WMT_CHANNEL_CODEC+(int)A04_WMT_MISMATCH;
  *value=a04_wmt_get32(event+12);return 0;
 }
 static inline int a04_wmt_read_version(struct a04_sdio_transport *t,struct a04_wmt_channel *c,uint32_t address,uint32_t *value){

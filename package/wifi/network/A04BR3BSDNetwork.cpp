@@ -205,10 +205,9 @@ int A04BR3BSDNetwork::scanCompleted()
     ifnet_t ifp=interface;
     if(!error)error=ifnet_reference(ifp);
     /* XNU's internal build opts into a zero-length/flexible event_data;
-     * external KPI consumers retain event_data[1]. Size the tail from the
-     * real header definition, keeping the same exact 24+16 wire message. */
-    struct { struct kern_event_msg header;
-        uint8_t tail[40-sizeof(struct kern_event_msg)]; } event={};
+     * external KPI consumers retain event_data[1]. A union supplies aligned
+     * storage for the same exact 24+16 wire message in both layouts. */
+    union { struct kern_event_msg header; uint8_t bytes[40]; } event={};
     static_assert(offsetof(struct kern_event_msg,event_data)==24,"native event header");
     static_assert(sizeof(event)==40,"native event payload is exact ifname16");
     event.header.total_size=sizeof(event);event.header.vendor_code=1;
@@ -249,8 +248,7 @@ int A04BR3BSDNetwork::refresh()
         if(linked==linkReported){IOLockUnlock(gate);return error;}
         ifnet_t ifp=interface;int retained=ifnet_reference(ifp);
         if(retained){(void)ifnet_set_flags(ifp,0,IFF_RUNNING);IOLockUnlock(gate);return retained;}
-        struct { struct kern_event_msg header;
-            uint8_t tail[48-sizeof(struct kern_event_msg)]; } event={};
+        union { struct kern_event_msg header; uint8_t bytes[48]; } event={};
         static_assert(offsetof(struct kern_event_msg,event_data)==24,"link header offset");
         static_assert(sizeof(event)==48,"link event family4 unit4 name16");
         event.header.total_size=sizeof(event);event.header.vendor_code=KEV_VENDOR_APPLE;
