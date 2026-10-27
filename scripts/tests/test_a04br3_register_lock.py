@@ -14,6 +14,7 @@ code=r'''
 #include "A04BR3RegisterLock.cpp"
 IOLock *IOLockAlloc(){return new IOLock;}
 void IOLockLock(IOLock *p){p->lock();}
+bool IOLockTryLock(IOLock *p){return p->try_lock();}
 void IOLockUnlock(IOLock *p){p->unlock();}
 struct BoardIO {
  volatile uint8_t *base;std::map<unsigned,unsigned> r;
@@ -51,7 +52,8 @@ int main(){
 }
 '''
 with tempfile.TemporaryDirectory() as tmp:
- t=Path(tmp);(t/'IOKit').mkdir();(t/'IOKit/IOLib.h').write_text('#pragma once\n#include <mutex>\nusing IOLock=std::mutex;IOLock *IOLockAlloc();void IOLockLock(IOLock*);void IOLockUnlock(IOLock*);\n')
+ t=Path(tmp);(t/'IOKit').mkdir();(t/'IOKit/IOLib.h').write_text('#pragma once\n#include <mutex>\nusing IOLock=std::mutex;IOLock *IOLockAlloc();void IOLockLock(IOLock*);bool IOLockTryLock(IOLock*);void IOLockUnlock(IOLock*);\n')
+ (t/'machine').mkdir();(t/'machine/machine_routines.h').write_text('inline bool ml_at_interrupt_context(){return false;} inline bool ml_get_interrupts_enabled(){return true;}\n')
  (t/'test.cpp').write_text(code)
  subprocess.run([shutil.which('g++'),'-std=c++17','-pthread','-fsanitize=address,undefined','-I',str(t),'-I',str(r/'package'),str(t/'test.cpp'),'-o',str(t/'test')],check=True)
  subprocess.run([str(t/'test')],check=True)

@@ -22,6 +22,7 @@
 //    drivers/watchdog/mtk_wdt.c and the restart contract of github.com/mouseos/xnu_kernel_benesse_a04br3
 //    (iokit/Kernel/arm/A04BR3Restart.h), which ran on this tablet.
 #include <IOKit/IOLib.h>
+#include "A04BR3RegisterLock.h"
 #include <IOKit/IOPlatformExpert.h>
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
@@ -138,6 +139,8 @@ bool rtcTrigger(void)
 
 bool setFastbootFlag(void)
 {
+  A04BR3WacsGuard guard;
+  if (!guard) return false;
   uint32_t pdn1 = 0;
   if (!wacs(true, kRtcProt, 0x586a, nullptr) || !rtcTrigger() ||
       !wacs(true, kRtcProt, 0x9136, nullptr) || !rtcTrigger() ||

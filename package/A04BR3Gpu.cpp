@@ -10,6 +10,7 @@
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include "A04BR3RoguePower.h"
+#include "A04BR3RegisterLock.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -36,10 +37,8 @@ void bankWrite(void *, unsigned bank, unsigned offset, uint32_t value)
 }
 void waitUs(void *, unsigned us) { IODelay(us); }
 
-// Startup-only clock/rail snapshot. Board.cpp calls GPU init after autoreset's
-// startup WACS transactions and before Input starts its touch power sequence.
-// This relies on no host reset request during startup; it is not a shared WACS
-// lock and must never be used as a runtime API or after the input thread starts.
+// Startup-only clock/rail snapshot. WACS2 access is serialized with the board
+// recovery and touch owners. This code executes in thread context.
 // Register sources: board Linux clk-mt8167.c, mt8167.dtsi, mtk-pmic-wrap.c
 // (mt8167_regs/pwrap_read), and mt6392-regulator.c plus mt6392/registers.h.
 uint32_t clockDiagnosticRead(volatile uint8_t *base, unsigned offset)
@@ -104,6 +103,8 @@ void clockDiagnosticSnapshot(volatile uint8_t *top)
     IOLog("a04br3 gpu clock diagnostic: PWRAP/VCORE unknown (mapping failed)\n");
     return;
   }
+  A04BR3WacsGuard guard;
+  if (!guard) { IOLog("a04br3 gpu clock diagnostic: WACS2 lock unavailable\n"); return; }
   const uint32_t wacs_enable = clockDiagnosticRead(pwrap, 0x98);
   const uint32_t init = clockDiagnosticRead(pwrap, 0x9c);
   const uint32_t status = clockDiagnosticRead(pwrap, 0xa4);
@@ -131,6 +132,8 @@ unsigned selectClockParent(uint32_t *hz)
   if (requested != 380) { IOLog("a04br3 gpu clock: unsupported request %u; retaining 26 MHz\n", requested); return 4; }
   auto *pll = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10018000, 0x1000));
   auto *pwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1000f000, 0x1000));
+  A04BR3WacsGuard guard;
+  if (!guard) { IOLog("a04br3 gpu clock: WACS2 lock unavailable; retaining 26 MHz\n"); return 4; }
   if (!pll || !pwrap || !(clockDiagnosticRead(pwrap, 0x98) & 1) || !(clockDiagnosticRead(pwrap, 0x9c) & 1)) {
     IOLog("a04br3 gpu clock: PLL/VCORE state unavailable; retaining 26 MHz\n"); return 4;
   }

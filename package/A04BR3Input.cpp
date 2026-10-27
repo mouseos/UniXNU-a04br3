@@ -11,7 +11,8 @@
 //  - Keys: the MT8167 keypad (0x10002000), bit 0 volume up, bit 1 Home. Both physical down/up states go through
 //    NativeHidInput's Consumer report 2 (Home bit 0, volume up bit 2). The mailbox remains for synthetic self-tests only.
 //    Needs sheng-touch-hid=1 for the digitizer collection and the touch sink of NativeHidInput.
-// The only other PWRAP user, package/A04BR3AutoReset.cpp, finishes its WACS2 transactions in bsd_init before this starts.
+// WACS2 is shared with the board GPU and recovery code; powerOn owns it as a
+// single read/modify/write sequence in the touch kernel thread.
 #include <IOKit/IOLib.h>
 #include <libkern/c++/OSObject.h>
 #include <kern/thread.h>
@@ -108,6 +109,8 @@ int pwWrite(unsigned addr, uint16_t value) { if (pwWait(0)) return -1; wr(gPwrap
 // MT6392 VGP1 to 1.8 V (voltage select 0x530 bits 5..7 = 3) and enabled (0x50a bit 15).
 int powerOn(void)
 {
+  A04BR3WacsGuard guard;
+  if (!guard) return -7;
   if (!(rd(gPwrap, 0x9c) & 1)) return -2;
   uint16_t v = 0;
   if (pwRead(0x530, &v) || pwWrite(0x530, uint16_t((v & ~0xe0) | 0x60))) return -3;

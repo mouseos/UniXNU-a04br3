@@ -20,6 +20,8 @@
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include "BootMemoryQueueSnapshot.h"
+#include "A04BR3RegisterLock.h"
+#include "A04BR3CpuRailCore.h"
 #include "powervr/native_powervr_bo_stats.h"
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
@@ -238,11 +240,60 @@ void cpuDiagnosticReport()
         armcpu_ipi_sent, armcpu_ipi_dropped, armcpu_gic_boot[3]);
 }
 
+struct CpuRailIO {
+  volatile uint8_t *base;
+  uint32_t read(unsigned offset) {
+    uint32_t v = *reinterpret_cast<volatile uint32_t *>(base + offset);
+    __asm__ volatile("dmb oshld" ::: "memory");
+    return v;
+  }
+  void write(unsigned offset, uint32_t v) {
+    *reinterpret_cast<volatile uint32_t *>(base + offset) = v;
+    __asm__ volatile("dsb oshst" ::: "memory");
+  }
+  void delay() { IODelay(10); }
+};
+
+// Explicit opt-in; called by the process-report thread, never by an IRQ.
+void cpuRailReport()
+{
+  static bool attempted;
+  static volatile uint8_t *base;
+  if (!attempted) {
+    attempted = true;
+    base = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1000f000, 0x1000));
+  }
+  uint64_t begin=0, end=0;
+  absolutetime_to_nanoseconds(mach_absolute_time(), &begin);
+  a04br3rail::Snapshot s = {};
+  a04br3rail::Result result = a04br3rail::unavailable;
+  const char *reason = "mapping";
+  if (base) {
+    A04BR3WacsGuard guard(true);
+    reason = "busy_or_unavailable";
+    if (guard) {
+      CpuRailIO io = {base};
+      result = a04br3rail::capture(io, s);
+      if (result == a04br3rail::timeout_after_command) a04br3_wacs_poison();
+      reason = "capture";
+    }
+  }
+  absolutetime_to_nanoseconds(mach_absolute_time(), &end);
+  if (result == a04br3rail::ok) {
+    IOLog("a04br3 cpu-rail stage=XNU begin_ns=%llu end_ns=%llu status=ok control=%04x selector=%04x nominal_uv=%u non_atomic=1 physical_voltage=unknown\n",
+          (unsigned long long)begin, (unsigned long long)end, unsigned(s.control), unsigned(s.selector), s.nominal_uv);
+  } else {
+    IOLog("a04br3 cpu-rail stage=XNU begin_ns=%llu end_ns=%llu status=unknown reason=%s code=%u\n",
+          (unsigned long long)begin, (unsigned long long)end, reason, unsigned(result));
+  }
+}
+
 void procLogThread(void *, wait_result_t)
 {
-  unsigned perf = 0, rootTiming = 0;
+  unsigned perf = 0, rootTiming = 0, cpuRail = 0;
   PE_parse_boot_argn("a04br3-home-perf", &perf, sizeof(perf));
   PE_parse_boot_argn("native-root-timing", &rootTiming, sizeof(rootTiming));
+  PE_parse_boot_argn("a04br3-cpu-rail", &cpuRail, sizeof(cpuRail));
   uint64_t cacheReportSeconds = 0;
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
@@ -255,6 +306,7 @@ void procLogThread(void *, wait_result_t)
     }
     a04br3_display_report();
     a04br3_thread_report();
+    if (cpuRail == 1) cpuRailReport();
     if (perf == 1) {
       uint64_t m[7]; struct boot_memory_queue_record q;
       boot_memory_snapshot(m); boot_memory_queue_snapshot(&q);
@@ -287,8 +339,8 @@ static void a04br3_proclog_init(void)
 
 extern "C" void unixnu_board_init(void)
 {
+  a04br3_registers_init(); // shared mux and WACS2 locks before any board user
   a04br3_autoreset_init();
-  a04br3_registers_init(); // shared I2C0/I2C2 mux lock before either thread
   a04br3_charger_init(); // explicit opt-in; separate I2C2 owner, no PWRAP
   unsigned irqPid = 0;
   if (!PE_parse_boot_argn("native-irq-pid", &irqPid, sizeof(irqPid))) {
