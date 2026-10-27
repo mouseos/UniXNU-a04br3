@@ -611,16 +611,24 @@ includes comparison overhead, so it cannot alone establish eMMC throughput or
 DMA CPU cost. The caller must compare identical inputs and boot conditions and
 correlate with kernel IRQ counters. No writes are made by the benchmark.
 
-Experimental fixed source pair: UniXNU commit `ed1454a3ba30353e8d94324b573cfb9160831226`
-selects NativeMsdc `1acec320a53f3d5e1cf32417f8c6edc9a4e8b04d`; this device
+Experimental fixed source pair: UniXNU commit `435291622f3fc82def4776b07ddaf79874b6d7e4`
+selects NativeMsdc `daf6c0b7e8eeb309290f993d9b961e2402717fe8`; this device
 revision selects ArmCpu `f3551364f7bb587463059a4648448d608a2ee5da` through
 its gitlink. Both source commits must be published to their configured remotes
 before a fresh recursive clone can fetch them. The flags above are required;
 the pair alone does not activate IRQs. Kernel argument capacity must be checked:
 the existing P46/P54 diagnostic configurations can approach the 1023-byte limit.
 
-The IRQ wait is restricted to explicitly marked reads on the driver-owned publication
-thread. Regular block-storage and store callbacks, including launchd reads, remain
-polled until their caller and lock contracts are demonstrated safe for sleeping.
+Without the worker option, IRQ wait is limited to explicitly marked reads on the
+driver-owned publication thread. With it, verified read-only block requests can
+also use the worker; writable windows and store callbacks continue to poll.
 A rejected GIC mask readback is recorded; persistent unquenchable IRQs panic.
 SYSIRQ writers that bypass ArmCpu controller synchronization can still race.
+
+Experimental verified-root read executor: additionally export
+`XNU_MSDC_IRQ_WORKER=1` together with `XNU_MSDC_IRQ_WAIT=1` when building;
+`XNU_NATIVE_MSDC_BLOCK=1` and `--verified-root` are required. The new executor
+is otherwise compiled out. At saturation or thread-creation failure a read
+uses the original polled path. It begins with one I/O thread and one completion
+thread and grows completion threads on demand to at most 64. Physical testing,
+peak resource impact and full kernel link remain unverified.

@@ -111,6 +111,10 @@ if component == 'NativeMsdc':
     if os.environ.get('XNU_MSDC_IRQ_WAIT') == '1':
         command += ['-DNATIVE_MSDC_IRQ_WAIT=1']
     block_devices = os.environ.get('XNU_NATIVE_MSDC_BLOCK') == '1'
+    if os.environ.get('XNU_MSDC_IRQ_WORKER') == '1':
+        if os.environ.get('XNU_MSDC_IRQ_WAIT') != '1' or not block_devices or not args.verified_root:
+            parser.error('XNU_MSDC_IRQ_WORKER=1 requires XNU_MSDC_IRQ_WAIT=1, block devices and --verified-root')
+        command += ['-DNATIVE_MSDC_WORKER_EXPERIMENT=1']
     command += ['-DNATIVE_MSDC_BLOCK_DEVICES=' + ('1' if block_devices else '0')]
     if block_devices:
         command += ['-I', str(ROOT / 'build/storage-abi/include')]
