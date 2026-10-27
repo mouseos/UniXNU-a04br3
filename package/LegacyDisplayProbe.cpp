@@ -189,8 +189,8 @@ static void homeDisplayReport(void) {
     HomeDisplayEvent events[32]; unsigned count = homeDisplayCount;
     for (unsigned i=0; i<count; ++i) events[i]=homeDisplayEvents[(homeDisplayHead+i)%32];
     homeDisplayCount = 0; homeDisplayHead = 0;
-    __atomic_store_n(&homeDisplayLock, 0, __ATOMIC_RELEASE);
     unsigned dropped = __atomic_exchange_n(&homeDisplayDropped, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&homeDisplayLock, 0, __ATOMIC_RELEASE);
     IOLog("a04br3 perf display count=%u dropped=%u\n", count, dropped);
     for (unsigned i=0; i<count; ++i)
         IOLog("a04br3 perf display stage=%u time_us=%llu\n", events[i].stage, (unsigned long long)events[i].us);

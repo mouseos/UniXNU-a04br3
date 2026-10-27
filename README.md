@@ -524,7 +524,8 @@ successful GPU handoffs. The
 markers identify observation points only: stage 0 is not the app render
 command-buffer commit, stage 2 alone is not proof that pixels are visible, and no causal pairing
 with a touch is established. Overwriting older entries or lock contention is counted as
-`dropped`; events are emitted later by the heartbeat. The legacy swap timeline
+`dropped`; events are emitted later by the heartbeat. A try-lock failure
+can race the reporting boundary, so the per-batch drop count is approximate. The legacy swap timeline
 already stores timestamps but this P29 source has no wired UART command to read
 it. P29 can provide existing touch/report and aggregate scanout data without
 reboot; these new markers need a rebuilt image.

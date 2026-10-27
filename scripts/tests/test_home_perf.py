@@ -15,8 +15,15 @@ class HomePerfTest(unittest.TestCase):
 #include <cassert>
 #include <cstdint>
 #include <cstring>
-static unsigned reports, lines, dropped;
-static void IOLog(const char *fmt, ...) { if (strstr(fmt,"count=")) ++reports; else ++lines; }
+#include <cstdarg>
+static unsigned reports, lines, gotStage[64], gotDropped;
+static uint64_t gotTime[64];
+static void IOLog(const char *fmt, ...) {
+ va_list ap; va_start(ap,fmt);
+ if (strstr(fmt,"count=")) { (void)va_arg(ap,unsigned);gotDropped=va_arg(ap,unsigned);++reports; }
+ else {gotStage[lines]=va_arg(ap,unsigned);gotTime[lines]=va_arg(ap,unsigned long long);++lines;}
+ va_end(ap);
+}
 ''' + body + r'''
 int main() {
  homeDisplayRecord(1, 2); assert(homeDisplayCount==0);
@@ -27,10 +34,50 @@ int main() {
  homeDisplayLock=1;homeDisplayRecord(1,9);assert(homeDisplayDropped==4);
  homeDisplayReport();assert(homeDisplayCount==32);
  homeDisplayLock=0;homeDisplayReport();assert(homeDisplayCount==0 && homeDisplayDropped==0);
- assert(reports==1 && lines==32); (void)dropped;
+ assert(reports==1 && lines==32 && gotDropped==4);
+ for(unsigned i=0;i<32;++i){assert(gotTime[i]==i+3 && gotStage[i]==(i+3)%3);}
+ homeDisplayRecord(2,42);homeDisplayReport();
+ assert(reports==2 && lines==33 && gotTime[32]==42 && gotStage[32]==2 && gotDropped==0);
 }
 '''
         with tempfile.TemporaryDirectory(prefix='home-display-') as tmp:
+            src, binary = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
+            src.write_text(harness)
+            subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                            str(src), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_input_transfer_error_releases_once(self):
+        source = (ROOT / 'package/A04BR3Input.cpp').read_text()
+        start = source.index('    if (e) {', source.index('void touchThread('))
+        end = source.index('    failures = 0;', start)
+        body = source[start:end]
+        harness = r'''
+#include <cassert>
+#include <cstdint>
+static unsigned publishes, reports, sleeps;
+static uint32_t native_touch_seq=8, native_touch_hid_reports=9;
+static uint64_t ticks=10;
+static uint64_t mach_absolute_time(){return ticks++;}
+static void absolutetime_to_nanoseconds(uint64_t t,uint64_t *out){*out=t;}
+static void publish(bool state,unsigned,unsigned){assert(!state);++publishes;}
+static void IOSleep(unsigned n){assert(n==100);++sleeps;}
+static void IOLog(const char *,...){++reports;}
+static void run(bool &down,unsigned &perfEdges) {
+ unsigned lastx=0,lasty=0,failures=0,perf=1;int e=5;
+ for(unsigned once=0;once<1;++once) {
+''' + body + r'''
+ }
+}
+int main(){bool down=true;unsigned edges=0;run(down,edges);
+ assert(!down && publishes==1 && edges==1 && reports==2 && sleeps==1);
+ run(down,edges);assert(publishes==1 && edges==1);
+ down=true;edges=32;unsigned old=reports;run(down,edges);
+ assert(!down && publishes==2 && edges==32 && reports==old+1);
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='home-input-') as tmp:
             src, binary = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
             src.write_text(harness)
             subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
@@ -76,7 +123,8 @@ static void task_unlock(task_t t){assert(t->locked);t->locked=0;++task_releases;
 static bool ml_set_interrupts_enabled(bool v){bool old=!interrupted;interrupted=!v;return old;}
 static int simple_lock_try(int *l,int *g){(void)g;if(*l)return 0;*l=1;++sched_acquires;return 1;}
 static void thread_unlock(thread_t t){assert(t->sched_lock);t->sched_lock=0;++sched_releases;}
-static uint64_t mach_absolute_time(void){return 100;}
+static uint64_t clock_value=99;
+static uint64_t mach_absolute_time(void){return ++clock_value;}
 static void absolutetime_to_nanoseconds(uint64_t t,uint64_t *v){*v=t*2;}
 static struct proc procs[16];
 static void proc_iterate(unsigned flags,int (*cb)(proc_t,void*),void *a,int (*filter)(proc_t,void*),void *b){
@@ -91,12 +139,13 @@ int main(void){
  th[0].sched_lock=1;th[1].state=TH_RUN;
  struct fake_task task={th,40,0};
  procs[0]=(struct proc){"SpringBoard",25,&task};
- procs[1]=(struct proc){"unselected",99,&task};
- boot_home_perf_sample();assert(home_perf_count==1);
+ procs[1]=(struct proc){"backboardd",56,&task};
+ boot_home_perf_sample();assert(home_perf_count==2);
  assert(home_perf_rows[0].pid==25 && home_perf_rows[0].threads==40);
  assert(home_perf_rows[0].busy==1 && home_perf_rows[0].running==1 && home_perf_rows[0].waiting==30);
  assert(home_perf_rows[0].sampled==1 && home_perf_rows[0].wait==101 && !interrupted);
- assert(strstr(output,"cpu_ns=34 cpu_at_ns=200"));
+ assert(strstr(output,"p25 SpringBoard cpu_ns=34 cpu_at_ns=200"));
+ assert(strstr(output,"p56 backboardd cpu_ns=34 cpu_at_ns=202"));
  assert(task_acquires==task_releases && sched_acquires==sched_releases);
  task.locked=1;boot_home_perf_sample();assert(home_perf_rows[0].busy==1 && !home_perf_rows[0].sampled);
  task.locked=0;for(unsigned i=0;i<16;++i)procs[i]=(struct proc){"logd",(int)i+1,&task};
