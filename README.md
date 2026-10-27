@@ -592,3 +592,29 @@ interval `stored`/`lost_full`, and missed report attempts (`skipped`). The
 `busy` counter is cumulative and asynchronous: an IRQ may increment it while
 the report holds the table lock, so differences only approximate per-epoch
 contention and cannot yield exact per-epoch loss percentages.
+
+Experimental MSDC interrupt wait: `XNU_MSDC_IRQ_WAIT=1` in the environment
+passed to the board build enables `NATIVE_MSDC_IRQ_WAIT=1` and
+`ARMCPU_SPI_SERIALIZE=1`. Add `native-msdc-irq=1` to the kernel arguments only
+for an explicitly selected experiment; `native-msdc-dma=1` is also required.
+The ADT carries SPI 78 and SYSIRQ polarity-bank metadata but does not itself
+activate interrupts. Use a UniXNU checkout whose NativeMsdc submodule contains
+the corresponding IRQ wait change and a board ArmCpu submodule containing the
+serialization change; commits must be available to the build checkout. The
+experiment has not been validated on physical hardware.
+
+For read-only userspace measurements compile `tools/msdc-read-bench.c` with a
+C11 compiler and run `msdc-read-bench FILE OFFSET BYTES ITERATIONS`. It checks
+all repeated reads against the first read and prints bytes, elapsed monotonic
+time and process CPU time. It is affected by the filesystem/page cache and
+includes comparison overhead, so it cannot alone establish eMMC throughput or
+DMA CPU cost. The caller must compare identical inputs and boot conditions and
+correlate with kernel IRQ counters. No writes are made by the benchmark.
+
+Experimental fixed source pair: UniXNU commit `ea0c46b799cd5f550ed07fad79ab137d5a1b0cf6`
+selects NativeMsdc `c215dc27d44581233210652bc0c8f40d92157da9`; this device
+revision selects ArmCpu `3eb0ea5f4b4bd43e264fa32c2848518c1f612aef` through
+its gitlink. Both source commits must be published to their configured remotes
+before a fresh recursive clone can fetch them. The flags above are required;
+the pair alone does not activate IRQs. Kernel argument capacity must be checked:
+the existing P46/P54 diagnostic configurations can approach the 1023-byte limit.

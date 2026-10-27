@@ -32,6 +32,9 @@ UART0 = 0x11005000
 UART0_SIZE = 0x1000
 MSDC0 = 0x11120000
 MSDC0_SIZE = 0x1000
+# Stock DT and Linux: GIC SPI 78, active low through SYSIRQ polarity bank.
+MSDC0_SPI = 78
+SYSIRQ = 0x10200620
 TIMEBASE = 13000000
 
 
@@ -209,7 +212,11 @@ def main():
                              ('reg-io-width', struct.pack('<I', 4)),
                              ('reg', struct.pack('<2Q', UART0 - ARMIO_BASE, UART0_SIZE))]),
               node('mmc0', [('compatible', b'mediatek,mt8167-mmc\0'),
-                            ('reg', struct.pack('<2Q', MSDC0 - ARMIO_BASE, MSDC0_SIZE))])]),
+                            ('reg', struct.pack('<2Q', MSDC0 - ARMIO_BASE, MSDC0_SIZE)),
+                            # Metadata only. NativeMsdc uses it only with its explicit IRQ opt-in.
+                            ('msdc-irq-spi', struct.pack('<I', MSDC0_SPI)),
+                            ('msdc-sysirq-base', struct.pack('<Q', SYSIRQ)),
+                            ('msdc-irq-low', struct.pack('<I', 1))])]),
     ])
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(tree)
