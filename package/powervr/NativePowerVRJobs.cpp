@@ -66,6 +66,7 @@ extern "C" {
 extern "C" {
 uint64_t mach_absolute_time(void);
 void nanoseconds_to_absolutetime(uint64_t nanoseconds, uint64_t *result);
+void absolutetime_to_nanoseconds(uint64_t absolute, uint64_t *result);
 int proc_selfpid(void);
 kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
 void thread_deallocate(thread_t);
@@ -495,8 +496,11 @@ extern "C" void native_powervr_submit_perf_report(void)
     const uint64_t entered = __atomic_load_n(&gSubmitPerf[i].entered, __ATOMIC_RELAXED);
     const uint64_t finished = __atomic_load_n(&gSubmitPerf[i].finished, __ATOMIC_RELAXED);
     const uint64_t ticks = __atomic_load_n(&gSubmitPerf[i].ticks, __ATOMIC_RELAXED);
-    IOLog("a04br3 gpu submit perf: stage=%s entered=%llu finished=%llu ticks=%llu\n", names[i],
-          (unsigned long long)entered, (unsigned long long)finished, (unsigned long long)ticks);
+    uint64_t elapsedNs = 0;
+    absolutetime_to_nanoseconds(ticks, &elapsedNs);
+    IOLog("a04br3 gpu submit perf: stage=%s entered=%llu finished=%llu ticks=%llu ns=%llu\n", names[i],
+          (unsigned long long)entered, (unsigned long long)finished, (unsigned long long)ticks,
+          (unsigned long long)elapsedNs);
   }
 }
 
