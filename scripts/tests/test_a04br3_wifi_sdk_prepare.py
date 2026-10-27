@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
+import argparse
+import shlex
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,7 +9,12 @@ from unittest.mock import patch
 import shutil
 import sys
 import os
+import json
+import io
+import contextlib
 import subprocess
+
+BASE_SOURCE = None
 
 spec = importlib.util.spec_from_file_location('prepare', Path(__file__).parents[1] / 'prepare-a04br3-wifi-sdk.py')
 m = importlib.util.module_from_spec(spec)
@@ -185,7 +192,8 @@ class PrepareTests(unittest.TestCase):
             return real_run(*args)
         argv = ['prepare', '--existing-base', str(base), '--existing-device', str(device),
                 '--existing-tree', str(tree), '--kernelcache', str(self.cache),
-                '--destination', str(self.dest), '--prepare']
+                '--destination', str(self.dest), '--data-volume-uuid',
+                'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36', '--prepare']
         with patch.object(sys, 'argv', argv), patch.object(m.platform, 'system', return_value='Darwin'), \
              patch.object(m.shutil, 'which', return_value='/usr/bin/tool'), \
              patch.object(m, 'PINS', pins), patch.object(m, 'run', side_effect=fake_run):
@@ -205,9 +213,128 @@ class PrepareTests(unittest.TestCase):
         self.assertFalse(any('clone' in call for call in calls))
         self.assertFalse(any('build' in call for call in calls))
         script = (self.dest / 'build-wifi-sdk.sh').read_text()
-        self.assertIn('env -i ', script)
-        self.assertIn('A04BR3_WIFI=1', script)
+        self.assertIn('exec python3 -I ', script)
+        generated = (self.dest / 'build-wifi-sdk.py').read_text()
+        self.assertIn('XNU_OWNER_DATA_VOLUME_UUID', generated)
+        self.assertIn('GITHUB_TOKEN', generated)
         subprocess.run(['sh', '-n', str(self.dest / 'build-wifi-sdk.sh')], check=True)
+        retained = self.dest / 'out/retained.o'
+        retained.write_bytes(b'preserve incremental object')
+        copied_sdk = m.sdk_manifest(self.dest / 'out/a04br3/tree/.cache/fakeroot')
+        with patch.object(m, 'PINS', pins):
+            m.refresh_launchers(self.dest, 'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36',
+                                '8846FE78-2910-4297-AF97-D59BB6F8FC16')
+            self.assertEqual(retained.read_bytes(), b'preserve incremental object')
+            self.assertEqual(copied_sdk, m.sdk_manifest(self.dest / 'out/a04br3/tree/.cache/fakeroot'))
+            old_launcher = (self.dest / 'build-wifi-sdk.py').read_bytes()
+            alternates = self.dest / 'UniXNU/.git/objects/info/alternates'
+            alternates.write_text(str(base / '.git/objects') + '\n')
+            with self.assertRaisesRegex(ValueError, 'alternates'):
+                m.refresh_launchers(self.dest, 'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36',
+                                    '8846FE78-2910-4297-AF97-D59BB6F8FC16')
+            self.assertEqual((self.dest / 'build-wifi-sdk.py').read_bytes(), old_launcher)
+            alternates.unlink()
+            m.git(self.dest / 'UniXNU', 'config', 'core.worktree', str(base))
+            with self.assertRaisesRegex(ValueError, 'external worktree'):
+                m.refresh_launchers(self.dest, 'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36',
+                                    '8846FE78-2910-4297-AF97-D59BB6F8FC16')
+            self.assertEqual((self.dest / 'build-wifi-sdk.py').read_bytes(), old_launcher)
+            m.git(self.dest / 'UniXNU', 'config', '--unset', 'core.worktree')
+
+            (self.dest / 'UniXNU/tracked').write_text('reject dirty prepared source')
+            with self.assertRaisesRegex(ValueError, 'not clean'):
+                m.refresh_launchers(self.dest, 'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36',
+                                    '8846FE78-2910-4297-AF97-D59BB6F8FC16')
+            self.assertEqual((self.dest / 'build-wifi-sdk.py').read_bytes(), old_launcher)
+
+
+    def test_explicit_uuid_cli_validation(self):
+        expected = 'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36'
+        self.assertEqual(m.canonical_uuid(expected.lower()), expected)
+        for bad in ('', 'not-uuid', expected.replace('-', ''), '{' + expected + '}', expected + '\n'):
+            with self.assertRaises(Exception): m.canonical_uuid(bad)
+        # Even a valid inherited value is insufficient: the CLI input is required.
+        with patch.dict(os.environ, {'XNU_OWNER_DATA_VOLUME_UUID': expected}), \
+             patch.object(sys, 'argv', ['prepare', '--destination', str(self.dest)]), \
+             contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            m.main()
+        self.assertEqual(error.exception.code, 2)
+        self.assertFalse(self.dest.exists())
+
+    def test_actual_launcher_env_and_no_secret_serialization(self):
+        self.dest.mkdir()
+        binary = self.dest / 'fake-unixnu'
+        binary.write_text("""#!/usr/bin/env python3
+import os
+import sys
+assert os.environ['A04BR3_WIFI'] == '1'
+assert os.environ['XNU_OWNER_DATA_VOLUME_UUID'] == 'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36'
+assert os.environ['XNU_OWNER_CACHE_VOLUME_UUID'] == '11111111-2222-3333-4444-555555555555'
+for name in ('GIT_DIR', 'XNU_BOOTSTRAP', 'UNIXNU_OUT', 'OTHER_SECRET'):
+    assert name not in os.environ
+assert ('GITHUB_TOKEN' in os.environ) == (sys.argv[1] == 'token')
+if sys.argv[1] == 'token':
+    assert os.environ['GITHUB_TOKEN'] == 'synthetic-runtime-token'
+print('child environment PASS')
+""")
+        binary.chmod(0o755)
+        manifest = {'commands': [[str(binary), 'token'], [str(binary), 'token']]}
+        uuid = 'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36'
+        cache = '11111111-2222-3333-4444-555555555555'
+        with patch.dict(os.environ, {'GITHUB_TOKEN': 'synthetic-prepare-token',
+                                    'OTHER_SECRET': 'synthetic-other-secret'}):
+            script = m.write_launchers(self.dest, manifest, uuid, cache)
+        for name in ('build-wifi-sdk.sh', 'build-wifi-sdk.py', 'wifi-sdk-manifest.json'):
+            data = (self.dest / name).read_text()
+            for secret in ('synthetic-prepare-token', 'synthetic-runtime-token', 'synthetic-other-secret'):
+                self.assertNotIn(secret, data)
+        record = json.loads((self.dest / 'wifi-sdk-manifest.json').read_text())
+        self.assertNotIn('GITHUB_TOKEN', record['build_environment'])
+        environment = dict(os.environ, GITHUB_TOKEN='synthetic-runtime-token',
+                           GIT_DIR='/incorrect', XNU_BOOTSTRAP='1',
+                           UNIXNU_OUT='/incorrect', OTHER_SECRET='synthetic-other-secret')
+        result = subprocess.run(['sh', str(script)], env=environment, text=True,
+                                capture_output=True, check=True)
+        self.assertEqual(result.stdout.count('child environment PASS'), 2)
+        self.assertNotIn('synthetic-runtime-token', result.stdout + result.stderr)
+        # Public anonymous operation still works when no runtime token is supplied.
+        manifest['commands'] = [[str(binary), 'anonymous']]
+        m.write_launchers(self.dest, manifest, uuid, cache)
+        environment.pop('GITHUB_TOKEN')
+        subprocess.run(['sh', str(script)], env=environment, capture_output=True, check=True)
+
+    def test_fixed_base_real_owner_header_generator(self):
+        if BASE_SOURCE is None:
+            self.skipTest('pass --base-source for the pinned production header generator')
+        source = m.run('git', '-C', str(BASE_SOURCE), 'show',
+                       m.PINS['UniXNU'] + ':scripts/build-xnu-4k-baseline.sh')
+        start = source.index('python3 - "$OWNER_DATA_HEADER"')
+        end = source.index('\nPY_DATA_UUID', start) + len('\nPY_DATA_UUID')
+        self.dest.mkdir()
+        header = self.dest / 'owner-data-volume.h'
+        production = self.dest / 'actual-header-step.sh'
+        production.write_text('set -eu\nOWNER_DATA_HEADER=' + shlex.quote(str(header)) +
+                              '\nOWNER_DATA_MOUNT=1\nNATIVE_RAM_BLOCK=1\n' + source[start:end] + '\n')
+        manifest = {'commands': [['bash', str(production)]]}
+        data = 'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36'
+        cache = '8846FE78-2910-4297-AF97-D59BB6F8FC16'
+        script = m.write_launchers(self.dest, manifest, data, cache)
+        subprocess.run(['sh', str(script)], check=True)
+        self.assertEqual(header.read_text(), '#define XNU_OWNER_DATA_VOLUME_UUID "' + data +
+                         '"\n#define XNU_OWNER_CACHE_VOLUME_UUID "' + cache + '"\n')
+
+    def test_launcher_symlink_rejected_before_any_output_write(self):
+        self.dest.mkdir()
+        external = self.root / 'protected'
+        external.write_bytes(b'preserve source')
+        (self.dest / 'build-wifi-sdk.py').symlink_to(external)
+        with self.assertRaisesRegex(ValueError, 'not a regular file'):
+            m.write_launchers(self.dest, {'commands': []},
+                              'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36',
+                              '8846FE78-2910-4297-AF97-D59BB6F8FC16')
+        self.assertEqual(external.read_bytes(), b'preserve source')
+        self.assertFalse((self.dest / 'wifi-sdk-manifest.json').exists())
+        self.assertFalse((self.dest / 'build-wifi-sdk.sh').exists())
 
     def test_only_official_kernel_commands(self):
         commands = m.commands(self.dest, 4)
@@ -217,4 +344,9 @@ class PrepareTests(unittest.TestCase):
             self.assertIn(str(self.dest / 'out'), command)
         self.assertIn(str(self.dest / 'kernelcache.decompressed'), commands[1])
 
-if __name__ == '__main__': unittest.main()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--base-source', type=Path)
+    options, remaining = parser.parse_known_args()
+    BASE_SOURCE = options.base_source
+    unittest.main(argv=[sys.argv[0], *remaining])

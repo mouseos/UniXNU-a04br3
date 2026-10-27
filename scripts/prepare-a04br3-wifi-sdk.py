@@ -204,20 +204,125 @@ def copy_submodules(source, target, snapshots):
             raise ValueError('submodule is not clean: ' + relative)
 
 
+def canonical_uuid(value):
+    import re
+    import uuid
+    if not re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', value):
+        raise argparse.ArgumentTypeError('UUID must use the 8-4-4-4-12 hexadecimal form')
+    return str(uuid.UUID(value)).upper()
+
+
+def write_launchers(destination, manifest, data_uuid, cache_uuid):
+    outputs = ('wifi-sdk-manifest.json', 'build-wifi-sdk.py', 'build-wifi-sdk.sh')
+    for name in outputs:
+        path = destination / name
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise ValueError('launcher output is not a regular file: ' + str(path))
+    # Record only non-secret, explicit inputs. Credentials are read at BUILD time.
+    environment = {k: os.environ[k] for k in
+                   ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR') if k in os.environ}
+    environment.update(A04BR3_WIFI='1', XNU_OWNER_DATA_VOLUME_UUID=data_uuid,
+                       XNU_OWNER_CACHE_VOLUME_UUID=cache_uuid)
+    manifest.update(data_volume_uuid=data_uuid, cache_volume_uuid=cache_uuid,
+                    preparation_script_sha256=digest(Path(__file__)),
+                    build_environment=environment)
+    config = {'environment': environment, 'commands': manifest['commands']}
+    launcher = '''#!/usr/bin/env python3
+"""Fixed WiFi SDK build. Token is runtime-only, never serialized or placed in argv."""
+import json
+import os
+import subprocess
+
+CONFIG = json.loads(%r)
+
+def main():
+    environment = dict(CONFIG['environment'])
+    token = os.environ.get('GITHUB_TOKEN')
+    if token:
+        environment['GITHUB_TOKEN'] = token
+    for command in CONFIG['commands']:
+        subprocess.run(command, env=environment, check=True)
+
+if __name__ == '__main__':
+    main()
+''' % json.dumps(config)
+    script = destination / 'build-wifi-sdk.sh'
+    python_launcher = destination / 'build-wifi-sdk.py'
+    python_launcher.write_text(launcher)
+    python_launcher.chmod(0o700)
+    script.write_text('#!/bin/sh\nset -eu\nexec python3 -I ' + shlex.quote(str(python_launcher)) + '\n')
+    script.chmod(0o700)
+    (destination / 'wifi-sdk-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    return script
+
+
+def refresh_launchers(destination, data_uuid, cache_uuid):
+    # Supported warm retry: update launchers only, never source, SDK or OBJ.
+    if any(p.is_symlink() for p in (destination, *destination.parents)):
+        raise ValueError('destination has a symlink component')
+    manifest_path = destination / 'wifi-sdk-manifest.json'
+    if manifest_path.is_symlink():
+        raise ValueError('manifest must not be a symlink')
+    manifest = json.loads(manifest_path.read_text())
+    try:
+        build = manifest['commands'][1]
+        jobs = int(build[build.index('-j') + 1])
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise ValueError('invalid prepared build commands') from None
+    if jobs < 1 or manifest.get('pins') != PINS or manifest['commands'] != commands(destination, jobs):
+        raise ValueError('prepared source pins or build commands mismatch')
+    if digest(destination / 'kernelcache.decompressed') != CACHE_SHA:
+        raise ValueError('prepared kernelcache mismatch')
+
+    def verify(repo, sha):
+        for flag in ('--absolute-git-dir', '--git-common-dir'):
+            metadata = Path(git(repo, 'rev-parse', '--path-format=absolute', flag)).resolve()
+            if not metadata.is_relative_to(destination.resolve()):
+                raise ValueError('prepared repository references external Git metadata')
+            if (metadata / 'objects/info/alternates').exists():
+                raise ValueError('prepared repository has external Git object alternates')
+        if Path(git(repo, 'rev-parse', '--show-toplevel')).resolve() != repo.resolve():
+            raise ValueError('prepared repository has an external worktree')
+        if git(repo, 'rev-parse', 'HEAD') != sha or git(repo, 'status', '--porcelain', '--untracked-files=all'):
+            raise ValueError('prepared repository is not clean at its pin: ' + str(repo))
+        for relative, child_sha in gitlinks(repo):
+            verify(repo / relative, child_sha)
+    for repo in ('UniXNU', 'UniXNU-a04br3'):
+        verify(destination / repo, PINS[repo])
+    if git(destination / 'UniXNU/drivers/NativeMsdc', 'rev-parse', 'HEAD') != PINS['NativeMsdc']:
+        raise ValueError('prepared NativeMsdc mismatch')
+    script = write_launchers(destination, manifest, data_uuid, cache_uuid)
+    print('Refreshed launchers only: ' + str(script))
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--existing-base', type=Path, required=True)
-    p.add_argument('--existing-device', type=Path, required=True)
-    p.add_argument('--existing-tree', type=Path, required=True)
-    p.add_argument('--kernelcache', type=Path, required=True)
+    p.add_argument('--existing-base', type=Path)
+    p.add_argument('--existing-device', type=Path)
+    p.add_argument('--existing-tree', type=Path)
+    p.add_argument('--kernelcache', type=Path)
     p.add_argument('--destination', type=Path, required=True)
+    p.add_argument('--data-volume-uuid', type=canonical_uuid, required=True,
+                   help='observed Data UUID (never inherited implicitly)')
+    p.add_argument('--cache-volume-uuid', type=canonical_uuid,
+                   default='8846FE78-2910-4297-AF97-D59BB6F8FC16',
+                   help='SystemOS UUID; default matches fixed base source')
     p.add_argument('--jobs', type=int, default=4)
-    p.add_argument('--prepare', action='store_true', help='create NEW workspace; otherwise check only')
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument('--prepare', action='store_true', help='create NEW workspace; otherwise check only')
+    mode.add_argument('--refresh-launcher', action='store_true',
+                      help='verify an existing prepared workspace and refresh launchers only')
     a = p.parse_args()
     if platform.system() != 'Darwin':
         p.error('runner preparation requires macOS (host fixtures run separately)')
     if a.jobs < 1:
         p.error('jobs must be positive')
+    if a.refresh_launcher:
+        refresh_launchers(a.destination.absolute(), a.data_volume_uuid, a.cache_volume_uuid)
+        return
+    for name in ('existing_base', 'existing_device', 'existing_tree', 'kernelcache'):
+        if getattr(a, name) is None:
+            p.error('--' + name.replace('_', '-') + ' is required without --refresh-launcher')
     sdk = a.existing_tree.resolve() / '.cache/fakeroot'
     destination = a.destination.absolute()
     if destination == a.existing_tree.resolve() or a.existing_tree.resolve() in destination.parents:
@@ -266,17 +371,7 @@ def main():
                 'pins': PINS, 'kernelcache_sha256': CACHE_SHA, 'sdk_tools': tools,
                 'sdk_manifest': before, 'commands': commands(destination, a.jobs),
                 'build_executed': False, 'reused_obj': False}
-    (destination / 'wifi-sdk-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    # Deliberately discard inherited XNU/local override flags, not the owner's
-    # environment or checkout. Only the NEW build process has this environment.
-    environment = ' '.join(shlex.quote(k + '=' + os.environ[k]) for k in
-                           ('PATH', 'HOME', 'TMPDIR', 'DEVELOPER_DIR') if k in os.environ)
-    lines = ['#!/bin/sh', 'set -eu']
-    for command in manifest['commands']:
-        lines.append('env -i ' + environment + ' A04BR3_WIFI=1 ' + shlex.join(command))
-    script = destination / 'build-wifi-sdk.sh'
-    script.write_text('\n'.join(lines) + '\n')
-    script.chmod(0o700)
+    script = write_launchers(destination, manifest, a.data_volume_uuid, a.cache_volume_uuid)
     print('Prepared only: ' + str(script))
 
 if __name__ == '__main__':
