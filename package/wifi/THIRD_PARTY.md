@@ -6,10 +6,10 @@ integration and hardware qualification are separate from source provenance.
 - `IMPORT.sources.json`: 107 original blobs from
   `mouseos/xnu_kernel_benesse_a04br3` commit
   `f5d43bf1677955e7e367545b9bbbd6449776cdda`. The original blob hashes were
-  checked against that commit. 99 remain byte-identical; eight adaptations are
+  checked against that commit. 94 remain byte-identical; thirteen adaptations are
   recorded with both hashes in `PORT.sources.json`. They change boot firmware
   views, opt-in/service allocation and crypto/nonce binding for this port, plus
-  AVB option enum typing, initialization/interface-down guard formatting and their Apple source
+  AVB option enum typing, initialization/interface-down/input guard formatting and power/output enum typing and their Apple source
   provenance metadata.
 - `network/apple/SOURCE.json`: original Apple IONetworkingFamily revision
   `bb910e2b458939f6b1f53c0fa6907f258b431ea4`, original and vendored hashes,

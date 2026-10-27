@@ -395,8 +395,10 @@ UInt32 IOMbufMemoryCursor::genPhysicalSegments(mbuf_t packet, void *vector,
 
         // Allocate a non-header mbuf + cluster.
         if (mbuf_getpacket( MBUF_DONTWAIT, &out ))
-			return 0;
-		mbuf_setflags( out, mbuf_flags( out ) & ~MBUF_PKTHDR );
+        {
+            return 0;
+        }
+        mbuf_setflags( out, mbuf_flags( out ) & ~MBUF_PKTHDR );
         dst = (uintptr_t)mbuf_data(out);
 
         do

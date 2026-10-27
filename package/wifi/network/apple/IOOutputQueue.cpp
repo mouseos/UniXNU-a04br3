@@ -495,7 +495,7 @@ void IOBasicOutputQueue::output(IOMbufQueue * queue, UInt32 * state)
 
         status = (_target->*_action)( pkt, 0 );
 
-        if ( status == ( kIOOutputStatusAccepted | kIOOutputCommandNone ) )
+        if ( status == ( static_cast<UInt32>(kIOOutputStatusAccepted) | static_cast<UInt32>(kIOOutputCommandNone) ) )
         {
             // Fast-path the typical code path.
             _stats->outputCount++;
@@ -931,7 +931,7 @@ void IOGatedOutputQueue::gatedOutput(OSObject *          /* owner */,
 
         status = ((self->_target)->*(self->_action))( pkt, 0 );
 
-        if ( status == ( kIOOutputStatusAccepted | kIOOutputCommandNone ) )
+        if ( status == ( static_cast<UInt32>(kIOOutputStatusAccepted) | static_cast<UInt32>(kIOOutputCommandNone) ) )
         {
             // Fast-path the typical code path.
             self->_stats->outputCount++;

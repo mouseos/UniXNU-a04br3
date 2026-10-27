@@ -43,13 +43,43 @@
       "path": "network/apple/SOURCE.json",
       "source": "iokit/Kernel/arm/network/apple/SOURCE.json",
       "original_sha256": "269134cbbf6548ba7ad84faa721f01a4805dec07fd6b67ba4f346d9ce93b590c",
-      "vendored_sha256": "8b6efe847d8861264c03fe376cd871c94b00f01445e50073779830710914f943"
+      "vendored_sha256": "447bb92e255205fe05c87ec57cd33290c081a24869ec315687885e124c1fc5ff"
     },
     {
       "path": "network/apple/IOEthernetInterface.cpp",
       "source": "iokit/Kernel/arm/network/apple/IOEthernetInterface.cpp",
       "original_sha256": "b84420c5346be67a439eda56ba5d0a6a7ac144e29915b5dbe201249be818e826",
       "vendored_sha256": "77d5fbbd15e0172dcbdbcf9cc81dcb22ecfddcb2fb5c4731b6ce38eeb321931a"
+    },
+    {
+      "path": "network/apple/IOKernelDebugger.cpp",
+      "source": "iokit/Kernel/arm/network/apple/IOKernelDebugger.cpp",
+      "original_sha256": "8cd2c26efc1df550c8ddfd0874d3fbed21a7c572c8892a9d90c5aa5302a3ff5a",
+      "vendored_sha256": "deb9b0bb2df2267b48d7b3418ab88626c4a41d020f1d7f6c7dc15c13eaf138b3"
+    },
+    {
+      "path": "network/apple/IOMbufMemoryCursor.cpp",
+      "source": "iokit/Kernel/arm/network/apple/IOMbufMemoryCursor.cpp",
+      "original_sha256": "0cccf37e60e844047f744eb0d86e3ba30fc14355c9c36738224c577438e86974",
+      "vendored_sha256": "2868c633087cdae0ddd8ec78f29a023c64005d47b392cbce30734ab042328e59"
+    },
+    {
+      "path": "network/apple/IONetworkInterface.cpp",
+      "source": "iokit/Kernel/arm/network/apple/IONetworkInterface.cpp",
+      "original_sha256": "244de72d8bdaae1169f6f5390ab61f4f718d3be5bd1987f919828f5268cab1b3",
+      "vendored_sha256": "d6381d3f26f672e99e049bc588f25c2b73500e43c3404ef2328f1d00fb951121"
+    },
+    {
+      "path": "network/apple/IOOutputQueue.cpp",
+      "source": "iokit/Kernel/arm/network/apple/IOOutputQueue.cpp",
+      "original_sha256": "1f3c4b693c8af16300c8c57fe2a695e46982cb63abda369ad71a35727d469fe9",
+      "vendored_sha256": "2ad0f9d051775db812c5a2e5f549d0d7dfdf44f6170ea275110344ce76b32fa5"
+    },
+    {
+      "path": "network/apple/IOOutputQueue.h",
+      "source": "iokit/Kernel/arm/network/apple/IOOutputQueue.h",
+      "original_sha256": "8678c16e1f3e6d8dd159ad261ffd6230a6ef3473045ba5245a96758292afb4d7",
+      "vendored_sha256": "97e7a4118c5cc08904ebeb98f747f10ae65e3e666b0daaa9bbaf8f8554371965"
     }
   ],
   "bearssl_files": [

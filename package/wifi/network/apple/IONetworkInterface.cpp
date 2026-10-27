@@ -201,7 +201,9 @@ bool IONetworkInterface::init( IONetworkController * controller )
 
     _inputEventThreadCall = thread_call_allocate( handleNetworkInputEvent, this );
     if ( !_inputEventThreadCall )
+    {
         goto fail;
+    }
 
 	_privateLock = IOLockAlloc();
 	if ( _privateLock == 0)
@@ -964,11 +966,15 @@ UInt32 IONetworkInterface::inputPacket( mbuf_t          packet,
 
     // check for special debugger packet
     if (_remote_NMI_len)
+    {
         checkForRNMIPacket(packet, hdrlen, _remote_NMI_len, _remote_NMI_pattern);
+    }
 
     // input BPF tap
-	if (_inputFilterFunc)
-		feedPacketInputTap(packet);
+    if (_inputFilterFunc)
+    {
+        feedPacketInputTap(packet);
+    }
 
     // frame header at start of mbuf data
     mdata = mbuf_data(packet);
@@ -3208,11 +3214,15 @@ IOReturn IONetworkInterface::enqueueInputPacket(
 
     // check for special debugger packet
     if (_remote_NMI_len)
+    {
         checkForRNMIPacket(packet, hdrlen, _remote_NMI_len, _remote_NMI_pattern);
+    }
 
     // input BPF tap
-	if (_inputFilterFunc)
-		feedPacketInputTap(packet);
+    if (_inputFilterFunc)
+    {
+        feedPacketInputTap(packet);
+    }
 
     // frame header at start of mbuf data
     mdata = mbuf_data(packet);

@@ -76,9 +76,9 @@ enum {
 */
 
 enum {
-    kIOReturnOutputSuccess = (kIOOutputStatusAccepted | kIOOutputCommandNone),
-    kIOReturnOutputDropped = (kIOOutputStatusDropped  | kIOOutputCommandNone),
-    kIOReturnOutputStall   = (kIOOutputStatusRetry    | kIOOutputCommandStall)
+    kIOReturnOutputSuccess = (static_cast<UInt32>(kIOOutputStatusAccepted) | static_cast<UInt32>(kIOOutputCommandNone)),
+    kIOReturnOutputDropped = (static_cast<UInt32>(kIOOutputStatusDropped) | static_cast<UInt32>(kIOOutputCommandNone)),
+    kIOReturnOutputStall   = (static_cast<UInt32>(kIOOutputStatusRetry) | static_cast<UInt32>(kIOOutputCommandStall))
 };
 
 /*! @class IOOutputQueue

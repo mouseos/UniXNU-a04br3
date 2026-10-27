@@ -761,7 +761,8 @@ bool IOKernelDebugger::handleOpen( IOService *    forClient,
         // not power managed.
 
         if ( _target->registerInterestedDriver(this) &
-             ( kIOPMDeviceUsable | kIOPMNotPowerManaged ) )
+             ( static_cast<IOPMPowerFlags>(kIOPMDeviceUsable) |
+               static_cast<IOPMPowerFlags>(kIOPMNotPowerManaged) ) )
             _state |= kEventTargetUsable;
 
         // Enable the target if possible.

@@ -54,7 +54,7 @@
       "path": "IOKernelDebugger.cpp",
       "sha256": "bbac801acc6b02279db1635235dbc7500742111a40cf83ca9b96a27ea87064d8",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOKernelDebugger.cpp",
-      "vendored_sha256": "8cd2c26efc1df550c8ddfd0874d3fbed21a7c572c8892a9d90c5aa5302a3ff5a"
+      "vendored_sha256": "deb9b0bb2df2267b48d7b3418ab88626c4a41d020f1d7f6c7dc15c13eaf138b3"
     },
     {
       "path": "IOKernelDebugger.h",
@@ -66,7 +66,7 @@
       "path": "IOMbufMemoryCursor.cpp",
       "sha256": "0a74e504c7c22b906d0f4ce87a45605377320145c8daab3ea5b9219ab3de0c58",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOMbufMemoryCursor.cpp",
-      "vendored_sha256": "0cccf37e60e844047f744eb0d86e3ba30fc14355c9c36738224c577438e86974"
+      "vendored_sha256": "2868c633087cdae0ddd8ec78f29a023c64005d47b392cbce30734ab042328e59"
     },
     {
       "path": "IOMbufMemoryCursor.h",
@@ -120,7 +120,7 @@
       "path": "IONetworkInterface.cpp",
       "sha256": "b2cf42f7c621e0709d679ac599a3778983de5c72e42afcd90bd4d4b6d93b500a",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkInterface.cpp",
-      "vendored_sha256": "244de72d8bdaae1169f6f5390ab61f4f718d3be5bd1987f919828f5268cab1b3"
+      "vendored_sha256": "d6381d3f26f672e99e049bc588f25c2b73500e43c3404ef2328f1d00fb951121"
     },
     {
       "path": "IONetworkInterface.h",
@@ -180,13 +180,13 @@
       "path": "IOOutputQueue.cpp",
       "sha256": "dd6997db37216573ac82a97309d8891b8f651160b8b3a82b3aa9c976e2d27166",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOOutputQueue.cpp",
-      "vendored_sha256": "1f3c4b693c8af16300c8c57fe2a695e46982cb63abda369ad71a35727d469fe9"
+      "vendored_sha256": "2ad0f9d051775db812c5a2e5f549d0d7dfdf44f6170ea275110344ce76b32fa5"
     },
     {
       "path": "IOOutputQueue.h",
       "sha256": "3e681a7a1ef5c4ecff3eed9c4385b8769c3916f3a90634ed6b88869d3c2ea6a1",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOOutputQueue.h",
-      "vendored_sha256": "8678c16e1f3e6d8dd159ad261ffd6230a6ef3473045ba5245a96758292afb4d7"
+      "vendored_sha256": "97e7a4118c5cc08904ebeb98f747f10ae65e3e666b0daaa9bbaf8f8554371965"
     },
     {
       "path": "IOPacketQueue.cpp",
@@ -212,7 +212,8 @@
     "ios16_stack_authorization": "A04BR3-only compatibility: retain superclass init and actual administrator check. Dedicated com.apple.networking.ionetworkstack.user-client, if present, must be canonical true; false/malformed denies without fallback. Only if absent, accept an actual owning-task signed com.apple.security.iokit-user-client-class array containing exact IONetworkStackUserClient; malformed arrays and root-only callers denied. Observed donor configd signed XML supplies that exact class grant. No task-name, process-name or fabricated entitlement. Runtime IOServiceOpen errno remains unobserved.",
     "avb_option_enum_types": "IOEthernetController::allocateAVBPacket casts the direction, physically-contiguous and write-through enumerators individually to IOOptionBits before OR. Preserve all option bits; avoid Clang deprecated-anon-enum-enum-conversion without suppressing diagnostics.",
     "lladdr_down_guard_indentation": "IOEthernetInterface::syncSIOCSIFLLADDR braces and consistently indents the interface-down return only. The hardAddr lookup remains unconditional after both early guards; no branch or return behavior changes.",
-    "init_guard_indentation": "IOEthernetInterface::init braces its allocation and superclass-init early returns and consistently indents both guards. Ethernet initialization still follows only successful allocation and superclass initialization."
+    "init_guard_indentation": "IOEthernetInterface::init braces its allocation and superclass-init early returns and consistently indents both guards. Ethernet initialization still follows only successful allocation and superclass initialization.",
+    "import_warning_batch": "IOKernelDebugger uses the actual IOPMPowerFlags API type for its usable/not-power-managed mask; IOOutputQueue casts separate status/command enums to UInt32 without changing 0/1/0x102 return values. IONetworkInterface braces its event-thread allocation and independent remote-NMI/input-tap guards; IOMbufMemoryCursor braces its packet-allocation failure return and aligns the subsequent unconditional flag update. No new diagnostic suppression or behavior change."
   },
   "local_files": [
     {
