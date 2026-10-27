@@ -25,6 +25,8 @@
 #include <machine/machine_routines.h>
 #include <libkern/libkern.h>
 
+extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+
 extern "C" {
 void a04br3_autoreset_init(void);
 void a04br3_charger_init(void);
@@ -93,6 +95,7 @@ static bool a04br3_row_absent(const char *row)
 extern "C" {
 extern volatile uint32_t armcpu_smp_requested, armcpu_smp_running, armcpu_smp_step[8];
 extern volatile int32_t armcpu_smp_psci_rc[8];
+extern volatile uint32_t armcpu_core_timer[8], armcpu_core_sgi[8];
 }
 static void a04br3_thread_report(void)
 {
@@ -192,6 +195,37 @@ void msdcRootTimingReport(unsigned enabled)
         (unsigned long long)values[3], (unsigned long long)values[4], (unsigned long long)values[5]);
 }
 
+// Diagnostic sampling only. Registers and per-core counters are independently read,
+// not an atomic snapshot. CNTFRQ is the architectural timer, not CPU frequency.
+void cpuDiagnosticReport()
+{
+  static volatile uint8_t *infra;
+  static volatile uint8_t *apmixed;
+  static bool attempted;
+  if (!attempted) {
+    attempted = true;
+    infra = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10001000, 0x1000));
+    apmixed = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10018000, 0x1000));
+  }
+  uint64_t timerFrequency;
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(timerFrequency));
+  if (infra && apmixed) {
+    const uint32_t mux = *reinterpret_cast<volatile uint32_t *>(infra);
+    const uint32_t con0 = *reinterpret_cast<volatile uint32_t *>(apmixed + 0x100);
+    const uint32_t con1 = *reinterpret_cast<volatile uint32_t *>(apmixed + 0x104);
+    const uint32_t power = *reinterpret_cast<volatile uint32_t *>(apmixed + 0x110);
+    __asm__ volatile("dmb oshld" ::: "memory");
+    IOLog("a04br3 perf cpu-clk raw infra=%08x mux=%u armpll_con0=%08x con1=%08x pwr=%08x cntfrq=%llu (non-atomic; cntfrq is timer)\n",
+          mux, (mux >> 2) & 3, con0, con1, power, timerFrequency);
+  } else {
+    IOLog("a04br3 perf cpu-clk unknown map infra=%u apmixed=%u cntfrq=%llu\n",
+          infra != nullptr, apmixed != nullptr, timerFrequency);
+  }
+  IOLog("a04br3 perf irq counters timer=%u/%u/%u/%u ipi=%u/%u/%u/%u (per-core cumulative; non-atomic)\n",
+        armcpu_core_timer[0], armcpu_core_timer[1], armcpu_core_timer[2], armcpu_core_timer[3],
+        armcpu_core_sgi[0], armcpu_core_sgi[1], armcpu_core_sgi[2], armcpu_core_sgi[3]);
+}
+
 void procLogThread(void *, wait_result_t)
 {
   unsigned perf = 0, rootTiming = 0;
@@ -215,6 +249,7 @@ void procLogThread(void *, wait_result_t)
       IOLog("a04br3 perf vm pagesize=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu throttled=%llu pageable_internal=%llu pageable_external=%llu mode=%d active_compressor=%u active_swap=%u\n",
             m[0],m[1],m[2],m[3],m[4],m[5],m[6],q.throttled,q.pageable_internal,q.pageable_external,q.compressor_mode,q.compressor_active,q.swap_active);
       boot_home_perf_sample();
+      cpuDiagnosticReport();
     }
     boot_home_irq_report();
     native_powervr_submit_perf_report();
