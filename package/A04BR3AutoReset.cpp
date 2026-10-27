@@ -38,6 +38,12 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" unsigned panic_active(void);
 // The first bootstrap kernel links a display stub without NativeHidInput.
 extern "C" volatile uint32_t native_hid_input_command __attribute__((weak));
+// Exported for the opt-in CPU PMU experiment. While a probe is in progress,
+// periodic WDT feeding stops so an upper-EL hang can return to fastboot.
+extern "C" {
+volatile uint32_t a04br3_runtime_recovery_ready = 0;
+volatile uint32_t a04br3_runtime_probe_active = 0;
+}
 
 namespace {
 
@@ -173,7 +179,7 @@ bool panicObserved(void)
 
 void watchdogKick(void)
 {
-  if (!panicObserved()) wr(gToprgu, kWdtRestart, 0x1971);
+  if (!panicObserved() && !__atomic_load_n(&a04br3_runtime_probe_active, __ATOMIC_ACQUIRE)) wr(gToprgu, kWdtRestart, 0x1971);
 }
 
 void resetNow(void)
@@ -332,6 +338,8 @@ extern "C" void a04br3_autoreset_init(void)
   IOLog("a04br3-autoreset: fastboot flag %s, reset after %u s, watchdog %u s\n", flag ? "set" : "NOT set", seconds,
         kWatchdogSeconds);
   watchdogArm(kWatchdogSeconds);
+  if (flag && (rd(gToprgu, kWdtMode) & 1U))
+    __atomic_store_n(&a04br3_runtime_recovery_ready, 1U, __ATOMIC_RELEASE);
   installHaltRestart(); // opt-in only, after TOPRGU/RTC setup; existing XNU panic notifications
   thread_t thread = nullptr;
   if (kernel_thread_start(cycleThread, nullptr, &thread) == KERN_SUCCESS) {
