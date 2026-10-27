@@ -371,3 +371,35 @@ void boot_home_irq_report(void) {
  for(unsigned i=0;i<8 && top[i].hits;++i)
   printf("a04br3 irq pc bucket=%llx hits=%llu epoch=%llu\n",top[i].pc,top[i].hits,epoch);
 }
+
+// IPI counters are enabled only for the diagnostic boot option. The weak XNU
+// hook runs with interrupts disabled, before an actual PE dispatch; no stacks,
+// allocation, cross-calls or logging happen on the signal path.
+static unsigned ipi_reason_enabled;
+static uint64_t ipi_reason_counts[4][4][7] __attribute__((aligned(64)));
+static uint64_t ipi_reason_out_of_range;
+void boot_ipi_reason_enable(unsigned enabled) {
+ __atomic_store_n(&ipi_reason_enabled, enabled == 1, __ATOMIC_RELAXED);
+}
+void native_ipi_signal_record(unsigned source, unsigned target, unsigned signal, unsigned defer) {
+ if (!__atomic_load_n(&ipi_reason_enabled, __ATOMIC_RELAXED)) return;
+ if (source >= 4 || target >= 4) { __atomic_fetch_add(&ipi_reason_out_of_range,1ULL,__ATOMIC_RELAXED); return; }
+ unsigned kind = signal == 0 ? 0 : signal == 1 ? 1 : signal == 4 ? 2 : signal == 8 ? 3 : signal == 0x200 ? 4 : 5;
+ __atomic_fetch_add(&ipi_reason_counts[source][target][kind],1ULL,__ATOMIC_RELAXED);
+ if (defer) __atomic_fetch_add(&ipi_reason_counts[source][target][6],1ULL,__ATOMIC_RELAXED);
+}
+void boot_ipi_reason_report(void) {
+ if (!__atomic_load_n(&ipi_reason_enabled, __ATOMIC_RELAXED)) return;
+ for (unsigned source=0; source<4; ++source) {
+  uint64_t kinds[7]={0},dest[4]={0};
+  for (unsigned target=0; target<4; ++target) for (unsigned kind=0; kind<7; ++kind) {
+   uint64_t n=__atomic_load_n(&ipi_reason_counts[source][target][kind],__ATOMIC_RELAXED);
+   kinds[kind]+=n; if (kind<6) dest[target]+=n;
+  }
+  printf("a04br3 ipi reason src=%u dest=%llu/%llu/%llu/%llu nop=%llu dec=%llu xcall=%llu ast=%llu imm=%llu other=%llu defer=%llu (non-atomic)\n",
+   source,(unsigned long long)dest[0],(unsigned long long)dest[1],(unsigned long long)dest[2],(unsigned long long)dest[3],
+   (unsigned long long)kinds[0],(unsigned long long)kinds[1],(unsigned long long)kinds[2],(unsigned long long)kinds[3],
+   (unsigned long long)kinds[4],(unsigned long long)kinds[5],(unsigned long long)kinds[6]);
+ }
+ printf("a04br3 ipi reason out_of_range=%llu\n",(unsigned long long)__atomic_load_n(&ipi_reason_out_of_range,__ATOMIC_RELAXED));
+}

@@ -37,6 +37,8 @@ void boot_home_perf_sample(void);
 void boot_home_irq_init(unsigned);
 unsigned boot_home_irq_hook_available(void);
 void boot_home_irq_report(void);
+void boot_ipi_reason_enable(unsigned);
+void boot_ipi_reason_report(void);
 void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
 int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
@@ -255,6 +257,7 @@ void procLogThread(void *, wait_result_t)
       cpuDiagnosticReport();
     }
     boot_home_irq_report();
+    boot_ipi_reason_report();
     native_powervr_submit_perf_report();
     msdcRootTimingReport(rootTiming);
     cacheReportSeconds += gProcLogSeconds;
@@ -285,6 +288,9 @@ extern "C" void unixnu_board_init(void)
       irqPid = 1;  // diagnostic kernel + existing opt-in: sample launchd
   }
   boot_home_irq_init(irqPid);
+  unsigned ipiReasonPerf = 0;
+  PE_parse_boot_argn("a04br3-home-perf", &ipiReasonPerf, sizeof(ipiReasonPerf));
+  boot_ipi_reason_enable(ipiReasonPerf);
   unsigned gpuSubmitPerf = 0;
   // Existing diagnostic option avoids extending a near-capacity boot command line.
   // An explicit GPU setting takes precedence, including 0 to disable it.
