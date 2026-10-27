@@ -90,7 +90,7 @@ int main(){bool down=true;unsigned edges=0;run(down,edges);
         self.assertIn('if (perf == 1)', board)
         self.assertIn('PE_parse_boot_argn("a04br3-home-perf"', board)
         source = (ROOT / 'package/BootProcessProbe.c').read_text()
-        body = source[source.index('struct home_perf_row {'):]
+        body = source[source.index('#if PRECISE_USER_KERNEL_TIME'):]
         harness = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -98,7 +98,9 @@ int main(){bool down=true;unsigned edges=0;run(down,edges);
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
-struct fake_thread {struct fake_thread *next; unsigned state; uint64_t wait_event; int sched_lock;};
+typedef struct fake_saved {uint64_t pc,lr;} arm_saved_state_t;
+typedef struct fake_kernel {struct {struct {uint64_t fp,lr;} ss;} machine;} *thread_kernel_state_t;
+struct fake_thread {struct fake_thread *next; unsigned state; uint64_t wait_event; int sched_lock; uint64_t kernel_stack,thread_id,continuation; struct {arm_saved_state_t *upcb;} machine;};
 typedef struct fake_thread *thread_t;
 struct fake_task {thread_t threads; unsigned thread_count; int locked;};
 typedef struct fake_task *task_t;
@@ -110,6 +112,15 @@ struct proc {const char *name;int pid;task_t task;};typedef struct proc *proc_t;
 #define TH_WAIT 2
 #define queue_iterate(head,var,type,field) for((var)=*(head);(var);(var)=(var)->next)
 static int thread_lck_grp, interrupted, task_acquires, task_releases, sched_acquires, sched_releases;
+static uint64_t kernel_stack_size=4096;
+static struct fake_kernel fake_ks;
+static thread_kernel_state_t thread_get_kernel_state(thread_t t){(void)t;return &fake_ks;}
+static int is_saved_state64(arm_saved_state_t *s){return s!=0;}
+static uint64_t get_saved_state_pc(arm_saved_state_t *s){return s->pc;}
+static uint64_t get_saved_state_lr(arm_saved_state_t *s){return s->lr;}
+struct recount_times_mach {uint64_t rtm_user,rtm_system;};
+static struct recount_times_mach recount_task_times(task_t t){(void)t;return (struct recount_times_mach){3,4};}
+static struct recount_times_mach recount_thread_times(thread_t t){(void)t;return (struct recount_times_mach){5,6};}
 static unsigned strlcpy(char *d,const char *s,unsigned n) {snprintf(d,n,"%s",s);return strlen(s);}
 static const char *proc_best_name(proc_t p){return p->name;}
 static int proc_pid(proc_t p){return p->pid;}
@@ -155,7 +166,15 @@ int main(void){
  struct proc changed={"unselected_worker",25,&task};unsigned saved=home_perf_count;
  assert(home_perf_capture(&changed,NULL)==PROC_RETURNED && home_perf_count==saved);
  task.locked=1;boot_home_perf_sample();assert(home_perf_rows[0].busy==1 && !home_perf_rows[0].sampled);
- task.locked=0;for(unsigned i=0;i<16;++i)procs[i]=(struct proc){"logd",(int)i+1,&task};
+ task.locked=0;
+ procs[0]=(struct proc){"launchd",1,&task};procs[1].name=0;
+ arm_saved_state_t savedpc={.pc=0x1234,.lr=0x5678};
+ for(unsigned i=0;i<40;++i){th[i].thread_id=i+1;th[i].machine.upcb=&savedpc;}
+ output_used=0;output[0]=0;boot_home_perf_sample();
+ assert(home_perf_count==1 && home_perf_rows[0].detail_count==8);
+ assert(strstr(output,"split=0 user_ns=6 system_ns=8"));
+ assert(strstr(output,"pc=1234 lr=5678"));
+ for(unsigned i=0;i<16;++i)procs[i]=(struct proc){"logd",(int)i+1,&task};
  boot_home_perf_sample();assert(home_perf_count==10);
  assert(task_acquires==task_releases && sched_acquires==sched_releases);
  return 0;

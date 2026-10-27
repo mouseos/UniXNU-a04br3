@@ -6,6 +6,7 @@
 // of the last complete result; never expose an in-progress row to the renderer.
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/recount.h>
 #include <kern/simple_lock.h>
 #include <machine/machine_routines.h>
 #include <mach/mach_time.h>
@@ -194,10 +195,35 @@ void boot_process_snapshot(void) {
 
 // Default-off sampler, invoked only by the existing heartbeat worker. No UI
 // stack walk or printing while task/scheduler locks are held.
-struct home_perf_row {
- char name[24]; int pid; unsigned threads, running, waiting, busy, sampled, state;
- uint64_t uniqueid, wait, cpu_ticks, cpu_at, resident, compressed, footprint;
+#if PRECISE_USER_KERNEL_TIME
+#define HOME_PERF_PRECISE 1u
+#else
+#define HOME_PERF_PRECISE 0u
+#endif
+#define HOME_PERF_THREADS 8
+struct home_perf_thread {
+ uint64_t tid, user_ticks, system_ticks, pc, lr, event, continuation, kernel[4];
+ unsigned state, valid_pc, valid_kernel;
 };
+struct home_perf_row {
+ char name[24]; int pid; unsigned threads, running, waiting, busy, sampled, state, detail_count;
+ uint64_t uniqueid, wait, cpu_ticks, cpu_at, resident, compressed, footprint;
+ uint64_t user_ticks, system_ticks;
+ struct home_perf_thread detail[HOME_PERF_THREADS];
+};
+// Capture saved kernel state only for a thread that is not runnable. A running
+// thread's switched-out frame is stale; never claim it is its current stack.
+static void home_perf_kernel_stack(thread_t th, struct home_perf_thread *d) {
+ if ((th->state & TH_RUN) || !th->kernel_stack) return;
+ uint64_t low=(uint64_t)th->kernel_stack, high=low+(uint64_t)kernel_stack_size;
+ if (high<low) return;
+ thread_kernel_state_t k=thread_get_kernel_state(th);
+ uint64_t fp=k->machine.ss.fp; d->kernel[0]=k->machine.ss.lr;d->valid_kernel=1;
+ for(unsigned i=1;i<4 && fp>=low && fp<=high && high-fp>=16 && !(fp&15);++i) {
+  const uint64_t *frame=(const uint64_t *)fp;d->kernel[i]=frame[1];
+  uint64_t next=frame[0];if(next<=fp)break;fp=next;
+ }
+}
 static struct home_perf_row home_perf_rows[10];
 static unsigned home_perf_count;
 static int home_perf_selected(proc_t p, void *unused) {
@@ -212,7 +238,10 @@ static int home_perf_capture(proc_t p, void *unused) {
  struct home_perf_row *r=&home_perf_rows[home_perf_count++];
  memset(r,0,sizeof(*r));strlcpy(r->name,proc_best_name(p),sizeof(r->name));r->pid=proc_pid(p);r->uniqueid=proc_uniqueid(p);
  task_t task=proc_task(p);if(!task){r->busy=1;return PROC_RETURNED;}
- r->cpu_ticks=get_task_cpu_time(task);r->cpu_at=mach_absolute_time();r->resident=get_task_resident_size(task);
+ r->cpu_ticks=get_task_cpu_time(task);r->cpu_at=mach_absolute_time();
+ struct recount_times_mach times=recount_task_times(task);
+ r->user_ticks=times.rtm_user;r->system_ticks=times.rtm_system;
+ r->resident=get_task_resident_size(task);
  r->compressed=get_task_compressed(task);r->footprint=get_task_phys_footprint(task);
  if(!task_lock_try(task)){r->busy=1;return PROC_RETURNED;}
  r->threads=task->thread_count; thread_t th; unsigned scanned=0;
@@ -222,6 +251,15 @@ static int home_perf_capture(proc_t p, void *unused) {
   if(!simple_lock_try(&th->sched_lock,&thread_lck_grp)){++r->busy;ml_set_interrupts_enabled(irq);continue;}
   unsigned st=(unsigned)th->state;r->running+=(st&TH_RUN)!=0;r->waiting+=(st&TH_WAIT)!=0;
   if(!r->sampled){r->sampled=1;r->state=st;r->wait=(uint64_t)th->wait_event;}
+  if(r->pid==1 && r->detail_count<HOME_PERF_THREADS) {
+   struct home_perf_thread *d=&r->detail[r->detail_count++];
+   struct recount_times_mach tt=recount_thread_times(th);
+   d->tid=th->thread_id;d->state=st;d->event=(uint64_t)th->wait_event;
+   d->continuation=(uint64_t)th->continuation;d->user_ticks=tt.rtm_user;d->system_ticks=tt.rtm_system;
+   arm_saved_state_t *saved=th->machine.upcb;
+   if(saved && is_saved_state64(saved)){d->valid_pc=1;d->pc=get_saved_state_pc(saved);d->lr=get_saved_state_lr(saved);}
+   home_perf_kernel_stack(th,d);
+  }
   thread_unlock(th);ml_set_interrupts_enabled(irq);
  }
  task_unlock(task);return PROC_RETURNED;
@@ -232,9 +270,21 @@ void boot_home_perf_sample(void) {
  uint64_t now=0;absolutetime_to_nanoseconds(mach_absolute_time(),&now);
  printf("a04br3 perf sample ns=%llu tasks=%u\n",now,home_perf_count);
  for(unsigned i=0;i<home_perf_count;++i){
-  struct home_perf_row *r=&home_perf_rows[i];uint64_t cpu=0, at=0;
+  struct home_perf_row *r=&home_perf_rows[i];uint64_t cpu=0, at=0, user=0, system=0;
   absolutetime_to_nanoseconds(r->cpu_ticks,&cpu);absolutetime_to_nanoseconds(r->cpu_at,&at);
+  absolutetime_to_nanoseconds(r->user_ticks,&user);absolutetime_to_nanoseconds(r->system_ticks,&system);
   printf("a04br3 perf task p%d %.23s uid=%llu cpu_ns=%llu cpu_at_ns=%llu resident=%llu compressed=%llu footprint=%llu threads=%u run=%u wait=%u busy=%u sampled=%u state=%x event=%llx\n",
    r->pid,r->name,r->uniqueid,cpu,at,r->resident,r->compressed,r->footprint,r->threads,r->running,r->waiting,r->busy,r->sampled,r->state,r->wait);
+  if(r->pid==1) {
+   printf("a04br3 perf launchd times split=%u user_ns=%llu system_ns=%llu\n",HOME_PERF_PRECISE,user,system);
+   for(unsigned j=0;j<r->detail_count;++j){
+    struct home_perf_thread *d=&r->detail[j];uint64_t tu=0,ts=0;
+    absolutetime_to_nanoseconds(d->user_ticks,&tu);absolutetime_to_nanoseconds(d->system_ticks,&ts);
+    printf("a04br3 perf launchd thread tid=%llu state=%x event=%llx user_ns=%llu system_ns=%llu\n",
+     d->tid,d->state,d->event,tu,ts);
+    printf("a04br3 perf launchd pc tid=%llu valid=%u pc=%llx lr=%llx cont=%llx k_valid=%u k=%llx/%llx/%llx/%llx\n",
+     d->tid,d->valid_pc,d->pc,d->lr,d->continuation,d->valid_kernel,d->kernel[0],d->kernel[1],d->kernel[2],d->kernel[3]);
+   }
+  }
  }
 }

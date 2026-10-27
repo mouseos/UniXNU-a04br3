@@ -536,3 +536,22 @@ synthetic self-test running they may refer to another publisher. HID reports
 are attempted reports, not necessarily successful delivery. The input log is
 synchronous and can delay subsequent polling. An error-triggered release is
 marked `error=<code>`.
+
+### Launchd CPU-path sampling (experimental)
+
+On this diagnostic branch `a04br3-home-perf=1` additionally reports launchd's
+recount task user/system totals and up to eight sampled threads. `split=1`
+means XNU was compiled with precise user/kernel accounting. With `split=0`,
+XNU folds system time into `user_ns`; the two modes must not be interpreted
+alike. Recount and ledger counters are separately sampled and may not match;
+use cumulative differences from the same thread ID and process unique ID.
+
+Each thread has a state, wait event, CPU totals and a separate row of saved user
+PC/LR and kernel continuation. Saved user registers can be stale while the
+thread runs in the kernel; the continuation is not the current instruction.
+Only non-runnable threads with an available kernel stack get a bounded saved
+kernel frame walk, and this is not a live backtrace of a running thread. Busy
+scheduler locks omit samples. The sampler can enumerate at most the first 32
+threads and retains at most eight successful launchd observations per interval;
+output and sampling can perturb time. Raw kernel addresses require the exact
+matching kernel symbols. No user pages are faulted in by this addition.
