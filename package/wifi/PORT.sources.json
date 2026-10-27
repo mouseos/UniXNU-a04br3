@@ -43,7 +43,7 @@
       "path": "network/apple/SOURCE.json",
       "source": "iokit/Kernel/arm/network/apple/SOURCE.json",
       "original_sha256": "269134cbbf6548ba7ad84faa721f01a4805dec07fd6b67ba4f346d9ce93b590c",
-      "vendored_sha256": "447bb92e255205fe05c87ec57cd33290c081a24869ec315687885e124c1fc5ff"
+      "vendored_sha256": "8e444a1f0c72ebd6f28ea1e908ba7e37ce1696507752069fec846c78f4facd64"
     },
     {
       "path": "network/apple/IOEthernetInterface.cpp",
@@ -67,19 +67,37 @@
       "path": "network/apple/IONetworkInterface.cpp",
       "source": "iokit/Kernel/arm/network/apple/IONetworkInterface.cpp",
       "original_sha256": "244de72d8bdaae1169f6f5390ab61f4f718d3be5bd1987f919828f5268cab1b3",
-      "vendored_sha256": "d6381d3f26f672e99e049bc588f25c2b73500e43c3404ef2328f1d00fb951121"
+      "vendored_sha256": "ff2e4a5d9f52b92910d158a5cc519634f4e96eb7b11918859e3f26f313384669"
     },
     {
       "path": "network/apple/IOOutputQueue.cpp",
       "source": "iokit/Kernel/arm/network/apple/IOOutputQueue.cpp",
       "original_sha256": "1f3c4b693c8af16300c8c57fe2a695e46982cb63abda369ad71a35727d469fe9",
-      "vendored_sha256": "2ad0f9d051775db812c5a2e5f549d0d7dfdf44f6170ea275110344ce76b32fa5"
+      "vendored_sha256": "5ee62111a95ff075c85324e289d8b2609f737d8150e381fe3daee96f25444e49"
     },
     {
       "path": "network/apple/IOOutputQueue.h",
       "source": "iokit/Kernel/arm/network/apple/IOOutputQueue.h",
       "original_sha256": "8678c16e1f3e6d8dd159ad261ffd6230a6ef3473045ba5245a96758292afb4d7",
       "vendored_sha256": "97e7a4118c5cc08904ebeb98f747f10ae65e3e666b0daaa9bbaf8f8554371965"
+    },
+    {
+      "path": "network/apple/IONetworkController.cpp",
+      "source": "iokit/Kernel/arm/network/apple/IONetworkController.cpp",
+      "original_sha256": "57c67074f479258147b09d1b1674f0eeb884a76406ff8a049d22e5cace4dad68",
+      "vendored_sha256": "99a07f2b1fe86d3b54ac15a70b42aaa406860bb4cd7d10da41bf5896137b21a1"
+    },
+    {
+      "path": "network/A04BR3BSDNetwork.cpp",
+      "source": "iokit/Kernel/arm/network/A04BR3BSDNetwork.cpp",
+      "original_sha256": "5a42bc8c629ae324e0899eec074d423732e19bf02218f090acd666b8c77c06cf",
+      "vendored_sha256": "79ac420468561aa8c142e7a05f1f630dd2a309db5bcbd657df94d1be62474ed1"
+    },
+    {
+      "path": "sdio/A04BR3WMTRoundtrip.h",
+      "source": "iokit/Kernel/arm/sdio/A04BR3WMTRoundtrip.h",
+      "original_sha256": "b0a2dfab1147e9e37a4a7d942bd92ccd1a25bcf6e0fb9c4b70a006bd29a56a35",
+      "vendored_sha256": "623fa2b939c89b177d36455bebd8ab665fc583f29988916a067e9b038527f92b"
     }
   ],
   "bearssl_files": [

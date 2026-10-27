@@ -1938,7 +1938,6 @@ IOReturn IONetworkController::selectMediumWithName(const OSSymbol * mediumName)
 bool IONetworkController::setSelectedMedium(const IONetworkMedium * medium)
 {
     bool  success = true;
-    bool  changed = false;
     const OSSymbol * name = medium ? medium->getName() : gIONullMediumName;
 
     MEDIUM_LOCK;
@@ -1947,7 +1946,6 @@ bool IONetworkController::setSelectedMedium(const IONetworkMedium * medium)
 	{
 		if ( setProperty(gIOCurrentMediumKey, (OSSymbol *) name) )
 	    {
-			changed                = true;
 			_lastCurrentMediumName = name;
 		}
 		else
@@ -1956,10 +1954,7 @@ bool IONetworkController::setSelectedMedium(const IONetworkMedium * medium)
 
     MEDIUM_UNLOCK;
 
-#if 0
-    if (changed)
-        _broadcastEvent(kIONetworkEventTypeLinkChange);
-#endif
+    // Link-change broadcasting remains disabled, as in the original implementation.
 
     return success;
 }

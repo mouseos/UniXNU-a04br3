@@ -1014,11 +1014,19 @@ bool IONetworkInterface::inputEvent(UInt32 type, void * data)
     bool      success = true;
     ifnet_t   eventIfp = getIfnet();
 
+    // kern_event_msg may end in a flexible array. Keep its fixed prefix in
+    // aligned byte storage, followed by the standard family/unit/name payload.
     struct {
-        kern_event_msg  header;
+        alignas(kern_event_msg) unsigned char header[KEV_MSG_HEADER_SIZE];
+        uint32_t        family;
         uint32_t        unit;
         char            if_name[IFNAMSIZ];
     } event;
+    kern_event_msg eventHeader;
+    static_assert(offsetof(decltype(event), family) == KEV_MSG_HEADER_SIZE,
+                  "network event payload must follow the fixed kernel header");
+    static_assert(sizeof(event) == KEV_MSG_HEADER_SIZE + 2 * sizeof(uint32_t) + IFNAMSIZ,
+                  "network event wire size must remain unchanged");
 
     const IONetworkLinkEventData * linkData;
 
@@ -1049,17 +1057,19 @@ bool IONetworkInterface::inputEvent(UInt32 type, void * data)
                 (type == kIONetworkEventTypeLinkDown))
             {
 				bzero(&event, sizeof(event));
-                event.header.total_size    = sizeof(event);
-                event.header.vendor_code   = KEV_VENDOR_APPLE;
-                event.header.kev_class     = KEV_NETWORK_CLASS;
-                event.header.kev_subclass  = KEV_DL_SUBCLASS;
-                event.header.event_code    = (type == kIONetworkEventTypeLinkUp) ?
+                bzero(&eventHeader, sizeof(eventHeader));
+                eventHeader.total_size    = sizeof(event);
+                eventHeader.vendor_code   = KEV_VENDOR_APPLE;
+                eventHeader.kev_class     = KEV_NETWORK_CLASS;
+                eventHeader.kev_subclass  = KEV_DL_SUBCLASS;
+                eventHeader.event_code    = (type == kIONetworkEventTypeLinkUp) ?
                                              KEV_DL_LINK_ON : KEV_DL_LINK_OFF;
-				event.header.event_data[0] = ifnet_family(eventIfp);
+				event.family = ifnet_family(eventIfp);
                 event.unit                 = ifnet_unit(eventIfp);
                 strncpy(&event.if_name[0], ifnet_name(eventIfp), IFNAMSIZ);
 
-                ifnet_event(eventIfp, &event.header);
+                bcopy(&eventHeader, event.header, KEV_MSG_HEADER_SIZE);
+                ifnet_event(eventIfp, reinterpret_cast<kern_event_msg *>(&event));
 
                 retain();
                 if (thread_call_enter1(_inputEventThreadCall, (thread_call_param_t)(uintptr_t)type) == TRUE)
@@ -1953,7 +1963,12 @@ IONetworkInterface::powerChangeHandler( void * target,
 
         self->_driver->executeCommand(
               /* client */ self,
-              /* action */ (IONetworkController::Action) &powerChangeHandler,
+              /* action */ [](void * callbackTarget, void * callbackParam0,
+                              void * callbackParam1, void *, void *) -> IOReturn {
+                  IONetworkInterface::powerChangeHandler(
+                      callbackTarget, callbackParam0, callbackParam1);
+                  return kIOReturnSuccess;
+              },
               /* target */ self,
               /* param0 */ param0,
               /* param1 */ (void *) true );

@@ -214,8 +214,11 @@ bool IOBasicOutputQueue::init(OSObject *     target,
                    sizeof(IOOutputQueueStats),
                    kIONetworkDataBasicAccessTypes,
                    this,
-                   (IONetworkData::Action)
-                       &IOBasicOutputQueue::dispatchNetworkDataNotification,
+                   [](void * target, void * param, IONetworkData * data,
+                      UInt32 type, void *, UInt32 *, UInt32) -> IOReturn {
+                       return IOBasicOutputQueue::dispatchNetworkDataNotification(
+                           target, param, data, type);
+                   },
                    kIOOutputQueueSignature);
 
     if (_statsData == 0)
@@ -543,7 +546,7 @@ bool IOBasicOutputQueue::start()
 
     STATE_SET( kStateRunning );
     STATE_CLR( kStateOutputStalled );
-    _serviceCount++;
+    _serviceCount = _serviceCount + 1;
 
     if ( STATE_IS( kStateRunning ) )
     {
@@ -606,7 +609,7 @@ bool IOBasicOutputQueue::service(IOOptionBits options)
     // Clear the stall condition.
 
     STATE_CLR( kStateOutputStalled );
-    _serviceCount++;
+    _serviceCount = _serviceCount + 1;
     
     bool workToDo = false;
     for(UInt32 i = 0; i < _priorities; i++)
@@ -979,8 +982,15 @@ enum {
 
 void IOGatedOutputQueue::output(IOMbufQueue * queue, UInt32 * state)
 {
-    if ( _gate->attemptAction((IOCommandGate::Action)
-                                &IOGatedOutputQueue::gatedOutput,
+    if ( _gate->attemptAction(
+            [](OSObject * owner, void * self, void * packets, void * flags,
+               void *) -> IOReturn {
+                IOGatedOutputQueue::gatedOutput(
+                    owner, static_cast<IOGatedOutputQueue *>(self),
+                    static_cast<IOMbufQueue *>(packets),
+                    static_cast<UInt32 *>(flags));
+                return kIOReturnSuccess;
+            },
                               (void *) this,
                               (void *) queue,
                               (void *) state) == kIOReturnCannotLock )

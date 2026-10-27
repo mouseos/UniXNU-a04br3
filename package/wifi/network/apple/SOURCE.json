@@ -84,7 +84,7 @@
       "path": "IONetworkController.cpp",
       "sha256": "39ecaaec08c69661df2cab58868d750275d515113de1f455e690a5ac11640f6d",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkController.cpp",
-      "vendored_sha256": "57c67074f479258147b09d1b1674f0eeb884a76406ff8a049d22e5cace4dad68"
+      "vendored_sha256": "99a07f2b1fe86d3b54ac15a70b42aaa406860bb4cd7d10da41bf5896137b21a1"
     },
     {
       "path": "IONetworkController.h",
@@ -120,7 +120,7 @@
       "path": "IONetworkInterface.cpp",
       "sha256": "b2cf42f7c621e0709d679ac599a3778983de5c72e42afcd90bd4d4b6d93b500a",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IONetworkInterface.cpp",
-      "vendored_sha256": "d6381d3f26f672e99e049bc588f25c2b73500e43c3404ef2328f1d00fb951121"
+      "vendored_sha256": "ff2e4a5d9f52b92910d158a5cc519634f4e96eb7b11918859e3f26f313384669"
     },
     {
       "path": "IONetworkInterface.h",
@@ -180,7 +180,7 @@
       "path": "IOOutputQueue.cpp",
       "sha256": "dd6997db37216573ac82a97309d8891b8f651160b8b3a82b3aa9c976e2d27166",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOOutputQueue.cpp",
-      "vendored_sha256": "2ad0f9d051775db812c5a2e5f549d0d7dfdf44f6170ea275110344ce76b32fa5"
+      "vendored_sha256": "5ee62111a95ff075c85324e289d8b2609f737d8150e381fe3daee96f25444e49"
     },
     {
       "path": "IOOutputQueue.h",
@@ -213,7 +213,10 @@
     "avb_option_enum_types": "IOEthernetController::allocateAVBPacket casts the direction, physically-contiguous and write-through enumerators individually to IOOptionBits before OR. Preserve all option bits; avoid Clang deprecated-anon-enum-enum-conversion without suppressing diagnostics.",
     "lladdr_down_guard_indentation": "IOEthernetInterface::syncSIOCSIFLLADDR braces and consistently indents the interface-down return only. The hardAddr lookup remains unconditional after both early guards; no branch or return behavior changes.",
     "init_guard_indentation": "IOEthernetInterface::init braces its allocation and superclass-init early returns and consistently indents both guards. Ethernet initialization still follows only successful allocation and superclass initialization.",
-    "import_warning_batch": "IOKernelDebugger uses the actual IOPMPowerFlags API type for its usable/not-power-managed mask; IOOutputQueue casts separate status/command enums to UInt32 without changing 0/1/0x102 return values. IONetworkInterface braces its event-thread allocation and independent remote-NMI/input-tap guards; IOMbufMemoryCursor braces its packet-allocation failure return and aligns the subsequent unconditional flag update. No new diagnostic suppression or behavior change."
+    "import_warning_batch": "IOKernelDebugger uses the actual IOPMPowerFlags API type for its usable/not-power-managed mask; IOOutputQueue casts separate status/command enums to UInt32 without changing 0/1/0x102 return values. IONetworkInterface braces its event-thread allocation and independent remote-NMI/input-tap guards; IOMbufMemoryCursor braces its packet-allocation failure return and aligns the subsequent unconditional flag update. No new diagnostic suppression or behavior change.",
+    "typed_callback_bridges": "Non-capturing lambdas exactly match IONetworkData::Action, IONetworkController::Action and IOCommandGate::Action, forward the original consumed arguments to the unchanged private static handlers, ignore only trailing unused arguments, and return the original stats result or explicit success after void handlers. No class headers, layouts, virtual methods or existing callback declarations changed.",
+    "network_event_wire_storage": "IONetworkInterface inputEvent stores only the fixed KEV_MSG_HEADER_SIZE prefix in aligned bytes followed by family/unit/IFNAMSIZ name. A standalone kern_event_msg supplies initialized prefix fields; static assertions and tests preserve 48-byte wire output with event_data[1] or flexible event_data[].",
+    "unused_medium_and_volatile_counters": "Remove changed bookkeeping used only by an already-disabled link broadcast; property updates and lock cleanup remain. Replace both volatile serviceCount increments with explicit read-plus-one assignment under the existing queue lock; no field or synchronization changes."
   },
   "local_files": [
     {
