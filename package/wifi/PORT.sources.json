@@ -43,13 +43,13 @@
       "path": "network/apple/SOURCE.json",
       "source": "iokit/Kernel/arm/network/apple/SOURCE.json",
       "original_sha256": "269134cbbf6548ba7ad84faa721f01a4805dec07fd6b67ba4f346d9ce93b590c",
-      "vendored_sha256": "94ad20a70f7c711f804c23b6228b8a1beb4dd2c2444bc0bdc6bec473392104cd"
+      "vendored_sha256": "8b6efe847d8861264c03fe376cd871c94b00f01445e50073779830710914f943"
     },
     {
       "path": "network/apple/IOEthernetInterface.cpp",
       "source": "iokit/Kernel/arm/network/apple/IOEthernetInterface.cpp",
       "original_sha256": "b84420c5346be67a439eda56ba5d0a6a7ac144e29915b5dbe201249be818e826",
-      "vendored_sha256": "d631ef55f0b8eb29fb7c1226ebe2c9d6e54cd103118118b3552b56e18d6d5cc8"
+      "vendored_sha256": "77d5fbbd15e0172dcbdbcf9cc81dcb22ecfddcb2fb5c4731b6ce38eeb321931a"
     }
   ],
   "bearssl_files": [

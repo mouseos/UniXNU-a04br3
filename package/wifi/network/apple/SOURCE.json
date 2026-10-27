@@ -30,7 +30,7 @@
       "path": "IOEthernetInterface.cpp",
       "sha256": "1339d99dbf4a7190a5b5afa0c433d0dc1eefa1e581fbfc821f085c66e2bf0a64",
       "url": "https://raw.githubusercontent.com/apple-oss-distributions/IONetworkingFamily/bb910e2b458939f6b1f53c0fa6907f258b431ea4/IOEthernetInterface.cpp",
-      "vendored_sha256": "d631ef55f0b8eb29fb7c1226ebe2c9d6e54cd103118118b3552b56e18d6d5cc8"
+      "vendored_sha256": "77d5fbbd15e0172dcbdbcf9cc81dcb22ecfddcb2fb5c4731b6ce38eeb321931a"
     },
     {
       "path": "IOEthernetInterface.h",
@@ -211,7 +211,8 @@
     "shared_backing_lifecycle": "Protected nonvirtual adopt/clear seam adds independent ifnet_reference to actual base private _backingIfnet; adopts before bridge ifnet_attach, clears and releases after actual bridge detach completes. Default allocation not called; genuine base free is fallback reference cleanup. No parent IOEthernetInterface.cpp changes.",
     "ios16_stack_authorization": "A04BR3-only compatibility: retain superclass init and actual administrator check. Dedicated com.apple.networking.ionetworkstack.user-client, if present, must be canonical true; false/malformed denies without fallback. Only if absent, accept an actual owning-task signed com.apple.security.iokit-user-client-class array containing exact IONetworkStackUserClient; malformed arrays and root-only callers denied. Observed donor configd signed XML supplies that exact class grant. No task-name, process-name or fabricated entitlement. Runtime IOServiceOpen errno remains unobserved.",
     "avb_option_enum_types": "IOEthernetController::allocateAVBPacket casts the direction, physically-contiguous and write-through enumerators individually to IOOptionBits before OR. Preserve all option bits; avoid Clang deprecated-anon-enum-enum-conversion without suppressing diagnostics.",
-    "lladdr_down_guard_indentation": "IOEthernetInterface::syncSIOCSIFLLADDR braces and consistently indents the interface-down return only. The hardAddr lookup remains unconditional after both early guards; no branch or return behavior changes."
+    "lladdr_down_guard_indentation": "IOEthernetInterface::syncSIOCSIFLLADDR braces and consistently indents the interface-down return only. The hardAddr lookup remains unconditional after both early guards; no branch or return behavior changes.",
+    "init_guard_indentation": "IOEthernetInterface::init braces its allocation and superclass-init early returns and consistently indents both guards. Ethernet initialization still follows only successful allocation and superclass initialization."
   },
   "local_files": [
     {

@@ -79,6 +79,41 @@ int main() {
 }
 '''
 
+INIT_DECLARATIONS = r'''
+struct OSObject {};
+struct ExpansionData {};
+struct IONetworkController {};
+static ExpansionData storage;
+static bool allocationSucceeds = false, superclassSucceeds = false;
+static int superclassCalls = 0, ethernetInitializations = 0;
+#define IOMallocType(type) (allocationSucceeds ? &storage : nullptr)
+enum { IFT_ETHER = 6 };
+struct Parent {
+    bool init(IONetworkController *) { ++superclassCalls; return superclassSucceeds; }
+};
+struct IOEthernetInterface : Parent {
+    using super = Parent;
+    ExpansionData *_reserved = nullptr;
+    void setInterfaceType(int) { ++ethernetInitializations; }
+    bool init(IONetworkController *);
+};
+'''
+INIT_CASES = r'''
+static void require(bool value) { if (!value) __builtin_trap(); }
+int main() {
+    IOEthernetInterface interface;
+    IONetworkController controller;
+    require(!interface.init(&controller));
+    require(superclassCalls == 0 && ethernetInitializations == 0);
+    allocationSucceeds = true;
+    require(!interface.init(&controller));
+    require(superclassCalls == 1 && ethernetInitializations == 0);
+    superclassSucceeds = true;
+    require(interface.init(&controller));
+    require(superclassCalls == 2 && ethernetInitializations == 1);
+}
+'''
+
 class LLAddrGuard(unittest.TestCase):
     def setUp(self):
         self.compiler = shutil.which('clang++')
@@ -88,10 +123,10 @@ class LLAddrGuard(unittest.TestCase):
         end = source.index('//---------------------------------------------------------------------------', start)
         self.method = source[start:end]
 
-    def compile(self, method, runtime=False, target=()):
+    def compile(self, method, runtime=False, target=(), declarations=DECLARATIONS, cases=CASES):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / 'actual-lladdr.cpp'
-            source.write_text(DECLARATIONS + method + (CASES if runtime else ''))
+            source.write_text(declarations + method + (cases if runtime else ''))
             command = [self.compiler, '-std=gnu++20', '-Werror', '-Wmisleading-indentation']
             binary = Path(tmp) / 'guard'
             command += ['-fsanitize=address,undefined', '-o', str(binary)] if runtime else ['-fsyntax-only']
@@ -105,6 +140,32 @@ class LLAddrGuard(unittest.TestCase):
             if runtime and result.returncode == 0:
                 result = subprocess.run([str(binary)], capture_output=True, text=True)
             return result
+
+    def init_fragment(self):
+        source = (ROOT / 'package/wifi/network/apple/IOEthernetInterface.cpp').read_text()
+        start = source.index('bool IOEthernetInterface::init(')
+        end = source.index('setInterfaceType(IFT_ETHER);', start) + len('setInterfaceType(IFT_ETHER);')
+        # Only the actual entry guards through the first initialization action.
+        return source[start:end] + '\n    return true;\n}\n'
+
+    def test_init_guards_branches_asan_ubsan(self):
+        result = self.compile(self.init_fragment(), runtime=True,
+                              declarations=INIT_DECLARATIONS, cases=INIT_CASES)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_init_guards_arm64(self):
+        result = self.compile(self.init_fragment(), target=('--target=arm64-apple-ios16.0',),
+                              declarations=INIT_DECLARATIONS)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_original_init_indentation_reproduces_diagnostic(self):
+        fragment = self.init_fragment()
+        fixed = '\tif( _reserved == 0 )\n\t{\n\t\treturn false;\n\t}\n\n\tif ( super::init(controller) == false )\n\t{\n\t\treturn false;\n\t}'
+        original = '\tif( _reserved == 0 )\n\t\treturn false;\n\n    if ( super::init(controller) == false )\n    \treturn false;'
+        self.assertEqual(fragment.count(fixed), 1)
+        result = self.compile(fragment.replace(fixed, original), declarations=INIT_DECLARATIONS)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('misleading-indentation', result.stderr)
 
     def test_actual_method_branches_asan_ubsan(self):
         result = self.compile(self.method, runtime=True)

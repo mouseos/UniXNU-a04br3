@@ -9,7 +9,7 @@ integration and hardware qualification are separate from source provenance.
   checked against that commit. 99 remain byte-identical; eight adaptations are
   recorded with both hashes in `PORT.sources.json`. They change boot firmware
   views, opt-in/service allocation and crypto/nonce binding for this port, plus
-  AVB option enum typing, interface-down guard formatting and their Apple source
+  AVB option enum typing, initialization/interface-down guard formatting and their Apple source
   provenance metadata.
 - `network/apple/SOURCE.json`: original Apple IONetworkingFamily revision
   `bb910e2b458939f6b1f53c0fa6907f258b431ea4`, original and vendored hashes,

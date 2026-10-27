@@ -170,10 +170,14 @@ bool IOEthernetInterface::init(IONetworkController * controller)
 
     _reserved = IOMallocType(ExpansionData);
 	if( _reserved == 0 )
+	{
 		return false;
+	}
 
-    if ( super::init(controller) == false )
-    	return false;
+	if ( super::init(controller) == false )
+	{
+		return false;
+	}
 
 	// initialize enet specific fields.
 	setInterfaceType(IFT_ETHER);
