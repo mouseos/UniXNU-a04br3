@@ -12,7 +12,6 @@ import importlib.util
 import json
 from pathlib import Path
 import re
-import stat
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,8 +28,11 @@ def collect(probe, metal):
         if path.is_symlink():
             raise SystemExit('Addon inputs must not contain symlinks: ' + str(path))
         if path.is_file():
-            mode = stat.S_IMODE(path.stat().st_mode)
-            files.append(('addons/' + bundle.name + '/' + path.relative_to(bundle).as_posix(), mode, path.read_bytes()))
+            relative = path.relative_to(bundle).as_posix()
+            # Kernel installs these root-owned. Build-host umask must not make
+            # the Metal plugin unreadable to the unprivileged render server.
+            mode = 0o755 if relative == 'NativePowerVRMetal' else 0o644
+            files.append(('addons/' + bundle.name + '/' + relative, mode, path.read_bytes()))
     return files
 
 

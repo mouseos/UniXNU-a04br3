@@ -29,10 +29,12 @@ class AddonTest(unittest.TestCase):
             (probe / 'powervrprobed').write_bytes(b'probe')
             (probe / 'lib/libvulkan_powervr_mesa.dylib').write_bytes(b'vulkan')
             (bundle / 'NativePowerVRMetal').write_bytes(b'metal')
-            (bundle / 'NativePowerVRMetal').chmod(0o755)
+            (bundle / 'NativePowerVRMetal').chmod(0o700)
             (bundle / 'Info.plist').write_bytes(b'plist')
             (bundle / '_CodeSignature/CodeResources').write_bytes(b'seal')
             (bundle / 'libvulkan_powervr_mesa.dylib').write_bytes(b'vulkan')
+            for path in (bundle / 'Info.plist', bundle / '_CodeSignature/CodeResources', bundle / 'libvulkan_powervr_mesa.dylib'):
+                path.chmod(0o600)
             (probe / 'trust.json').write_text(json.dumps({'daemon_cdhash': '11'*20, 'vulkan_cdhash': '22'*20}))
             metal_trust = {'cdhash': '33'*20, 'driver_cdhash': '22'*20}
             (metal / 'trust.json').write_text(json.dumps(metal_trust))
@@ -86,6 +88,10 @@ else:
                 + [['--verify', '--strict', str(bundle)]])
             entries = {name: (mode, data) for name, mode, data in helper.unpack_addon((root / 'addon').read_bytes())}
             self.assertEqual(len(entries), 6)
+            self.assertEqual(entries['addons/NativePowerVRMetal.bundle/NativePowerVRMetal'], (0o755, b'metal'))
+            self.assertEqual(entries['addons/NativePowerVRMetal.bundle/Info.plist'], (0o644, b'plist'))
+            self.assertEqual(entries['addons/NativePowerVRMetal.bundle/_CodeSignature/CodeResources'], (0o644, b'seal'))
+            self.assertEqual(entries['addons/NativePowerVRMetal.bundle/libvulkan_powervr_mesa.dylib'], (0o644, b'vulkan'))
             self.assertEqual(entries['bin/powervrprobed'], (0o755, b'probe'))
             self.assertEqual(entries['addons/NativePowerVRVulkan.bundle/libvulkan_powervr_mesa.dylib'][1], b'vulkan')
             self.assertEqual(entries['addons/NativePowerVRMetal.bundle/_CodeSignature/CodeResources'][1], b'seal')
