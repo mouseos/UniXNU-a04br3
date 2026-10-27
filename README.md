@@ -611,10 +611,16 @@ includes comparison overhead, so it cannot alone establish eMMC throughput or
 DMA CPU cost. The caller must compare identical inputs and boot conditions and
 correlate with kernel IRQ counters. No writes are made by the benchmark.
 
-Experimental fixed source pair: UniXNU commit `ea0c46b799cd5f550ed07fad79ab137d5a1b0cf6`
-selects NativeMsdc `c215dc27d44581233210652bc0c8f40d92157da9`; this device
-revision selects ArmCpu `3eb0ea5f4b4bd43e264fa32c2848518c1f612aef` through
+Experimental fixed source pair: UniXNU commit `ed1454a3ba30353e8d94324b573cfb9160831226`
+selects NativeMsdc `1acec320a53f3d5e1cf32417f8c6edc9a4e8b04d`; this device
+revision selects ArmCpu `f3551364f7bb587463059a4648448d608a2ee5da` through
 its gitlink. Both source commits must be published to their configured remotes
 before a fresh recursive clone can fetch them. The flags above are required;
 the pair alone does not activate IRQs. Kernel argument capacity must be checked:
 the existing P46/P54 diagnostic configurations can approach the 1023-byte limit.
+
+The IRQ wait is restricted to explicitly marked reads on the driver-owned publication
+thread. Regular block-storage and store callbacks, including launchd reads, remain
+polled until their caller and lock contracts are demonstrated safe for sleeping.
+A rejected GIC mask readback is recorded; persistent unquenchable IRQs panic.
+SYSIRQ writers that bypass ArmCpu controller synchronization can still race.
