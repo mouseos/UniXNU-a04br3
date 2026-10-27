@@ -195,8 +195,8 @@ void procLogThread(void *, wait_result_t)
       IOLog("a04br3 perf vm pagesize=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu throttled=%llu pageable_internal=%llu pageable_external=%llu mode=%d active_compressor=%u active_swap=%u\n",
             m[0],m[1],m[2],m[3],m[4],m[5],m[6],q.throttled,q.pageable_internal,q.pageable_external,q.compressor_mode,q.compressor_active,q.swap_active);
       boot_home_perf_sample();
-      boot_home_irq_report();
     }
+    boot_home_irq_report();
     cacheReportSeconds += gProcLogSeconds;
     if (cacheReportSeconds >= 60) {
       cacheReportSeconds %= 60;

@@ -564,7 +564,8 @@ existing `a04br3-home-perf=1` runtime opt-in enables PID 1 sampling. Explicit
 `native-irq-pid=<pid>` selects another PID; `native-irq-pid=0` disables it.
 Without the compiled hook, the existing performance monitor has no timer
 sampling. The monitor prints `hook=0` if an explicit PID is selected without
-that hook, so zero samples are not mistaken for an idle task.
+that hook, so zero samples are not mistaken for an idle task. A nonzero
+`a04br3-proclog` remains necessary to start the reporting worker.
 
 Every sixteenth target PID kernel-mode timer interrupt contributes the
 interrupted unslid PC rounded down to a 256-byte bucket. Fixed atomics, no
