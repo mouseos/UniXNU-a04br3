@@ -8,6 +8,6 @@
 bash scripts/build-pipeline-failure-isolated.sh TREE DRIVER OUT
 ```
 
-timingとfailureの両診断を有効にし、shader captureは有効にしない。署名されたbundle、trust.json、使用入力のSHA-256と設定を `OUT` に残す。bridgeの再利用は記録されるが、ハッシュ一致だけではそのビルドの完全な出自を証明しない。実機試験は別工程。
+timingとfailureの両診断を有効にし、shader captureは有効にしない。failure診断はexception出力とno-copy失敗callbackも有効にする。署名されたbundle、trust.json、使用入力のSHA-256と設定を `OUT` に残す。bridgeとMesa dylibの再利用は記録されるが、ハッシュ一致だけではそのビルドの完全な出自を証明しない。実機試験は別工程。
 
 固定NativeMetalの検証は `NATIVE_METAL_ROOT=/path/to/NativeMetal python3 scripts/tests/check_metal_pipeline_failure.py`、両switchの確認は `python3 scripts/tests/test_pipeline_timing_switch.py`。これらはホストでの限定試験で、iOSの実リンクや実機動作を証明しない。
