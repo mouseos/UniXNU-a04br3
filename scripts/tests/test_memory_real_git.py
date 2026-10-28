@@ -3,9 +3,11 @@
 import importlib.util
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT/'scripts'))
 spec = importlib.util.spec_from_file_location('memory_manifest', ROOT/'scripts/a04br3-memory-manifest.py')
 manifest = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(manifest)

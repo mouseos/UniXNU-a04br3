@@ -17,7 +17,13 @@ string must agree. A completion manifest is written only after the final
 kernel build succeeds; it binds kernel hash, Data and trust hashes, UUID, clean
 source commits and submodule state, pinned XNU reference and patched-source
 diff, effective configuration and build flags.
-Payload construction refuses a missing or changed manifest. String presence in
+The generated script tree is checked byte-for-byte against the base and device
+source overlays before it is used. Unexpected files, cached bytecode and
+symlinks in that tree are refused. Verified copy timestamps are stabilized
+so UniXNU's size/mtime-based reassembly keeps the intended overlay; the tree
+is checked again when the kernel is sealed and before payload construction.
+If stale files remain from another build, select a fresh `UNIXNU_OUT` or repair
+the generated tree before retrying. Payload construction refuses a missing or changed manifest. String presence in
 the binary is an integrity check, not proof of the runtime UUID selection.
 Source checkouts must be clean and submodules initialized. Untracked files in
 the selected output root and `RUNNER_TEMP` are treated as generated, while
@@ -92,5 +98,6 @@ python3 scripts/tests/test_memory_copy_bench.py
 python3 scripts/tests/test_memory_bench_launch.py
 python3 scripts/tests/test_memory_payload.py
 python3 scripts/tests/test_memory_real_git.py
+UNIXNU_ROOT=/path/to/UniXNU python3 scripts/tests/test_memory_tree_scripts.py
 python3 scripts/tests/test_a04br3_pre_build_seed_reuse.py
 ```

@@ -25,6 +25,7 @@ esac
 rm -f "$RUNNER_TEMP/a04br3-memory-inputs.json" "$RUNNER_TEMP/a04br3-memory-pending.json"
 export A04BR3_MEMORY_BENCH=1 A04BR3_POWERVR_PROBE=1 A04BR3_POWERVR_METAL=1
 export A04BR3_POWERVR_METAL_MODE=publish
+export PYTHONDONTWRITEBYTECODE=1
 ./unixnu defconfig a04br3_defconfig -D "$DEVICE_DIR"
 ./unixnu tree -D "$DEVICE_DIR"
 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
