@@ -79,16 +79,25 @@ of the existing board pre-build. This clean build recipe has not yet been run
 on macOS, and GPU functionality of its output is not verified.
 
 The board hook spawns `/private/var/ngpu/bin/a04br3-memory-copy-bench` only
-when `a04br3-membench=1` is present. The child opens `/dev/console`, waits 180
-seconds, checks free VM pages, and if at least 64 MiB are reported free,
-allocates two 16 MiB buffers. It initializes the source and writes each 4 KiB
+when `a04br3-membench=1` or `mb=1` is present. The child opens `/dev/console`,
+waits 180 seconds, then attempts up to three samples each at 4 MiB and 1 MiB.
+It excludes speculative pages from free pages and retains a 32 MiB reserve;
+the thresholds are 40 MiB and 34 MiB respectively. Insufficient pages are
+retried twice with 15-second gaps, and samples have 10-second recovery gaps.
+A statistics error ends the run; zero completed samples is a failure. It
+initializes the source and writes each 4 KiB
 of the destination through a volatile pointer before timing one copy; it
 compares the buffers after timing, writes the result to the console, and exits.
 The free-page check is conservative, racy and **not a safety guarantee**; it
 can skip even if reclaimable memory exists. A boot that has not reached idle at
-180 seconds is not an idle measurement. No repeated load or rendering fallback
-is introduced. Nonzero spawn errno, missing console, free-page refusal,
-allocation failure, process exit, and absent results must be distinguished.
+180 seconds is not an idle measurement. Nonzero spawn errno, missing console,
+free-page refusal, allocation failure, process exit, and absent results must
+be distinguished. The child emits a best-effort `main_entered` on inherited
+stderr and `console_stdout_ready` after opening console stdout. It reports a
+stderr console-open failure on stdout. Inherited stderr can be closed or
+invisible, so absent markers do not establish the failure stage. Spawn success
+does not prove main entry or successful exit; the board hook does not collect
+child exit status.
 
 The normal standalone `--run size_mib` accepts 1–64 MiB per buffer: this is an
 input limit, not a safe allocation limit. Output includes monotonic start/end,
@@ -104,7 +113,7 @@ system DRAM traffic.
 Record source and image IDs, workload, free pages and boot identity. Separate
 idle and real-workload observations from the artificial test, and compare
 before/after baselines. For distributions, run separately with recovery gaps;
-the automatic path performs only one pass per boot. Verify the relationship
+the automatic path runs at most once per boot. Verify the relationship
 between user `CLOCK_MONOTONIC` and kernel timestamps before joining them.
 Heartbeat lines are sequential, not an atomic snapshot. Target compilation,
 signature, trust, spawn, console and measurement are all unverified until the
