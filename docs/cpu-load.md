@@ -10,9 +10,9 @@ XNU's current implementation reports nice as zero.
 
 Each row reports the raw processor state immediately before and after reading
 the counters: 0 OFF_LINE, 1 SHUTDOWN, 2 START, 3 PENDING_OFFLINE, 4 IDLE,
-5 DISPATCHING, 6 RUNNING. The state is read as in XNU's PROCESSOR_BASIC_INFO
-without holding the processor-list lock; the two reads and counters are not
-atomic. A difference proves that the sampled endpoints differ; equality does
+5 DISPATCHING, 6 RUNNING. Each state read uses `splsched` and the processor
+set scheduler lock, released before recount or logging. The two reads and
+counters are not atomic. A difference proves that the sampled endpoints differ; equality does
 not rule out intervening transitions. CPU hotplug can occur between reports
 and leave matching endpoints, so these samples do not prove uninterrupted
 online time. In particular IDLE is an online scheduler state, not OFF_LINE.
