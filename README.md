@@ -736,5 +736,6 @@ reset との区別や、上限の仮定なしに複数 wrap がないことの�
 各 core の non-idle 割合は `(user + system + nice) / (user + system + nice + idle)`
 の差分、全体は４ core の tick 数で重み付けした割合です。core ごとの読み取りは
 同時ではなく、端点で online でも区間中ずっと online とは限りません。user と
-system の分類は調査中のため、内訳の割合は出しません。
+system の分類は調査中のため、内訳の割合は出しません。user tick が欠落して
+いる場合は non-idle 割合そのものも過小評価される可能性があります。
 テスト: `python3 scripts/tests/test_summarize_cpu_load.py`。
