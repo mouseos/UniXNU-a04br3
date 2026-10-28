@@ -32,6 +32,7 @@ using u32=uint32_t;using u64=uint64_t;using u8=uint8_t;
 #define INTEGER_BITS 7
 #define GENMASK(h,l) ((uint32_t)((~0u << (l)) & (~0u >> (31-(h)))))
 struct linux_data{int pcwbits;};struct mtk_clk_pll{linux_data *data;};
+static bool pwrapAvailable=true;struct A04BR3PwrapGuard{explicit operator bool()const{return pwrapAvailable;}};
 '''
 # Independent arithmetic oracle for MT8167's 21-bit MMPLL PCW / 7 integer bits.
 # Formula documented by MediaTek Linux clk-pll.c __mtk_pll_recalc_rate:
@@ -93,6 +94,7 @@ h+=definition(gpu,'void a04br3_gpu_init(void)\n{').replace('__asm__ volatile("dm
 h+=r'''
 static void reset(){requested=380;present=pllMap=pwrapMap=init=true;failPmic=muxMismatch=false;maps=reads=writes=pmicReads=powerCalls=fwCalls=phase=unstableOffset=unstableSeen=requestSnapshot=0;con0=0x11;con1=0x020e9d8a;power=5;rail[0]=2;rail[1]=0x3001;rail[2]=rail[3]=0x4e;logs.clear();state=fresh();a04br3_gpu_core_hz=26000000;}
 int main(){
+ pwrapAvailable=false;uint16_t blocked=0;assert(clockDiagnosticPmicRead(pwrap,0x30a,&blocked));assert(writes==0);pwrapAvailable=true;
  // Independent oracle for the Linux two-roundup formula, across all divisors.
  linux_data data{21};mtk_clk_pll linuxPll{&data};
  const uint32_t pcws[]={0,1,0x40000,0x80000,0xc0000,0xe7000,0xe9d89,0xe9d8a,0xe9d8b,0xf0000,0x100000,0x1fffff};

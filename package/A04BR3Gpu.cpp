@@ -7,6 +7,7 @@
 //  SPM 0x10006000, INFRACFG 0x10001000, TOPCKGEN 0x10000000, MFGCFG 0x13FFE000, RGX core 0x13000000 (CORE_ID at 0x20/0x24,
 //  CORE_REVISION at 0x18).
 #include <IOKit/IOLib.h>
+#include "A04BR3RegisterLock.h"
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include "A04BR3RoguePower.h"
@@ -66,6 +67,8 @@ bool clockDiagnosticWait(volatile uint8_t *pwrap, unsigned fsm)
 }
 const char *clockDiagnosticPmicRead(volatile uint8_t *pwrap, unsigned address, uint16_t *value)
 {
+  A04BR3PwrapGuard guard;
+  if (!guard) return "WACS2 busy";
   if ((address & 1) || address > 0xfffe) return "invalid PMIC address";
   if (!clockDiagnosticWait(pwrap, 0)) return "idle timeout or INIT_DONE lost";
   // Only a read command: bit 31 is always zero. No PMIC register writes,

@@ -19,3 +19,12 @@ extern "C" bool a04br3_infra_update(volatile uint8_t *infra, unsigned mask, unsi
   IOLockUnlock(infraLock);
   return ok;
 }
+
+// Atomic try-lock never sleeps or masks interrupts. A caller that finds the
+// shared PMIC wrapper busy must fail and retry later, not touch its registers.
+static uint32_t pwrapBusy;
+extern "C" bool a04br3_pwrap_try_lock(void) {
+  uint32_t expected = 0;
+  return __atomic_compare_exchange_n(&pwrapBusy, &expected, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+extern "C" void a04br3_pwrap_unlock(void) { __atomic_store_n(&pwrapBusy, 0, __ATOMIC_RELEASE); }

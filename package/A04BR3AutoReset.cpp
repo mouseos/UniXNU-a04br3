@@ -22,6 +22,7 @@
 //    drivers/watchdog/mtk_wdt.c and the restart contract of github.com/mouseos/xnu_kernel_benesse_a04br3
 //    (iokit/Kernel/arm/A04BR3Restart.h), which ran on this tablet.
 #include <IOKit/IOLib.h>
+#include "A04BR3RegisterLock.h"
 #include <IOKit/IOPlatformExpert.h>
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
@@ -111,6 +112,8 @@ void wr(volatile uint8_t *base, unsigned offset, uint32_t value)
 // for valid data. Bounded: false on timeout or when the wrapper never finished its initialization.
 bool wacs(bool write, uint32_t address, uint32_t data, uint32_t *out)
 {
+  A04BR3PwrapGuard guard;
+  if (!guard) return false;
   for (unsigned spin = 0;; spin++) {
     const uint32_t status = rd(gPwrap, kWacsRdata);
     if ((status & (1U << 21)) == 0 || spin > 1000000) { return false; }  // INIT_DONE
@@ -319,12 +322,13 @@ void cycleThread(void *, wait_result_t)
 
 }  // namespace
 
-// Fresh watchdog mode read after the PMU worker has bound to its target CPU.
-// This does not re-read the RTC fastboot bit or prevent another agent from
-// changing either register after this observation.
-extern "C" bool a04br3_runtime_watchdog_armed(void)
+// The lock coordinates known board WACS2 users, not EL2/EL3 or firmware.
+// This is a fresh observation, not a lease over the RTC or watchdog.
+extern "C" bool a04br3_runtime_recovery_recheck(void)
 {
-  if (!gToprgu || !__atomic_load_n(&a04br3_runtime_recovery_ready, __ATOMIC_ACQUIRE)) return false;
+  if (!gToprgu || !gPwrap || !__atomic_load_n(&a04br3_runtime_recovery_ready, __ATOMIC_ACQUIRE)) return false;
+  uint32_t rtc = 0;
+  if (!wacs(false, kRtcPdn1, 0, &rtc) || !(rtc & kRtcPdn1Fastboot)) return false;
   return (rd(gToprgu, kWdtMode) & 0x5dU) == 0x15U;
 }
 
