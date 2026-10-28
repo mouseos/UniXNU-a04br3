@@ -43,8 +43,8 @@ CONFIG_XNU_NATIVE_MOBILE_DISPLAY=n
 CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
 CONFIG_XNU_ARMVIRT_PLATFORM=n
 CONFIG_XNU_ARMCPU_GICV2=y
-# Compile the device-specific experiment; boot argument remains required.
-CONFIG_XNU_ARMCPU_A04BR3_RUNTIME=y
+# Runtime PMU experiments require the explicit a04br3_pmu_defconfig.
+CONFIG_XNU_ARMCPU_A04BR3_RUNTIME=n
 CONFIG_XNU_NS16550_UART=y
 CONFIG_XNU_BOARD_INIT=y
 # The pre-launchd board hook (unixnu_board_launch, package/A04BR3Board.cpp): the launchd disabled-jobs policy. It takes
