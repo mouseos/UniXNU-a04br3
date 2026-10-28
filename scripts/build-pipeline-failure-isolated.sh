@@ -53,7 +53,7 @@ record={'device_commit':device_commit,
         'sdk_path':subprocess.check_output(['xcrun','--sdk','iphoneos','--show-sdk-path'],text=True).strip(),
         'clang_path':subprocess.check_output(['xcrun','--find','clang++'],text=True).strip(),
         'clang_version':subprocess.check_output(['xcrun','clang++','--version'],text=True).strip(),
-        'bundle_files_sha256':{str(p.relative_to(out/'bundle')):digest(p) for p in sorted((out/'bundle').rglob('*')) if p.is_file()},
+        'bundle_files_sha256':{str(p.relative_to(out/'bundle')):digest(p) for p in [out/'bundle/trust.json', *sorted((out/'bundle/NativePowerVRMetal.bundle').rglob('*'))] if p.is_file()},
         'trust':json.loads((out/'bundle/trust.json').read_text())}
 (out/'provenance.json').write_text(json.dumps(record,indent=2)+'\n')
 PY
