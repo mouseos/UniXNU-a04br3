@@ -2,6 +2,41 @@
 import pathlib, subprocess, tempfile, unittest
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 class LivePcTest(unittest.TestCase):
+ def test_runtime_pid_selection(self):
+  source=(ROOT/'package/A04BR3Board.cpp').read_text()
+  selection=source[source.index('  unsigned livePc = 0;'):source.index('  unsigned ipiReasonPerf = 0;')]
+  prefix=r'''
+#include <cstdint>
+#include <cstring>
+#include <cassert>
+static unsigned old_value, pid_value, result;
+static bool old_present, pid_present;
+static bool PE_parse_boot_argn(const char *name, void *out, unsigned size) {
+ assert(size==sizeof(unsigned));
+ bool pid=!strcmp(name,"a04br3-live-pc-pid");
+ if (pid ? !pid_present : !old_present) return false;
+ *(unsigned *)out=pid ? pid_value : old_value; return true;
+}
+static void boot_live_pc_init(unsigned pid) { result=pid; }
+static void select_pid() {
+'''
+  suffix=r'''
+}
+int main() {
+ old_present=pid_present=false;select_pid();assert(result==0);
+ old_present=true;old_value=1;select_pid();assert(result==1);
+ old_value=56;select_pid();assert(result==0);
+ pid_present=true;pid_value=56;select_pid();assert(result==56);
+ old_value=1;pid_value=0;select_pid();assert(result==0);
+ pid_value=0xffffffffu;select_pid();assert(result==0);
+}
+'''
+  with tempfile.TemporaryDirectory() as tmp:
+   src=pathlib.Path(tmp)/'select.cpp'; exe=pathlib.Path(tmp)/'select'
+   src.write_text(prefix+selection+suffix)
+   subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror',str(src),'-o',str(exe)],check=True)
+   subprocess.run([str(exe)],check=True)
+
  def test_ring_and_image_races(self):
   source=(ROOT/'package/BootProcessProbe.c').read_text()
   code=source[source.index('// Separate opt-in timer-interrupted samples;'):]
@@ -56,6 +91,10 @@ static void test_interference(void){if(inject_torn){inject_torn=0;for(unsigned i
 static void *writer(void *arg){test_cpu=(unsigned)(uintptr_t)arg;thread.thread_id=100+test_cpu;for(unsigned i=0;i<100000;i++){uint64_t pc=0x10000000ULL+((uint64_t)test_cpu<<24)+i;native_live_pc_sample(pc,pc^0x55aa,1);}return 0;}
 int main(void){
  boot_live_pc_init(0);native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==0);
+ boot_live_pc_init(56);native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==0);
+ process.pid=56;native_live_pc_sample(0x2222,0x3333,1);assert(live_pc_cpus[0].written==1);
+ process.pid=1;native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].written==1);
+ memset(live_pc_cpus,0,sizeof(live_pc_cpus));
  boot_live_pc_init(1);native_live_pc_sample(0x1234,0x1234^0x55aa,1);assert(live_pc_cpus[0].written==1);
  test_cpu=9;native_live_pc_sample(1,2,1);assert(live_pc_bad_cpu==1);test_cpu=0;
  uint8_t macho[160]={0};struct live_macho_head *h=(void *)macho;h->magic=0xfeedfacf;h->ncmds=2;h->sizeofcmds=96;

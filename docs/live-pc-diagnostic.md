@@ -8,6 +8,14 @@ zero samples are not evidence of idle CPU. No binary or hardware behavior is
 altered when the runtime gate is off beyond the compiled weak call if the
 compile gate was explicitly enabled.
 
+For another process, set `a04br3-live-pc-pid=<pid>` instead. The explicit PID
+option takes precedence over `a04br3-live-pc`, including zero to disable; values
+above INT32_MAX are disabled. PID allocation varies between boots: verify the
+target against this boot's process report and use each sample's unique ID and
+exec version, not the PID alone, before attributing it. If the PID is absent or
+belongs to a different process during the interval, the intended process was
+not sampled. This option does not discover or follow a process by name.
+
 The timer callback records interrupted PC and LR for user mode; for kernel
 mode it records the interrupted kernel PC after VM_KERNEL_UNSLIDE and LR=0.
 It records process unique ID, exec identity version, thread ID and mode. One

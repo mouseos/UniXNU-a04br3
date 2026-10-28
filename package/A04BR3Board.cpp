@@ -407,7 +407,12 @@ extern "C" void unixnu_board_init(void)
   boot_home_irq_init(irqPid);
   unsigned livePc = 0;
   PE_parse_boot_argn("a04br3-live-pc", &livePc, sizeof(livePc));
-  boot_live_pc_init(livePc == 1 ? 1 : 0);
+  unsigned livePcPid = 0;
+  // Explicit PID takes precedence, including zero to disable. The old flag
+  // retains its original PID 1-only semantics.
+  if (!PE_parse_boot_argn("a04br3-live-pc-pid", &livePcPid, sizeof(livePcPid)))
+    livePcPid = livePc == 1 ? 1 : 0;
+  boot_live_pc_init(livePcPid <= INT32_MAX ? livePcPid : 0);
   unsigned ipiReasonPerf = 0;
   PE_parse_boot_argn("a04br3-home-perf", &ipiReasonPerf, sizeof(ipiReasonPerf));
   boot_ipi_reason_enable(ipiReasonPerf);
