@@ -33,6 +33,43 @@ int main() {
   }
  }
  assert(emitted==4 && observed.suppressedSeries==0);
+ // Mode3 reproduces the observed coupling: four tiny terminal completions
+ // consume BOTH otherwise separate budgets. A later long series is suppressed.
+ NativeWaitSeries prior=make();prior.mode=3;__atomic_store_n(&prior.enabled,1,__ATOMIC_RELEASE);
+ for(unsigned i=0;i<4;i++) {
+  assert(test_begin(&prior,56,2,50+i,100+i*10));
+  assert(test_end(&prior,56,2,50+i,101+i*10,105+i*10,0,true,&out));
+ }
+ assert(prior.beginBudget==4 && prior.seriesBudget==4);
+ assert(!test_begin(&prior,56,2,70,200) && prior.suppressedBegin==1);
+ assert(prior.suppressedSeries==0); // no threshold crossed yet: not evidence of no wait
+ assert(!test_end(&prior,56,2,70,201,1201,-60,false,&out) && prior.suppressedSeries==1);
+ // Mode4: fast successful waits do not consume series/active budgets, and
+ // a suppressed begin still permits an independently budgeted slow series.
+ NativeWaitSeries progress=make();progress.mode=4;progress.threshold=250;progress.windowTicks=1000;progress.activeThreshold=500;
+ __atomic_store_n(&progress.enabled,1,__ATOMIC_RELEASE);
+ for(unsigned i=0;i<4;i++) {
+  assert(!test_begin(&progress,56,1,10+i,100+i*10));
+  assert(!test_end(&progress,56,1,10+i,101+i*10,105+i*10,0,true,&out));
+ }
+ assert(progress.beginBudget==0 && progress.seriesBudget==0 && progress.suppressedBegin==0);
+ assert(!test_begin(&progress,56,1,20,200));
+ for(unsigned i=0;i<5;i++) {
+  uint64_t start=201+i*101,end=start+100;
+  if(i)assert(!test_begin(&progress,56,1,20,start-1));
+  bool got=test_end(&progress,56,1,20,start,end,-60,false,&out);
+  assert(got==(i==2 || i==4));
+  if(got)assert(out.tid==1 && out.fence==20 && out.sum==(i+1)*100);
+ }
+ assert(progress.seriesBudget==2);
+ // Snapshot an outstanding wait; when completion arrives after a monitor
+ // advanced the window, it still clears the slot using the recorded end.
+ assert(!test_begin(&progress,56,1,20,800));
+ NativeWaitActive active[2]={};assert(native_wait_active(&progress,1300,active)==1);
+ assert(active[0].tid==1 && active[0].fence==20 && active[0].sum==500);
+ assert(test_end(&progress,56,1,20,801,1299,0,true,&out) && out.sum==998 && out.result==0);
+ bool pending=false;for(auto &slot:progress.slots)if(slot.pid==56 && slot.tid==1 && slot.fence==20)pending=true;
+ assert(!pending && progress.late>0);
  NativeWaitSeries clients=make();__atomic_store_n(&clients.enabled,1,__ATOMIC_RELEASE);
  uint64_t serial1=0,serial2=0;
  assert(native_wait_begin(&clients,56,7,3,101,100,&serial1));
