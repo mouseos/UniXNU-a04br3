@@ -488,6 +488,9 @@ extern "C" void native_powervr_io_trace_record(uint64_t start, uint64_t end, uin
                                                uint64_t fence, unsigned pid, unsigned kind, int result)
 {
   if (!start || end < start) return;
+  uint64_t durationNs=0;
+  absolutetime_to_nanoseconds(end-start, &durationNs);
+  if (!native_io_keep(&gNativeIoTrace, durationNs, result)) return;
   NativeIoRecord record = {start, end, tid, fence, pid, kind, result};
   native_io_record(&gNativeIoTrace, record);
 }
@@ -506,6 +509,9 @@ extern "C" void native_powervr_io_trace_report(void)
   }
   IOLog("a04br3 gpu io trace: dropped=%llu (cumulative)\n",
         (unsigned long long)__atomic_load_n(&gNativeIoTrace.dropped,__ATOMIC_RELAXED));
+  IOLog("a04br3 gpu io trace: filtered=%llu ns=%llu (cumulative; under 10ms, success)\n",
+        (unsigned long long)__atomic_load_n(&gNativeIoTrace.filtered,__ATOMIC_RELAXED),
+        (unsigned long long)__atomic_load_n(&gNativeIoTrace.filtered_ns,__ATOMIC_RELAXED));
 }
 
 extern "C" void native_powervr_submit_perf_enable(unsigned enabled)

@@ -360,7 +360,6 @@ void procLogThread(void *, wait_result_t)
     boot_ipi_reason_report();
     boot_ast_caller_report();
     native_powervr_submit_perf_report();
-    native_powervr_io_trace_report();
     msdcRootTimingReport(rootTiming);
     cacheReportSeconds += gProcLogSeconds;
     if (cacheReportSeconds >= 60) {
@@ -376,6 +375,11 @@ static void a04br3_proclog_init(void)
   if (!PE_parse_boot_argn("a04br3-proclog", &gProcLogSeconds, sizeof(gProcLogSeconds)) || !gProcLogSeconds) return;
   thread_t thread;
   if (kernel_thread_start(procLogThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+}
+
+static void a04br3_gpu_io_trace_thread(void *, wait_result_t)
+{
+  for (;;) { IOSleep(1000); native_powervr_io_trace_report(); }
 }
 
 static void a04br3_cpu_load_thread(void *, wait_result_t)
@@ -427,6 +431,12 @@ extern "C" void unixnu_board_init(void)
   unsigned gpuIoTrace = 0;
   PE_parse_boot_argn("a04br3-gpu-io-trace", &gpuIoTrace, sizeof(gpuIoTrace));
   native_powervr_io_trace_enable(gpuIoTrace);
+  if (gpuIoTrace == 1) {
+    thread_t ioTraceThread;
+    if (kernel_thread_start(a04br3_gpu_io_trace_thread, nullptr, &ioTraceThread) == KERN_SUCCESS)
+      thread_deallocate(ioTraceThread);
+    else IOLog("a04br3 gpu io trace: reporter_start_failed\n");
+  }
   a04br3_proclog_init();
   a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)
   unsigned events = 0;
