@@ -29,8 +29,10 @@ with tempfile.TemporaryDirectory(prefix='pvr-shader-capture-') as temp:
 #include <time.h>
 #include <errno.h>
 static unsigned sleeps;
+static int failure_mode;
 static int fake_sleep(const struct timespec *request, struct timespec *remain) {
     ++sleeps;
+    if (failure_mode) { errno = EINVAL; return -1; }
     if (sleeps == 1) { errno = EINTR; *remain = *request; return -1; }
     return 0;
 }
@@ -49,6 +51,10 @@ int main(void) {
     capture_output("0123456789012345678901234567890123456789012345678901234567890123456789");
     assert(lines == 3);
     assert(sleeps == 4);
+    failure_mode = 1;
+    capture_output("0123456789012345678901234567890123456789012345678901234567890123456789");
+    assert(lines == 4);
+    assert(sleeps == 5);
 }
 ''')
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall', '-Wextra', '-Werror', str(program), '-o', str(executable)], check=True)
