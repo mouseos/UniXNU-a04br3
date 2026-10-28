@@ -672,3 +672,12 @@ IRQ counters, cache reports, VM rows and I/O samples have different collection
 windows even within one heartbeat. These counters do not establish the cause of
 a slowdown without same-boot measurements and a comparison. Run
 `python3 scripts/tests/test_msdc_io_report.py` for reporter coverage.
+
+For a UART file containing exactly one boot, run
+`python3 device/scripts/summarize-msdc-io.py path/to/first-boot.txt`. It emits
+JSON lines with per-size interval deltas and observed bytes per second. It
+rejects reversed timestamps or decreasing counters and discards incomplete or
+duplicate samples. Monotonic timestamps cannot prove that an arbitrarily
+concatenated log contains only one boot; isolate the boot first. These derived
+rates inherit the non-atomic snapshots and logging overhead above. This tool
+covers MSDC transport, not whole-system utilization or memory bandwidth.
