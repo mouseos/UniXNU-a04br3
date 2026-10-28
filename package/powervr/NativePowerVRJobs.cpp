@@ -478,12 +478,16 @@ bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); 
 
 extern "C" void native_powervr_io_trace_enable(unsigned enabled)
 {
-  if (enabled == 1) {
+  if (enabled == 1 || enabled == 2) {
     uint64_t threshold = 0;
     nanoseconds_to_absolutetime(2000000ull, &threshold);
     gNativeIoTrace.threshold_ticks = threshold ? threshold : 1;
+    uint64_t longThreshold = 0;
+    nanoseconds_to_absolutetime(1000000000ull, &longThreshold);
+    gNativeIoTrace.immediate_threshold_ticks = longThreshold ? longThreshold : 1;
   }
-  __atomic_store_n(&gNativeIoTrace.enabled, enabled == 1, __ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeIoTrace.immediate_enabled, enabled == 2, __ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeIoTrace.enabled, enabled == 1 || enabled == 2, __ATOMIC_RELEASE);
 }
 extern "C" unsigned native_powervr_io_trace_enabled(void)
 {
@@ -495,6 +499,14 @@ extern "C" void native_powervr_io_trace_record(uint64_t start, uint64_t end, uin
   if (!start || end < start) return;
   NativeIoRecord record = {start, end, tid, fence, pid, kind, result};
   native_io_record(&gNativeIoTrace, record);
+  if (native_io_immediate_claim(&gNativeIoTrace, record)) {
+    uint64_t startNs=0, endNs=0;
+    absolutetime_to_nanoseconds(start, &startNs);
+    absolutetime_to_nanoseconds(end, &endNs);
+    IOLog("a04br3 gpu io immediate: clock=mach_absolute_ns pid=%u tid=%llu kind=%u start_ns=%llu end_ns=%llu fence=%llu result=%d\n",
+          pid,(unsigned long long)tid,kind,(unsigned long long)startNs,(unsigned long long)endNs,
+          (unsigned long long)fence,result);
+  }
 }
 extern "C" void native_powervr_io_trace_report(void)
 {
@@ -520,6 +532,10 @@ extern "C" void native_powervr_io_trace_report(void)
   }
   IOLog("a04br3 gpu io trace: dropped=%llu (cumulative)\n",
         (unsigned long long)__atomic_load_n(&gNativeIoTrace.dropped,__ATOMIC_RELAXED));
+  if (__atomic_load_n(&gNativeIoTrace.immediate_enabled,__ATOMIC_RELAXED))
+    IOLog("a04br3 gpu io immediate: claims=%u skipped=%u cap=8\n",
+          __atomic_load_n(&gNativeIoTrace.immediate_count,__ATOMIC_RELAXED),
+          __atomic_load_n(&gNativeIoTrace.immediate_skipped,__ATOMIC_RELAXED));
 }
 
 extern "C" void native_powervr_submit_perf_enable(unsigned enabled)

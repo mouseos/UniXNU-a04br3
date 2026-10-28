@@ -7,10 +7,25 @@ struct NativeIoRecord { uint64_t start, end, tid, fence; uint32_t pid, kind; int
 struct NativeIoSlot { unsigned state; NativeIoRecord record; };
 struct NativeIoTrace {
  unsigned enabled, cursor;
+ unsigned immediate_enabled, immediate_count, immediate_skipped;
+ uint64_t immediate_threshold_ticks;
  uint64_t threshold_ticks, dropped;
  uint64_t short_count[3], short_ticks[3];
  NativeIoSlot slot[128];
 };
+// Exact global limit even when multiple user-client threads finish together.
+static inline bool native_io_immediate_claim(NativeIoTrace *t, const NativeIoRecord &r) {
+ if (!__atomic_load_n(&t->enabled,__ATOMIC_ACQUIRE) ||
+     !__atomic_load_n(&t->immediate_enabled,__ATOMIC_ACQUIRE) || !r.start ||
+     r.end<r.start || r.kind<1 || r.kind>3 ||
+     r.end-r.start<t->immediate_threshold_ticks) return false;
+ unsigned n=__atomic_load_n(&t->immediate_count,__ATOMIC_RELAXED);
+ while (n<8) {
+  if (__atomic_compare_exchange_n(&t->immediate_count,&n,n+1,false,__ATOMIC_RELAXED,__ATOMIC_RELAXED)) return true;
+ }
+ __atomic_fetch_add(&t->immediate_skipped,1u,__ATOMIC_RELAXED);
+ return false;
+}
 static inline void native_io_record(NativeIoTrace *t, const NativeIoRecord &r) {
  if (!__atomic_load_n(&t->enabled,__ATOMIC_ACQUIRE)) return;
  if (!r.start || r.end < r.start || r.kind < 1 || r.kind > 3) return;

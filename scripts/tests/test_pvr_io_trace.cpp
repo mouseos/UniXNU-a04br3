@@ -5,6 +5,19 @@
 #include <cstdio>
 int main() {
  NativeIoTrace t={}; NativeIoRecord r={1,2,3,4,5,1,0}, out={};
+ t.immediate_threshold_ticks=1000;
+ NativeIoRecord longRecord={10,1010,3,4,5,1,0};
+ assert(!native_io_immediate_claim(&t,longRecord));
+ __atomic_store_n(&t.enabled,1,__ATOMIC_RELEASE);
+ assert(!native_io_immediate_claim(&t,longRecord));
+ __atomic_store_n(&t.immediate_enabled,1,__ATOMIC_RELEASE);
+ NativeIoRecord below={10,1009,3,4,5,1,0};
+ assert(!native_io_immediate_claim(&t,below));
+ std::vector<std::thread> claimers;
+ for(int i=0;i<32;i++) claimers.emplace_back([&]{native_io_immediate_claim(&t,longRecord);});
+ for(auto &thread:claimers)thread.join();
+ assert(t.immediate_count==8 && t.immediate_skipped==24);
+ t={};
  native_io_record(&t,r); assert(t.cursor==0 && !native_io_take(&t,0,&out));
  t.threshold_ticks=2000;
  __atomic_store_n(&t.enabled,1,__ATOMIC_RELEASE);
