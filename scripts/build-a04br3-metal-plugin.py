@@ -62,14 +62,20 @@ void metal2vulkan_shader_capture_set_output(void (*output)(const char *));
 static void a04br3_spirv_capture_output(const char *text) {
   static unsigned sequence;
   if (!text) return;
-  size_t length = strlen(text), parts = (length + 34) / 35;
+  size_t length = strlen(text), parts = (length + 26) / 27;
   if (!parts || parts > 65535) return;
   unsigned id = __sync_fetch_and_add(&sequence, 1);
   for (unsigned part = 0; part < parts; ++part) {
-    char line[64];
-    snprintf(line, sizeof line, "sc%08x%08x%04x%04x:%.*s",
+    char material[64], line[64];
+    snprintf(material, sizeof material, "sc%08x%08x%04x%04x:%.*s",
              (unsigned)getpid(), id, part, (unsigned)parts,
-             35, text + (size_t)part * 35);
+             27, text + (size_t)part * 27);
+    uint32_t check = 2166136261u;
+    for (const unsigned char *p = (const unsigned char *)material; *p; ++p)
+      check = (check ^ *p) * 16777619u;
+    snprintf(line, sizeof line, "sc%08x%08x%04x%04x%08x:%.*s",
+             (unsigned)getpid(), id, part, (unsigned)parts, check,
+             27, text + (size_t)part * 27);
     native_metal_board_text(line);
   }
 }

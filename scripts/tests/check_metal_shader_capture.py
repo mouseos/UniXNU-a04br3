@@ -38,7 +38,7 @@ int main(void) {
     assert(!strcmp(getenv("METAL2VULKAN_CAPTURE_SPIRV_START"), "42"));
     assert(capture_output);
     capture_output("0123456789012345678901234567890123456789012345678901234567890123456789");
-    assert(lines == 2);
+    assert(lines == 3);
 }
 ''')
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall', '-Wextra', '-Werror', str(program), '-o', str(executable)], check=True)
