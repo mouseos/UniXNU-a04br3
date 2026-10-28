@@ -1632,7 +1632,7 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
     uint64_t ioStart=0, ioTid=0; unsigned ioPid=0;
     if (native_powervr_io_trace_enabled()) {
       char name[20]={}; proc_selfname(name,sizeof(name));
-      if (!strcmp(name,"backboardd")) { ioPid=proc_selfpid(); ioTid=current_thread()->thread_id; ioStart=mach_absolute_time(); }
+      if (!strcmp(name,"backboardd")) { ioPid=static_cast<unsigned>(proc_selfpid()); ioTid=thread_tid(current_thread()); ioStart=mach_absolute_time(); }
     }
     const int err = native_powervr_fence_wait(jobs, wait.fence, wait.timeout_ns);
     if (ioStart) native_powervr_io_trace_record(ioStart,mach_absolute_time(),ioTid,wait.fence,ioPid,1,err);
@@ -1652,7 +1652,7 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
   uint64_t ioStart=0, ioTid=0; unsigned ioPid=0;
   if (submitPerf && native_powervr_io_trace_enabled()) {
     char name[20]={}; proc_selfname(name,sizeof(name));
-    if (!strcmp(name,"backboardd")) { ioPid=proc_selfpid(); ioTid=current_thread()->thread_id; ioStart=mach_absolute_time(); }
+    if (!strcmp(name,"backboardd")) { ioPid=static_cast<unsigned>(proc_selfpid()); ioTid=thread_tid(current_thread()); ioStart=mach_absolute_time(); }
   }
   const uint64_t lockPerf = submitPerf ? native_powervr_submit_perf_ioctl_begin(0) : 0;
   IOLockLock(lock_);
