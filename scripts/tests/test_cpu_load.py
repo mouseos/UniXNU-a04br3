@@ -10,6 +10,9 @@ with tempfile.TemporaryDirectory(prefix='a04-cpuload-') as tmp:
     for folder in ('kern', 'mach', 'sys'):
         (d / folder).mkdir()
     (d/'kern/processor.h').write_text(r'''
+#ifndef MACH_KERNEL_PRIVATE
+#error CPU reporter requires MACH_KERNEL_PRIVATE
+#endif
 #include <stdint.h>
 typedef unsigned natural_t;
 typedef unsigned processor_state_t;
@@ -41,7 +44,7 @@ int main(void) {struct processor p[5];for(int i=0;i<5;i++){p[i].cpu_id=i;p[i].st
  processor_list=0;calls=0;a04br3_cpu_load_report();assert(!calls);}
 ''')
     exe = d/'test'
-    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-I',str(d),
+    subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-DMACH_KERNEL_PRIVATE=1','-I',str(d),
                     str(harness),str(root/'package/A04BR3CpuLoad.c'),'-o',str(exe)],check=True)
     out = subprocess.check_output([str(exe)],text=True)
     assert out.count(' ticks32=1 non_atomic=1') == 4
@@ -51,4 +54,7 @@ int main(void) {struct processor p[5];for(int i=0;i<5;i++){p[i].cpu_id=i;p[i].st
     board = (root/'package/A04BR3Board.cpp').read_text()
     assert 'PE_parse_boot_argn("a04br3-cpu-load", &enabled, sizeof(enabled)) || enabled != 1' in board
     assert 'IOSleep(10000); a04br3_cpu_load_report();' in board
+    build = (root/'scripts/build-a04br3-board.py').read_text()
+    assert "compile_one(osfmk_record, KIT / 'A04BR3CpuLoad.c', cpu_load_flags)" in build
+    assert "'-DMACH_KERNEL_PRIVATE=1'" in build
 print('PASS: bounded core list, unlocked sampling, tick fields, empty list and opt-in wiring')
