@@ -25,7 +25,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 KIT = ROOT / 'kits/a04br3'
 CXX_SOURCES = ['A04BR3Board.cpp', 'A04BR3AutoReset.cpp', 'KeyStoreProbe.cpp', 'A04BR3Gpu.cpp', 'A04BR3Charger.cpp', 'A04BR3RegisterLock.cpp']
-C_SOURCES = ['BootWatchdogPolicy.c', 'A04BR3ProbeLaunch.c', 'A04BR3CpuLoad.c']
+C_SOURCES = ['BootWatchdogPolicy.c', 'A04BR3ProbeLaunch.c']
 OBJ = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
 out = ROOT / 'build/a04br3-board'
 out.mkdir(parents=True, exist_ok=True)
@@ -186,6 +186,14 @@ objects.append(compile_one(c_record, KIT / 'powervr' / 'kernel' / 'pvr_device_in
 osfmk_record = record('osfmk/DEVELOPMENT/startup.o.json')
 for name in ('BootProcessProbe.c', 'BootUiTraceProbe.c'):
     objects.append(compile_one(osfmk_record, KIT / name, C_FLAGS))
+# processor.h exposes processor layout and processor_cpu_load_info only to
+# MACH_KERNEL_PRIVATE. Use the kernel's osfmk compilation record (not the
+# kern_exec BSD record) and its actual internal headers for the CPU reporter.
+cpu_load_flags = C_FLAGS + ['-I', str(ROOT / '.cache/xnu-work/osfmk')]
+if not any(arg == '-DMACH_KERNEL_PRIVATE' or arg.startswith('-DMACH_KERNEL_PRIVATE=')
+           for arg in osfmk_record['arguments']):
+    cpu_load_flags += ['-DMACH_KERNEL_PRIVATE=1']
+objects.append(compile_one(osfmk_record, KIT / 'A04BR3CpuLoad.c', cpu_load_flags))
 
 events = ROOT / 'build/native-keystore-events/NativeKeyStoreEvents.o'
 if not events.is_file():
