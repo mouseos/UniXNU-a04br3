@@ -168,8 +168,12 @@ Each boot benchmark memory check also prints `phase=vm_activity` from the same
 `host_statistics64` response already used by the safety guard. `pageins`,
 `pageouts`, `reactivations`, `faults`, `purges`, `compressions`,
 `decompressions`, `swapins` and `swapouts` are cumulative counters, while
-`purgeable_pages` is a snapshot. They are not an instantaneous reclaimable
-byte count and do not distinguish clean from dirty inactive pages. Use deltas
+`purgeable_pages` is a snapshot. Treat `pageins` and `pageouts` as
+conditional XNU counters, not a byte count: in the fixed source, `pageins`
+increments for a qualifying non-file-I/O absent-page path and `pageouts`
+increments in a qualifying pageout clean-queue path. They do not cover all
+file reads or writes, so do not multiply these counters by page size to claim
+I/O bytes. They are not an instantaneous reclaimable byte count and do not distinguish clean from dirty inactive pages. Use deltas
 within one boot, retain `page_size`, and do not combine overlapping categories.
 Extended counters are reported as unavailable if the returned structure is too
 short. The user-space timestamp marks reporting after the syscall; query_begin_ns and
