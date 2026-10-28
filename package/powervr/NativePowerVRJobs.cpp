@@ -488,7 +488,7 @@ bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); 
 
 static void native_wait_monitor(void *, wait_result_t)
 {
-  unsigned aggregateBusy=~0u,aggregateFull=~0u;
+  unsigned aggregateBusy=~0u,aggregateReportBusy=~0u,aggregateFull=~0u,aggregateRetired=~0u;
   for (;;) {
     IOSleep(250);
     if (!__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE) || gNativeWaitSeries.mode<4) break;
@@ -510,18 +510,20 @@ static void native_wait_monitor(void *, wait_result_t)
         const auto &r=rows[i];uint64_t first=0,last=0,ns[3]={};
         absolutetime_to_nanoseconds(r.first,&first);absolutetime_to_nanoseconds(r.last,&last);
         for (unsigned k=0;k<3;k++) absolutetime_to_nanoseconds(r.ticks[k],&ns[k]);
-        IOLog("a04br3 gpu io aggregate: pid=%u tid=%llu first_ns=%llu last_ns=%llu wait=%llu/%llu/%llu lock=%llu/%llu/%llu call=%llu/%llu/%llu busy=%u full=%u\n",
-          r.pid,(unsigned long long)r.tid,(unsigned long long)first,(unsigned long long)last,
+        IOLog("a04br3 gpu io aggregate: pid=%u tid=%llu series=%llu first_ns=%llu last_ns=%llu wait=%llu/%llu/%llu lock=%llu/%llu/%llu call=%llu/%llu/%llu busy_record=%u busy_report=%u full=%u retired=%u\n",
+          r.pid,(unsigned long long)r.tid,(unsigned long long)r.serial,(unsigned long long)first,(unsigned long long)last,
           (unsigned long long)r.count[0],(unsigned long long)ns[0],(unsigned long long)r.errors[0],
           (unsigned long long)r.count[1],(unsigned long long)ns[1],(unsigned long long)r.errors[1],
           (unsigned long long)r.count[2],(unsigned long long)ns[2],(unsigned long long)r.errors[2],
-          __atomic_load_n(&gNativeIoAggregate.busy,__ATOMIC_RELAXED),__atomic_load_n(&gNativeIoAggregate.full,__ATOMIC_RELAXED));
+          __atomic_load_n(&gNativeIoAggregate.busyRecord,__ATOMIC_RELAXED),__atomic_load_n(&gNativeIoAggregate.busyReport,__ATOMIC_RELAXED),__atomic_load_n(&gNativeIoAggregate.full,__ATOMIC_RELAXED),__atomic_load_n(&gNativeIoAggregate.retired,__ATOMIC_RELAXED));
       }
-      const unsigned busy=__atomic_load_n(&gNativeIoAggregate.busy,__ATOMIC_RELAXED);
+      const unsigned busy=__atomic_load_n(&gNativeIoAggregate.busyRecord,__ATOMIC_RELAXED);
+      const unsigned reportBusy=__atomic_load_n(&gNativeIoAggregate.busyReport,__ATOMIC_RELAXED);
       const unsigned full=__atomic_load_n(&gNativeIoAggregate.full,__ATOMIC_RELAXED);
-      if (busy!=aggregateBusy || full!=aggregateFull) {
-        IOLog("a04br3 gpu io aggregate loss: busy=%u full=%u cumulative=1\n",busy,full);
-        aggregateBusy=busy;aggregateFull=full;
+      const unsigned retired=__atomic_load_n(&gNativeIoAggregate.retired,__ATOMIC_RELAXED);
+      if (busy!=aggregateBusy || reportBusy!=aggregateReportBusy || full!=aggregateFull || retired!=aggregateRetired) {
+        IOLog("a04br3 gpu io aggregate loss: busy_record=%u busy_report=%u full=%u retired=%u cumulative=1\n",busy,reportBusy,full,retired);
+        aggregateBusy=busy;aggregateReportBusy=reportBusy;aggregateFull=full;aggregateRetired=retired;
       }
     }
   }
@@ -542,6 +544,7 @@ extern "C" void native_powervr_io_trace_enable(unsigned enabled)
     nanoseconds_to_absolutetime(enabled>=4?250000000ull:1000000000ull,&sumThreshold);
     nanoseconds_to_absolutetime(enabled>=4?1000000000ull:10000000000ull,&window);
     nanoseconds_to_absolutetime(5000000000ull,&stale);
+    if (enabled==6) gNativeIoAggregate.staleTicks=stale?stale:1;
     nanoseconds_to_absolutetime(65000000000ull,&pendingLease);
     nanoseconds_to_absolutetime(500000000ull,&activeThreshold);
     gNativeWaitSeries.threshold=sumThreshold?sumThreshold:1;gNativeWaitSeries.windowTicks=window?window:1;

@@ -10,6 +10,7 @@ begin = source.index('extern "C" void native_powervr_io_trace_enable(')
 end = source.index('extern "C" unsigned native_powervr_io_trace_enabled(', begin)
 code = r'''
 #include "NativePowerVRIoTrace.h"
+#include "NativePowerVRIoAggregate.h"
 #include "NativePowerVRWaitSeries.h"
 #include "NativePowerVRWaitReason.h"
 #include <cassert>
@@ -17,6 +18,7 @@ code = r'''
 using thread_t=void *;
 constexpr int KERN_SUCCESS=0;
 NativeIoTrace gNativeIoTrace{};
+NativeIoAggregate gNativeIoAggregate{};
 NativeWaitSeries gNativeWaitSeries{};
 NativeWaitReasonLimit gNativeWaitReason{};
 unsigned gWaitMonitorStarted=0,gIoLiveEnabled=0,starts=0;
@@ -28,7 +30,7 @@ void IOLog(const char*,...){}
 ''' + source[begin:end] + r'''
 int main(){
  for(unsigned mode=0;mode<=7;++mode){
-  gNativeIoTrace={};gNativeWaitSeries={};gNativeWaitReason={};gWaitMonitorStarted=0;gIoLiveEnabled=0;starts=0;
+  gNativeIoTrace={};gNativeIoAggregate={};gNativeWaitSeries={};gNativeWaitReason={};gWaitMonitorStarted=0;gIoLiveEnabled=0;starts=0;
   native_powervr_io_trace_enable(mode);
   assert(gNativeIoTrace.enabled==(mode>=1 && mode<=6));
   assert(gNativeIoTrace.immediate_enabled==(mode>=2 && mode<=6));
@@ -36,6 +38,7 @@ int main(){
   assert(gIoLiveEnabled==(mode==6));
   assert(starts==(mode>=4 && mode<=6));
   if(mode==5 || mode==6){assert(gNativeWaitSeries.mode==5);assert(gNativeWaitReason.minTicks==50000000ULL);assert(gNativeWaitReason.perFenceTicks==500000000ULL);}
+  if(mode==6)assert(gNativeIoAggregate.staleTicks==5000000000ULL);
   if(mode==4)assert(gNativeWaitSeries.mode==4);
   if(mode==3)assert(gNativeWaitSeries.mode==3);
  }

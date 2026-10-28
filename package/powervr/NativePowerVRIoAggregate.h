@@ -3,27 +3,35 @@
 #pragma once
 #include "NativePowerVRIoTrace.h"
 struct NativeIoAggregateRow {
- uint64_t tid,first,last,count[3],ticks[3],errors[3],reported;
+ uint64_t tid,first,last,count[3],ticks[3],errors[3],reported,serial;
  uint32_t pid;
 };
 struct NativeIoAggregate {
- unsigned lock,busy,full,cursor;
+ unsigned lock,busyRecord,busyReport,full,retired,cursor;
+ uint64_t staleTicks,nextSerial;
  NativeIoAggregateRow rows[16];
 };
-static inline bool native_io_aggregate_lock(NativeIoAggregate *a) {
+static inline bool native_io_aggregate_lock(NativeIoAggregate *a,bool reporting) {
  unsigned expected=0;
  if (__atomic_compare_exchange_n(&a->lock,&expected,1u,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)) return true;
- __atomic_fetch_add(&a->busy,1u,__ATOMIC_RELAXED); return false;
+ __atomic_fetch_add(reporting?&a->busyReport:&a->busyRecord,1u,__ATOMIC_RELAXED); return false;
 }
 static inline void native_io_aggregate_record(NativeIoAggregate *a,const NativeIoRecord &r) {
  if (!r.pid || !r.tid || !r.start || r.end<r.start || r.kind<1 || r.kind>3) return;
- if (!native_io_aggregate_lock(a)) return;
- NativeIoAggregateRow *row=nullptr,*freeRow=nullptr;
+ if (!native_io_aggregate_lock(a,false)) return;
+ NativeIoAggregateRow *row=nullptr,*freeRow=nullptr,*oldRow=nullptr;
  for (auto &entry:a->rows) {
   if (entry.pid==r.pid && entry.tid==r.tid) row=&entry;
   if (!entry.pid && !freeRow) freeRow=&entry;
+  const uint64_t count=entry.count[0]+entry.count[1]+entry.count[2];
+  if (entry.pid && entry.reported==count && a->staleTicks && r.start>=entry.last &&
+      r.start-entry.last>=a->staleTicks && (!oldRow || entry.last<oldRow->last)) oldRow=&entry;
  }
- if (!row && freeRow) {row=freeRow;row->pid=r.pid;row->tid=r.tid;row->first=r.start;}
+ if (!row && (freeRow || oldRow)) {
+  row=freeRow?freeRow:oldRow;
+  if (!freeRow) {__atomic_fetch_add(&a->retired,1u,__ATOMIC_RELAXED);*row={};}
+  row->pid=r.pid;row->tid=r.tid;row->first=r.start;row->serial=++a->nextSerial;
+ }
  if (row) {
   const unsigned k=r.kind-1;row->count[k]++;row->ticks[k]+=r.end-r.start;
   if (r.result) row->errors[k]++;
@@ -32,7 +40,7 @@ static inline void native_io_aggregate_record(NativeIoAggregate *a,const NativeI
  __atomic_store_n(&a->lock,0u,__ATOMIC_RELEASE);
 }
 static inline unsigned native_io_aggregate_take(NativeIoAggregate *a,NativeIoAggregateRow out[2]) {
- if (!native_io_aggregate_lock(a)) return 0;
+ if (!native_io_aggregate_lock(a,true)) return 0;
  unsigned found=0;
  for (unsigned n=0;n<16 && found<2;n++) {
   unsigned index=(a->cursor+n)%16; auto &r=a->rows[index];
