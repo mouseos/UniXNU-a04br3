@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 script = Path(__file__).resolve().parents[1] / 'a04br3-rebase-copy-links.py'
 spec = importlib.util.spec_from_file_location('copy_links', script)
@@ -43,6 +44,27 @@ class RebaseCopyLinksTest(unittest.TestCase):
             self.assertEqual(good.resolve(), (original / 'source').resolve())
             bad.unlink(); (copied / 'source').unlink()
             with self.assertRaises(ValueError): mod.rebase(original, copied, True)
+            self.assertEqual(good.resolve(), (original / 'source').resolve())
+
+    def test_scan_error_and_temp_collision_leave_existing_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp); original = p / 'original'; copied = p / 'copy'
+            for root in (original, copied):
+                (root / 'out').mkdir(parents=True)
+                (root / 'source').write_text('x')
+            good = copied / 'out' / 'good'; good.symlink_to(original / 'source')
+            def failed_walk(*args, **kwargs):
+                kwargs['onerror'](PermissionError('blocked'))
+                yield from ()
+            with mock.patch.object(mod.os, 'walk', failed_walk):
+                with self.assertRaises(PermissionError): mod.rebase(original, copied, True)
+            self.assertEqual(good.resolve(), (original / 'source').resolve())
+            collision = copied / 'out' / '.good.rebase-fixed'
+            collision.symlink_to(copied / 'source')
+            with mock.patch.object(mod.uuid, 'uuid4', return_value=type('Id', (), {'hex': 'fixed'})()):
+                with self.assertRaises(FileExistsError): mod.rebase(original, copied, True)
+            self.assertTrue(collision.is_symlink())
+            self.assertEqual(collision.resolve(), (copied / 'source').resolve())
             self.assertEqual(good.resolve(), (original / 'source').resolve())
 
 
