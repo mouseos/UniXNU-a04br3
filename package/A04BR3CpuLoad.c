@@ -3,9 +3,9 @@
 #include <kern/processor.h>
 #include <kern/spl.h>
 #include <kern/clock.h>
+#include <kern/misc_protos.h>
 #include <mach/mach_time.h>
 #include <mach/processor_info.h>
-#include <sys/systm.h>
 #include <stdint.h>
 
 static processor_state_t a04br3_cpu_state(processor_t cpu)
@@ -15,7 +15,7 @@ static processor_state_t a04br3_cpu_state(processor_t cpu)
     pset_lock(pset);
     processor_state_t state = cpu->state;
     pset_unlock(pset);
-    splx(s);
+    splx((boolean_t)s);
     return state;
 }
 
