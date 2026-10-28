@@ -20,6 +20,7 @@
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include "BootMemoryQueueSnapshot.h"
+#include "A04BR3DiagArgs.h"
 #include "powervr/native_powervr_bo_stats.h"
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
@@ -424,8 +425,7 @@ extern "C" void unixnu_board_init(void)
   if (!PE_parse_boot_argn("a04br3-gpu-submit-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf)))
     PE_parse_boot_argn("a04br3-home-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf));
   native_powervr_submit_perf_enable(gpuSubmitPerf);
-  unsigned gpuIoTrace = 0;
-  PE_parse_boot_argn("a04br3-gpu-io-trace", &gpuIoTrace, sizeof(gpuIoTrace));
+  unsigned gpuIoTrace = a04br3_diag_arg(PE_parse_boot_argn,"a04br3-gpu-io-trace","a04br3-gio");
   native_powervr_io_trace_enable(gpuIoTrace);
   a04br3_proclog_init();
   a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)

@@ -11,6 +11,7 @@
 #include "A04BR3RegisterLock.h"
 #include "A04BR3ChargerCore.h"
 #include "A04BR3ChargerFresh.h"
+#include "A04BR3DiagArgs.h"
 #include "A04BR3GaugeCore.h"
 #include "A04BR3ChargerHandoff.h"
 #include "A04BR3ChargerBoardCore.h"
@@ -158,8 +159,7 @@ extern "C" void a04br3_charger_init(void) {
         (unsigned long long)counter,(unsigned long long)frequency,
         (unsigned long long)a04charger::get64(fw+72),(unsigned long long)a04charger::get64(fw+56),
         (unsigned long long)nowNs,(unsigned long long)owner.handoffDeadline);
-  unsigned sampleVoltage=0;
-  gaugeVoltage=PE_parse_boot_argn("a04br3-gauge-voltage",&sampleVoltage,sizeof sampleVoltage)&&sampleVoltage==1;
+  gaugeVoltage=a04br3_diag_arg(PE_parse_boot_argn,"a04br3-gauge-voltage","a04br3-gv")==1;
   bus = IOLockAlloc();
   if (!bus) { IOLog("a04br3 charger: no owner lock; no I2C access\n"); return; }
   i2c = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1100b000, 0x1000));
