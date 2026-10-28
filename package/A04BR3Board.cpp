@@ -17,6 +17,7 @@
 // After the policy it starts the PowerVR user-space probe once under a04br3-powervrprobed=1 (package/A04BR3ProbeLaunch.c);
 // that start has no build-time stand-in and waits for the hook.
 #include <IOKit/IOLib.h>
+#include "A04BR3CpuClockMeter.h"
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include "BootMemoryQueueSnapshot.h"
@@ -285,6 +286,20 @@ void msdcIoReport(unsigned enabled)
 
 // Diagnostic sampling only. Registers and per-core counters are independently read,
 // not an atomic snapshot. CNTFRQ is the architectural timer, not CPU frequency.
+static unsigned gCpuMeterEnabled;
+static uint32_t gCpuMeterLock;
+struct A04BR3CpuMeterIO {
+  volatile uint8_t *t, *i, *p;
+  bool lock() { uint32_t expected = 0; return __atomic_compare_exchange_n(&gCpuMeterLock, &expected, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED); }
+  void unlock() { __atomic_store_n(&gCpuMeterLock, 0, __ATOMIC_RELEASE); }
+  uint32_t get(volatile uint8_t *b, unsigned o) { uint32_t v = *reinterpret_cast<volatile uint32_t *>(b + o); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
+  uint32_t top(unsigned o) { return get(t, o); }
+  uint32_t infra(unsigned o) { return get(i, o); }
+  uint32_t pll(unsigned o) { return get(p, o); }
+  void write(unsigned o, uint32_t v) { *reinterpret_cast<volatile uint32_t *>(t + o) = v; __asm__ volatile("dsb oshst" ::: "memory"); }
+  void delay(unsigned us) { IODelay(us); }
+};
+
 void cpuDiagnosticReport()
 {
   static volatile uint8_t *infra;
@@ -311,6 +326,18 @@ void cpuDiagnosticReport()
   } else {
     IOLog("a04br3 perf cpu-clk unknown map infra=%u apmixed=%u cntfrq=%llu\n",
           infra != nullptr, apmixed != nullptr, timerFrequency);
+  }
+  if (gCpuMeterEnabled == 1) {
+    static volatile uint8_t *top;
+    if (!top) top = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10000000, 0x1000));
+    if (!top || !infra || !apmixed) IOLog("a04br3 cpu-fmeter status=map-failed\n");
+    else {
+      A04BR3CpuMeterIO io{top, infra, apmixed};
+      auto r = a04br3_cpu_meter(io);
+      uint64_t at; absolutetime_to_nanoseconds(mach_absolute_time(), &at);
+      IOLog("a04br3 cpu-fmeter at_ns=%llu status=%u count=%u armpll_khz=%llu ref_khz=26000 window=520 mux=%08x dcm=%08x debug=%08x hop=%08x ctrl=%08x baseline=%08x pll0=%08x pll1=%08x power=%08x core_hz_unverified=1 external_owner_unverified=1\n",
+            at, r.status, r.count, r.khz, r.mux, r.dcm, r.debug, r.hopping, r.ctrl, r.baseline, r.pll0, r.pll1, r.power);
+    }
   }
   IOLog("a04br3 perf irq counters timer=%u/%u/%u/%u ipi=%u/%u/%u/%u (per-core cumulative; non-atomic)\n",
         armcpu_core_timer[0], armcpu_core_timer[1], armcpu_core_timer[2], armcpu_core_timer[3],
@@ -432,6 +459,7 @@ extern "C" void unixnu_board_init(void)
   native_powervr_submit_perf_enable(gpuSubmitPerf);
   unsigned gpuIoTrace = a04br3_diag_arg(PE_parse_boot_argn,"a04br3-gpu-io-trace","a04br3-gio");
   native_powervr_io_trace_enable(gpuIoTrace);
+  PE_parse_boot_argn("cm", &gCpuMeterEnabled, sizeof(gCpuMeterEnabled));
   a04br3_proclog_init();
   a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)
   unsigned events = 0;
