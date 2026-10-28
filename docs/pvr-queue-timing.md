@@ -13,6 +13,9 @@ invalidate the corresponding timing. A result and phase identify an early exit.
 The additional `u0`, `u1`, and `u2` counts and elapsed times respectively cover
 transfer sync creation, transfer job submission, and subsequent sync updates.
 These are nested inside `k3`; the sections do not include all surrounding code.
+On Darwin `mb` and `me` give `mach_absolute_time` ticks sampled immediately
+after `begin` and `end`. They help correlate with kernel uptime, but preemption
+between each pair can make the measured offset uncertain; validate both pairs.
 
 `XT` measures a single transfer command in the same thread: `k1` is transfer
 preparation and `k2` is the winsys submit, inclusive of any nested CPU waits.
