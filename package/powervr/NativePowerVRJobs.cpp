@@ -465,6 +465,7 @@ NativeIoTrace gNativeIoTrace;
 NativeWaitSeries gNativeWaitSeries;
 NativeWaitReasonLimit gNativeWaitReason;
 unsigned gWaitMonitorStarted;
+unsigned gIoLiveEnabled;
 uint64_t nowAbs() { return mach_absolute_time(); }
 uint64_t perfBegin(PerfStage s)
 {
@@ -485,6 +486,7 @@ bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); 
 
 static void native_wait_monitor(void *, wait_result_t)
 {
+  unsigned ioCursor=0;
   for (;;) {
     IOSleep(250);
     if (!__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE) || gNativeWaitSeries.mode<4) break;
@@ -499,6 +501,16 @@ static void native_wait_monitor(void *, wait_result_t)
         active[i].pid,(unsigned long long)active[i].tid,(unsigned long long)active[i].fence,(unsigned long long)active[i].serial,
         (unsigned long long)begin,(unsigned long long)now,(unsigned long long)sum,active[i].count,active[i].errors);
     }
+    if (__atomic_load_n(&gIoLiveEnabled,__ATOMIC_ACQUIRE)) {
+      for (unsigned i=0;i<2;i++) {
+        NativeIoRecord r={};
+        if (!native_io_live_take(&gNativeIoTrace,&ioCursor,&r)) break;
+        uint64_t startNs=0,endNs=0;
+        absolutetime_to_nanoseconds(r.start,&startNs);absolutetime_to_nanoseconds(r.end,&endNs);
+        IOLog("a04br3 gpu io live: clock=mach_absolute_ns pid=%u tid=%llu kind=%u start_ns=%llu end_ns=%llu fence=%llu result=%d\n",
+          r.pid,(unsigned long long)r.tid,r.kind,(unsigned long long)startNs,(unsigned long long)endNs,(unsigned long long)r.fence,r.result);
+      }
+    }
   }
   __atomic_store_n(&gWaitMonitorStarted,0u,__ATOMIC_RELEASE);
   thread_terminate_self();
@@ -506,7 +518,7 @@ static void native_wait_monitor(void *, wait_result_t)
 
 extern "C" void native_powervr_io_trace_enable(unsigned enabled)
 {
-  if (enabled >= 1 && enabled <= 5) {
+  if (enabled >= 1 && enabled <= 6) {
     uint64_t threshold = 0;
     nanoseconds_to_absolutetime(2000000ull, &threshold);
     gNativeIoTrace.threshold_ticks = threshold ? threshold : 1;
@@ -522,8 +534,8 @@ extern "C" void native_powervr_io_trace_enable(unsigned enabled)
     gNativeWaitSeries.threshold=sumThreshold?sumThreshold:1;gNativeWaitSeries.windowTicks=window?window:1;
     gNativeWaitSeries.staleTicks=stale?stale:1;
     gNativeWaitSeries.pendingLeaseTicks=pendingLease?pendingLease:1;
-    gNativeWaitSeries.activeThreshold=activeThreshold?activeThreshold:1;gNativeWaitSeries.mode=enabled;
-    if (enabled==5) {
+    gNativeWaitSeries.activeThreshold=activeThreshold?activeThreshold:1;gNativeWaitSeries.mode=enabled==6?5:enabled;
+    if (enabled==5 || enabled==6) {
       uint64_t shortWait=0,spacing=0;
       nanoseconds_to_absolutetime(50000000ull,&shortWait);
       nanoseconds_to_absolutetime(500000000ull,&spacing);
@@ -531,10 +543,11 @@ extern "C" void native_powervr_io_trace_enable(unsigned enabled)
       gNativeWaitReason.windowTicks=window?window:1;
     }
   }
-  __atomic_store_n(&gNativeWaitSeries.enabled,enabled == 3 || enabled == 4 || enabled == 5,__ATOMIC_RELEASE);
-  __atomic_store_n(&gNativeIoTrace.immediate_enabled, enabled == 2 || enabled == 3 || enabled == 4 || enabled == 5, __ATOMIC_RELEASE);
-  __atomic_store_n(&gNativeIoTrace.enabled, enabled >= 1 && enabled <= 5, __ATOMIC_RELEASE);
-  if (enabled==4 || enabled==5) {
+  __atomic_store_n(&gIoLiveEnabled,enabled==6,__ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeWaitSeries.enabled,enabled == 3 || enabled == 4 || enabled == 5 || enabled == 6,__ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeIoTrace.immediate_enabled, enabled == 2 || enabled == 3 || enabled == 4 || enabled == 5 || enabled == 6, __ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeIoTrace.enabled, enabled >= 1 && enabled <= 6, __ATOMIC_RELEASE);
+  if (enabled==4 || enabled==5 || enabled==6) {
     unsigned expected=0;
     if (__atomic_compare_exchange_n(&gWaitMonitorStarted,&expected,1u,false,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED)) {
       thread_t thread=nullptr;
