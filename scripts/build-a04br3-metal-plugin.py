@@ -60,6 +60,8 @@ def main():
                         help='enable explicit experimental TQ Clip routing')
     parser.add_argument('--pipeline-timing', action='store_true',
                         help='enable bounded PCO and pipeline timing (default off)')
+    parser.add_argument('--queue-timing', action='store_true',
+                        help='enable bounded PVR driver queue phase timing (default off)')
     parser.add_argument('--pipeline-failure-diag', action='store_true',
                         help='report the first two real Metal render-pipeline failures through the board log')
     parser.add_argument('--require-fetch-for-apple3', action='store_true',
@@ -109,6 +111,7 @@ def main():
             (args.serial_transfer, 'serial-transfer', 'PVR_DARWIN_SERIAL_TRANSFER'),
             (args.tq_clip, 'tq-clip', 'PVR_DARWIN_TQ_CLIP'),
             (args.pipeline_timing, 'pipeline-timing', 'PVR_PIPELINE_TIMING'),
+            (args.queue_timing, 'queue-timing', 'PVR_QUEUE_TIMING'),
             (args.pipeline_failure_diag, 'pipeline-failure-diag', 'PVR_METAL_PIPELINE_DIAG'),
             (args.require_fetch_for_apple3, 'require-fetch-for-apple3', 'PVR_METAL_REQUIRE_FETCH_FOR_APPLE3'),
             (args.buffer_rows, 'buffer-rows', 'PVR_DARWIN_BUFFER_ROWS'),
