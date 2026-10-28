@@ -55,7 +55,7 @@ def snapshot():
     runner = Path(os.environ['RUNNER_TEMP']).resolve()
     device = Path(os.environ['DEVICE_DIR']).resolve()
     source = Path.cwd().resolve()
-    out = Path(os.environ.get('UNIXNU_OUT', str(source / 'out'))).resolve()
+    out = Path(os.path.expandvars(os.path.expanduser(os.environ.get('UNIXNU_OUT') or str(source / 'out')))).resolve()
     seed = json.loads((runner / 'owner-data/seed.json').read_text())
     data_uuid = str(uuid.UUID(seed['volume_uuid'])).upper()
     if data_uuid == str(uuid.UUID(int=0)).upper():

@@ -20,13 +20,19 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None, memory=None):
+def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None, memory=None, out_mode=None):
     with tempfile.TemporaryDirectory(prefix='pre-build-reuse-') as directory:
         root = Path(directory)
         work, temporary, device, tools = [root / p for p in ('work', 'temp', 'device', 'bin')]
         for path in (work, temporary, device, tools):
             path.mkdir()
-        tree = work / 'out/a04br3/tree'
+        default_tree = work / 'out/a04br3/tree'
+        alternate = work / 'custom output'
+        tree = (alternate if out_mode else work / 'out') / 'a04br3/tree'
+        if out_mode:
+            (default_tree / 'scripts/data').mkdir(parents=True)
+            (default_tree / 'scripts/data/gpu-metal-vulkan-inputs.json').write_text(json.dumps({'translator': {'commit': 'WRONG-TREE-PIN'}}))
+            (default_tree / '.cache/gpu-reference/metal2vulkan/.git').mkdir(parents=True)
         (tree / 'scripts/data').mkdir(parents=True)
         (tree / 'scripts/data/gpu-metal-vulkan-inputs.json').write_text(json.dumps({'translator': {'commit': 'test-pin'}}))
         (tree / '.cache/gpu-reference/metal2vulkan/.git').mkdir(parents=True)
@@ -68,6 +74,8 @@ if sys.argv[1] in ('-', '-c'):
     os.execv(os.environ['MOCK_PYTHON'], [os.environ['MOCK_PYTHON']] + sys.argv[1:])
 args = sys.argv[2:]
 name = Path(sys.argv[1]).name
+if name in ('prepare-owner-data-fixture.py', 'packed_ramdisk.py', 'seed-data-grow.py', 'build-a04br3-metal-plugin.py'):
+    assert Path(sys.argv[1]).resolve().is_relative_to(Path(os.environ['MOCK_TREE']).resolve()), (name, sys.argv[1])
 with open(os.environ['MOCK_LOG'], 'a') as log:
     log.write('python ' + name + ' ' + ' '.join(args) + '\n')
 def option(key): return Path(args[args.index(key) + 1])
@@ -105,9 +113,15 @@ elif name == 'a04br3-seed-powervr-probe.py':
         env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
                    DEVICE_DIR=str(device), RUNNER_TEMP=str(temporary), MOCK_LOG=str(log),
                    MOCK_DMG=str(dmg), MOCK_UUID=UUID, MOCK_ACTUAL_UUID='87654321-1234-5678-9ABC-123456789ABC' if mismatch else UUID, MOCK_PYTHON=sys.executable,
-                   GITHUB_ENV=str(root / 'github-env'), A04BR3_POWERVR_PROBE='1' if probe else '0',
+                   GITHUB_ENV=str(root / 'github-env'), MOCK_TREE=str(tree), A04BR3_POWERVR_PROBE='1' if probe else '0',
                    A04BR3_POWERVR_VULKAN='1', A04BR3_POWERVR_METAL='1' if metal else '0',
                    MOCK_FAIL_SEED='1' if fail_seed else '0', MOCK_FAIL_GROW='1' if fail_grow else '0', XNU_OWNER_DATA_VOLUME_UUID='stale')
+        env.pop('UNIXNU_OUT', None)
+        if out_mode == 'absolute': env['UNIXNU_OUT'] = str(alternate)
+        if out_mode == 'relative': env['UNIXNU_OUT'] = 'custom output'
+        if out_mode == 'expanded':
+            env['BENCH_OUT_PARENT'] = str(work)
+            env['UNIXNU_OUT'] = '$BENCH_OUT_PARENT/custom output'
         env.pop('A04BR3_MEMORY_BENCH', None)
         if memory is not None: env['A04BR3_MEMORY_BENCH'] = memory
         if memory == '1': env['A04BR3_POWERVR_METAL_MODE'] = 'publish'
@@ -163,6 +177,11 @@ elif name == 'a04br3-seed-powervr-probe.py':
                     assert (temporary / 'data-32.dbr').read_bytes() == previous_baseline
             else:
                 assert calls.count('unixnu build kernel') == 1, calls
+                assert '--tree ' + str(tree) in calls, calls
+                if out_mode:
+                    assert 'WRONG-TREE-PIN' not in calls
+                    assert 'test-pin' in calls
+                    assert json.loads((default_tree / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit'] == 'WRONG-TREE-PIN'
                 assert 'unixnu build kernel uuid=' + UUID in calls, calls
                 for required in ('build-a04br3-trust-cache.py', 'build-pvr-darwin.py',
                                  'build-a04br3-powervr-probe.py', 'a04br3-seed-powervr-probe.py'):
@@ -312,3 +331,8 @@ run_case(True, memory='bad')
 run_case(True, memory='1', probe=False)
 print('PASS: memory benchmark explicit opt-in, staging, trust and failure conditions')
 run_case(True, memory='1', metal=False)
+
+for mode in (None, 'absolute', 'relative', 'expanded'):
+    run_case(True, memory='1', out_mode=mode)
+    run_case(False, memory='1', out_mode=mode)
+print('PASS: default and alternate UNIXNU_OUT select one tree despite conflicting default tree')
