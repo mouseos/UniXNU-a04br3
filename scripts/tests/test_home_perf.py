@@ -88,6 +88,8 @@ int main(){bool down=true;unsigned edges=0;run(down,edges);
     def test_sampler_and_gate(self):
         board = (ROOT / 'package/A04BR3Board.cpp').read_text()
         self.assertIn('if (perf == 1)', board)
+        self.assertIn('if (memBench == 1 && round % 6 == 0) boot_memory_top_sample();', board)
+        self.assertIn('PE_parse_boot_argn(\"mb\"', board)
         self.assertIn('PE_parse_boot_argn("a04br3-home-perf"', board)
         source = (ROOT / 'package/BootProcessProbe.c').read_text()
         body = source[source.index('#if PRECISE_USER_KERNEL_TIME'):source.index('// Optional timer-IRQ PC histogram.')]
@@ -142,7 +144,8 @@ static task_t proc_task(proc_t p){return p->task;}
 static uint64_t get_task_cpu_time(task_t t){(void)t;return 17;}
 static uint64_t get_task_resident_size(task_t t){(void)t;return 21;}
 static uint64_t get_task_compressed(task_t t){(void)t;return 22;}
-static uint64_t get_task_phys_footprint(task_t t){(void)t;return 23;}
+static task_t score_tasks[300];static uint64_t scores[300];
+static uint64_t get_task_phys_footprint(task_t t){for(unsigned i=0;i<300;++i)if(score_tasks[i]==t)return scores[i];return 23;}
 static int task_lock_try(task_t t){if(t->locked)return 0;t->locked=1;++task_acquires;return 1;}
 static void task_unlock(task_t t){assert(t->locked);t->locked=0;++task_releases;}
 static bool ml_set_interrupts_enabled(bool v){bool old=!interrupted;interrupted=!v;return old;}
@@ -151,9 +154,9 @@ static void thread_unlock(thread_t t){assert(t->sched_lock);t->sched_lock=0;++sc
 static uint64_t clock_value=99;
 static uint64_t mach_absolute_time(void){return ++clock_value;}
 static void absolutetime_to_nanoseconds(uint64_t t,uint64_t *v){*v=t*2;}
-static struct proc procs[16];
+static struct proc procs[300];
 static void proc_iterate(unsigned flags,int (*cb)(proc_t,void*),void *a,int (*filter)(proc_t,void*),void *b){
- assert(flags==5);for(unsigned i=0;i<16;++i)if(procs[i].name && filter(&procs[i],b))cb(&procs[i],a);
+ assert(flags==5);for(unsigned i=0;i<300;++i)if(procs[i].name && (!filter || filter(&procs[i],b)))cb(&procs[i],a);
 }
 static char output[8192];static unsigned output_used;
 static int quiet_printf(const char *fmt,...){va_list ap;va_start(ap,fmt);int n=vsnprintf(output+output_used,sizeof(output)-output_used,fmt,ap);va_end(ap);if(n>0)output_used+=(unsigned)n;assert(output_used<sizeof(output));return n;}
@@ -216,6 +219,19 @@ int main(void){
  for(unsigned i=0;i<16;++i)procs[i]=(struct proc){"logd",(int)i+1,&task};
  output_used=0;output[0]=0;boot_home_perf_sample();assert(home_perf_count==12);
  assert(task_acquires==task_releases && sched_acquires==sched_releases);
+ struct fake_task tasks[260]={0};
+ for(unsigned i=0;i<260;++i) {score_tasks[i]=&tasks[i];scores[i]=i;procs[i]=(struct proc){"worker",(int)i+1,&tasks[i]};}
+ procs[7].task=NULL; procs[12].task=NULL;
+ output_used=0;output[0]=0;boot_memory_top_sample();
+ assert(mem_top_seen==256 && mem_top_count==8 && mem_top_no_task==2 && mem_top_truncated==1);
+ assert(mem_top_rows[0].pid==256 && mem_top_rows[0].footprint==255);
+ assert(mem_top_rows[7].pid==249 && mem_top_rows[7].footprint==248);
+ assert(strstr(output,"seen=256 rows=8 no_task=2 truncated=1 non_atomic=1"));
+ assert(strstr(output,"rank=1 pid=256 name=worker uid=1256 footprint=255"));
+ for(unsigned i=0;i<260;++i) procs[i].name=NULL;
+ scores[0]=scores[1]=42;procs[0]=(struct proc){"first",71,&tasks[0]};procs[1]=(struct proc){"second",72,&tasks[1]};
+ output_used=0;output[0]=0;boot_memory_top_sample();
+ assert(mem_top_seen==2 && !mem_top_truncated && mem_top_rows[0].pid==71 && mem_top_rows[1].pid==72);
  return 0;
 }
 '''

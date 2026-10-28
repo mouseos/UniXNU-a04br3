@@ -35,6 +35,7 @@ void a04br3_registers_init(void);
 void a04br3_gpu_init(void);
 void boot_memory_snapshot(uint64_t out[7]);
 void boot_home_perf_sample(void);
+void boot_memory_top_sample(void);
 void boot_home_irq_init(unsigned);
 void boot_live_pc_init(unsigned);
 void boot_live_pc_report(void);
@@ -331,6 +332,9 @@ void procLogThread(void *, wait_result_t)
 {
   unsigned perf, rootTiming, msdcPerf;
   procLogOptions(perf, rootTiming, msdcPerf);
+  unsigned memBench = 0;
+  if (!PE_parse_boot_argn("a04br3-membench", &memBench, sizeof(memBench)))
+    PE_parse_boot_argn("mb", &memBench, sizeof(memBench));
   uint64_t cacheReportSeconds = 0;
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
@@ -349,6 +353,7 @@ void procLogThread(void *, wait_result_t)
       IOLog("a04br3 perf vm pagesize=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu throttled=%llu pageable_internal=%llu pageable_external=%llu mode=%d active_compressor=%u active_swap=%u\n",
             m[0],m[1],m[2],m[3],m[4],m[5],m[6],q.throttled,q.pageable_internal,q.pageable_external,q.compressor_mode,q.compressor_active,q.swap_active);
       boot_home_perf_sample();
+      if (memBench == 1 && round % 6 == 0) boot_memory_top_sample();
       msdcIrqReport(msdcPerf);
       msdcIoReport(msdcPerf);
       cpuDiagnosticReport();

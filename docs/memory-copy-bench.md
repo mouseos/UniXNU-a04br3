@@ -141,3 +141,19 @@ UNIXNU_ROOT=/path/to/UniXNU python3 scripts/tests/test_memory_tree_scripts.py
 UNIXNU_ROOT=/path/to/UniXNU python3 scripts/tests/test_memory_iostat_profile.py
 python3 scripts/tests/test_a04br3_pre_build_seed_reuse.py
 ```
+
+When both the benchmark opt-in and `a04br3-home-perf=1` are enabled, the
+existing heartbeat worker also emits `a04br3 memtop` every sixth heartbeat.
+It ranks up to eight processes by physical footprint among at most 256 visited
+processes, including unselected names. The header records the monotonic capture
+interval, processes visited, unavailable tasks and truncation. A truncated
+result cannot establish the overall maximum; process iteration can omit
+transitional processes or wait in the existing worker. Rows are non-atomic and
+footprint, resident and compressed are different accounting measures. Shared
+pages, kernel memory and GPU allocations cannot be deduced by summing them.
+This bounded diagnostic still adds process traversal and ledger reads; compare
+its overhead before treating measurements as representative. `inactive` and
+`speculative` are page queues with possible reclamation, not a guarantee that
+all their pages can be freed immediately or without I/O. The VM, task and
+benchmark records have different capture times and must not be summed as if
+they were an atomic snapshot.

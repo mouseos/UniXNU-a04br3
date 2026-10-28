@@ -291,6 +291,45 @@ void boot_home_perf_sample(void) {
  }
 }
 
+// Bounded, opt-in accounting over processes (not a system-wide memory total).
+// proc_iterate can still wait internally; invoke only in the heartbeat worker.
+#define MEM_TOP_LIMIT 256u
+#define MEM_TOP_ROWS 8u
+struct mem_top_row { char name[24]; int pid; uint64_t uniqueid, resident, compressed, footprint; };
+static struct mem_top_row mem_top_rows[MEM_TOP_ROWS];
+static unsigned mem_top_seen, mem_top_count, mem_top_no_task, mem_top_truncated;
+static int mem_top_capture(proc_t p, void *unused) {
+ (void)unused;
+ if (mem_top_seen >= MEM_TOP_LIMIT) { mem_top_truncated=1; return PROC_RETURNED; }
+ ++mem_top_seen;
+ task_t task=proc_task(p); if(!task) { ++mem_top_no_task; return PROC_RETURNED; }
+ uint64_t footprint=get_task_phys_footprint(task);
+ unsigned pos=0;
+ while(pos<mem_top_count && mem_top_rows[pos].footprint>=footprint) ++pos;
+ if(pos>=MEM_TOP_ROWS) return PROC_RETURNED;
+ unsigned end=mem_top_count<MEM_TOP_ROWS ? mem_top_count++ : MEM_TOP_ROWS-1;
+ for(unsigned i=end;i>pos;--i) mem_top_rows[i]=mem_top_rows[i-1];
+ struct mem_top_row *r=&mem_top_rows[pos];
+ memset(r,0,sizeof(*r));strlcpy(r->name,proc_best_name(p),sizeof(r->name));
+ r->pid=proc_pid(p);r->uniqueid=proc_uniqueid(p);r->footprint=footprint;
+ r->resident=get_task_resident_size(task);r->compressed=get_task_compressed(task);
+ return PROC_RETURNED;
+}
+void boot_memory_top_sample(void) {
+ mem_top_seen=mem_top_count=mem_top_no_task=mem_top_truncated=0;
+ uint64_t begin=0,end=0;
+ absolutetime_to_nanoseconds(mach_absolute_time(),&begin);
+ proc_iterate(PROC_ALLPROCLIST|PROC_NOWAITTRANS,mem_top_capture,NULL,NULL,NULL);
+ absolutetime_to_nanoseconds(mach_absolute_time(),&end);
+ printf("a04br3 memtop begin_ns=%llu end_ns=%llu seen=%u rows=%u no_task=%u truncated=%u non_atomic=1\n",
+  begin,end,mem_top_seen,mem_top_count,mem_top_no_task,mem_top_truncated);
+ for(unsigned i=0;i<mem_top_count;++i) {
+  struct mem_top_row *r=&mem_top_rows[i];
+  printf("a04br3 memtop rank=%u pid=%d name=%.23s uid=%llu footprint=%llu resident=%llu compressed=%llu\n",
+   i+1,r->pid,r->name,r->uniqueid,r->footprint,r->resident,r->compressed);
+ }
+}
+
 // Optional timer-IRQ PC histogram. Called by the generic, compile-gated XNU
 // timer hook with interrupts masked. Bounded atomics only: no allocation,
 // waiting, stack walk or logging. A single try-lock drops contended samples.
