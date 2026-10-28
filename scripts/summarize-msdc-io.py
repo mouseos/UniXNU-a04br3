@@ -10,6 +10,7 @@ header = re.compile(r'a04br3 msdc io sample seq=(\d+) begin_ns=(\d+) end_ns=(\d+
 transfer = re.compile(r'a04br3 msdc transfer seq=(\d+) mode=(dma_read|pio_read|write) size=(le4k|4k_16k|gt16k) calls=(\d+) ok_bytes=(\d+) errors=(\d+) elapsed_ns=(\d+)\Z')
 offer = re.compile(r'a04br3 msdc offered seq=(\d+) mode=(read|write) size=(le4k|4k_16k|gt16k) calls=(\d+) bytes=(\d+)\Z')
 queue = re.compile(r'a04br3 msdc queue seq=(\d+) started=(\d+) wait_ns=(\d+) max_wait_ns=(\d+)\Z')
+cache_row = re.compile(r'a04br3 msdc cache sample seq=(\d+) hits=(\d+) misses=(\d+) reused_bytes=(\d+)\Z')
 end_marker = re.compile(r'a04br3 msdc io end seq=(\d+) rows=(\d+)\Z')
 transport_keys = [('transfer',m,b) for m in ('dma_read','pio_read','write') for b in ('le4k','4k_16k','gt16k')]
 offer_keys = [('offered',m,b) for m in ('read','write') for b in ('le4k','4k_16k','gt16k')]
@@ -52,7 +53,7 @@ def samples(lines):
             seq = int(h[1])
             if seq != last_seq + 1:
                 raise ValueError('missing, duplicate or out-of-order sample sequence')
-            current = {'seq':seq, 'begin':int(h[2]), 'end':int(h[3]), 'rows':{}}
+            current = {'seq':seq, 'begin':int(h[2]), 'end':int(h[3]), 'rows':{}, 'cache':None}
             continue
         if 'a04br3 msdc io sample' in line:
             raise ValueError('malformed sample header')
@@ -75,6 +76,13 @@ def samples(lines):
             if position >= len(expected) or key != expected[position]:
                 raise ValueError('missing, duplicate or out-of-order sample row')
             current['rows'][key] = values
+        c = cache_row.search(line)
+        if c:
+            if current is None or int(c[1]) != current['seq'] or current['cache'] is not None or len(current['rows']) != len(expected):
+                raise ValueError('orphan, duplicate, mixed or out-of-order cache sample')
+            current['cache'] = tuple(int(c[i]) for i in range(2, 5))
+        elif 'a04br3 msdc cache sample ' in line:
+            raise ValueError('malformed or unavailable cache sample')
         e = end_marker.search(line)
         if e:
             if current is None or int(e[1]) != current['seq'] or int(e[2]) != len(expected) or len(current['rows']) != len(expected):
@@ -87,12 +95,14 @@ def samples(lines):
     if current is not None:
         raise ValueError('missing sample end at EOF')
 
-def summarize(segment, source_hash, boot_id, offset):
+def summarize(segment, source_hash, boot_id, offset, require_cache=False):
     previous = None
     last_end = None
     output = []
     for sample in samples(segment.decode('utf-8', errors='replace').splitlines()):
         begin, end, rows = sample['begin'], sample['end'], sample['rows']
+        if require_cache and sample['cache'] is None:
+            raise ValueError('missing cache sample')
         if end < begin or (last_end is not None and begin < last_end) or (previous is not None and begin <= previous['begin']):
             raise ValueError('overlapping or non-monotonic sample timestamps')
         last_end = end
@@ -114,6 +124,15 @@ def summarize(segment, source_hash, boot_id, offset):
                 calls, byte_count = deltas[key]
                 output.append({**common, 'kind':'offered', 'mode':key[1], 'size':key[2],
                     'activity_observed':any((calls,byte_count)), 'calls':calls, 'bytes':byte_count})
+            if (sample['cache'] is None) != (previous['cache'] is None):
+                raise ValueError('missing cache sample')
+            if sample['cache'] is not None:
+                cache_delta = tuple(a-b for a,b in zip(sample['cache'], previous['cache']))
+                if any(v < 0 for v in cache_delta):
+                    raise ValueError('cache counter decreased')
+                hits, misses, reused = cache_delta
+                output.append({**common, 'kind':'cache', 'activity_observed':any(cache_delta),
+                               'hits':hits, 'misses':misses, 'reused_bytes':reused})
             key = ('queue','','')
             started, wait_ns, max_delta = deltas[key]
             output.append({**common, 'kind':'queue', 'activity_observed':any((started,wait_ns,max_delta)),
@@ -129,11 +148,12 @@ def main():
     parser.add_argument('--source-sha256', required=True, help='SHA-256 of the complete source file')
     parser.add_argument('--boot-start-offset', required=True, type=int, help='byte offset of preloader anchor')
     parser.add_argument('--boot-id', required=True, help='SHA-256 of source bytes from the anchor through EOF')
+    parser.add_argument('--require-cache', action='store_true', help='require a cache sample in every frame')
     args = parser.parse_args()
     with open(args.uart_log, 'rb') as stream:
         data = stream.read()
     segment = verify_source(data, args.source_sha256, args.boot_start_offset, args.boot_id)
-    output = summarize(segment, args.source_sha256, args.boot_id, args.boot_start_offset)
+    output = summarize(segment, args.source_sha256, args.boot_id, args.boot_start_offset, args.require_cache)
     # All source, boundary, timestamp and counter checks precede any JSON output.
     rendered = [json.dumps(x, separators=(',',':'), allow_nan=False) for x in output]
     if rendered:

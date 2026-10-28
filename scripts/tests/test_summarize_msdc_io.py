@@ -24,12 +24,12 @@ def sample(seq,t,n,skip=None,end=True):
 def digest(b):return hashlib.sha256(b).hexdigest()
 with tempfile.TemporaryDirectory(prefix='iostat-summary-') as d:
  path=Path(d)/'uart'
- def run(data,offset=None,source_hash=None,boot_id=None):
+ def run(data,offset=None,source_hash=None,boot_id=None,require_cache=False):
   path.write_bytes(data);offset=data.find(anchor) if offset is None else offset
   source_hash=digest(data) if source_hash is None else source_hash
   boot_id=digest(data[offset:]) if boot_id is None else boot_id
   return subprocess.run(['python3',str(script),str(path),'--source-sha256',source_hash,
-                         '--boot-start-offset',str(offset),'--boot-id',boot_id],capture_output=True,text=True)
+                         '--boot-start-offset',str(offset),'--boot-id',boot_id]+(['--require-cache'] if require_cache else []),capture_output=True,text=True)
  def rejected(data,why):
   p=run(data);assert p.returncode==2 and not p.stdout and why in p.stderr,p.stderr
  good=prefix+sample(1,100,1)+sample(2,1_000_000_100,3)
@@ -40,6 +40,18 @@ with tempfile.TemporaryDirectory(prefix='iostat-summary-') as d:
  assert all(r['calls']==2 and r['bytes']==2048 and r['activity_observed'] for r in offer)
  assert q['kind']=='queue' and q['started']==2 and q['wait_ns']==40 and q['max_wait_ns_cumulative']==15 and q['activity_observed']
  assert all(r['source_sha256']==digest(good) and r['boot_segment_sha256']==digest(good[good.find(anchor):]) and r['boot_start_offset']==good.find(anchor) for r in rows)
+ # New optional cache snapshots share the frame timestamps and sequence.
+ def with_cache(data, seq, hits, misses, reused):
+  return data.replace(f'a04br3 msdc io end seq={seq}'.encode(),
+   f'a04br3 msdc cache sample seq={seq} hits={hits} misses={misses} reused_bytes={reused}\na04br3 msdc io end seq={seq}'.encode())
+ ca=with_cache(sample(1,100,1),1,1,2,4096);cb=with_cache(sample(2,200,2),2,4,7,12288)
+ p=run(good,require_cache=True);assert p.returncode==2 and 'missing cache sample' in p.stderr
+ p=run(prefix+ca+cb,require_cache=True);assert p.returncode==0,p.stderr
+ cache=[json.loads(x) for x in p.stdout.splitlines() if json.loads(x)['kind']=='cache'];assert len(cache)==1 and (cache[0]['hits'],cache[0]['misses'],cache[0]['reused_bytes'])==(3,5,8192)
+ rejected(prefix+ca+sample(2,200,2),'missing cache sample')
+ rejected(prefix+ca+with_cache(sample(2,200,2),2,0,2,4096),'cache counter decreased')
+ rejected(prefix+ca+cb.replace(b'cache sample seq=2',b'cache sample seq=1'),'mixed')
+ rejected(prefix+ca+cb.replace(b'reused_bytes=12288',b'reused_bytes=bad'),'malformed')
  # A complete idle interval is valid and reports inactive, zero rates, and a cumulative queue maximum.
  p=run(prefix+sample(1,100,1)+sample(2,200,1));assert p.returncode==0,p.stderr
  idle=[json.loads(x) for x in p.stdout.splitlines()];assert len(idle)==16 and not any(r['activity_observed'] for r in idle)

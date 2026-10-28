@@ -242,13 +242,15 @@ void msdcIoReport(unsigned enabled)
   bool haveTransport = native_msdc_transport_stats != nullptr;
   bool haveOffer = native_msdc_block_offer_stats != nullptr;
   bool haveQueue = native_msdc_block_queue_stats != nullptr;
+  bool haveCache = native_msdc_verified_cache_stats != nullptr;
   static uint64_t sequence = 0; // only the process-report thread calls this helper
   const uint64_t sampleSeq = ++sequence;
-  uint64_t transfer[36] = {}, offer[12] = {}, queue[3] = {}, begin = 0, end = 0;
+  uint64_t transfer[36] = {}, offer[12] = {}, queue[3] = {}, cache[3] = {}, begin = 0, end = 0;
   absolutetime_to_nanoseconds(mach_absolute_time(), &begin);
   if (haveTransport) for (unsigned i = 0; i < 36; ++i) transfer[i] = __atomic_load_n(&native_msdc_transport_stats[i], __ATOMIC_RELAXED);
   if (haveOffer) for (unsigned i = 0; i < 12; ++i) offer[i] = __atomic_load_n(&native_msdc_block_offer_stats[i], __ATOMIC_RELAXED);
   if (haveQueue) for (unsigned i = 0; i < 3; ++i) queue[i] = __atomic_load_n(&native_msdc_block_queue_stats[i], __ATOMIC_RELAXED);
+  if (haveCache) for (unsigned i = 0; i < 3; ++i) cache[i] = __atomic_load_n(&native_msdc_verified_cache_stats[i], __ATOMIC_RELAXED);
   absolutetime_to_nanoseconds(mach_absolute_time(), &end);
   IOLog("a04br3 msdc io sample seq=%llu begin_ns=%llu end_ns=%llu non_atomic=1\n",
         (unsigned long long)sampleSeq, (unsigned long long)begin, (unsigned long long)end);
@@ -274,6 +276,11 @@ void msdcIoReport(unsigned enabled)
                        (unsigned long long)sampleSeq, (unsigned long long)queue[0],
                        (unsigned long long)queue[1], (unsigned long long)queue[2]);
   else IOLog("a04br3 msdc queue seq=%llu unavailable\n", (unsigned long long)sampleSeq);
+  // Optional extra row does not change the legacy 16-row frame contract.
+  if (haveCache) IOLog("a04br3 msdc cache sample seq=%llu hits=%llu misses=%llu reused_bytes=%llu\n",
+                       (unsigned long long)sampleSeq, (unsigned long long)cache[0],
+                       (unsigned long long)cache[1], (unsigned long long)cache[2]);
+  else IOLog("a04br3 msdc cache sample seq=%llu unavailable\n", (unsigned long long)sampleSeq);
   IOLog("a04br3 msdc io end seq=%llu rows=%u\n", (unsigned long long)sampleSeq,
         (haveTransport ? 9u : 0u) + (haveOffer ? 6u : 0u) + (haveQueue ? 1u : 0u));
 }
