@@ -49,3 +49,12 @@ static inline bool native_io_take(NativeIoTrace *t, unsigned index, NativeIoReco
  if (!__atomic_compare_exchange_n(&slot->state,&expected,3u,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)) return false;
  *out=slot->record; __atomic_store_n(&slot->state,0u,__ATOMIC_RELEASE); return true;
 }
+// A single fast reporter advances its own cursor. The normal periodic reporter
+// may race it: native_io_take's CAS makes each published slot single-consumer.
+static inline bool native_io_live_take(NativeIoTrace *t, unsigned *cursor, NativeIoRecord *out) {
+ for (unsigned n=0;n<128;n++) {
+  unsigned index=(*cursor+n)%128;
+  if (native_io_take(t,index,out)) { *cursor=(index+1)%128; return true; }
+ }
+ return false;
+}
