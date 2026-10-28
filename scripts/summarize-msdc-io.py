@@ -44,6 +44,32 @@ def verify_source(data, source_hash, offset, boot_id):
         raise ValueError('missing boot reason or boot boundary after sampling began')
     return segment
 
+def uart_lines(segment):
+    # UART framing is LF, optionally preceded by exactly one CR. Python's
+    # splitlines() also recognizes VT, FF, CR and Unicode separators; those
+    # must never split or silently truncate a diagnostic record.
+    parts = segment.split(b'\n')
+    marker = record_marker.encode('ascii')
+    for index, raw in enumerate(parts):
+        if marker in raw:
+            if index == len(parts) - 1:
+                raise ValueError('unterminated MSDC UART record')
+            if raw.endswith(b'\r'):
+                raw = raw[:-1]
+            if any((byte < 32 and byte != 9) or byte == 127 for byte in raw):
+                raise ValueError('unexpected control character in MSDC UART record')
+            try:
+                line = raw.decode('ascii')
+            except UnicodeDecodeError as exc:
+                raise ValueError('non-ASCII character in MSDC UART record') from exc
+            if '\t' in line[line.index(record_marker):]:
+                raise ValueError('unexpected control character in MSDC UART record')
+            yield line
+        else:
+            # Other UART lines can contain binary boot noise. They are not
+            # interpreted as MSDC records, and LF remains the only delimiter.
+            yield raw.decode('utf-8', errors='replace')
+
 def samples(lines):
     current = None
     last_seq = 0
@@ -102,7 +128,7 @@ def summarize(segment, source_hash, boot_id, offset):
     previous = None
     last_end = None
     output = []
-    for sample in samples(segment.decode('utf-8', errors='replace').splitlines()):
+    for sample in samples(uart_lines(segment)):
         begin, end, rows = sample['begin'], sample['end'], sample['rows']
         if end < begin or (last_end is not None and begin < last_end) or (previous is not None and begin <= previous['begin']):
             raise ValueError('overlapping or non-monotonic sample timestamps')

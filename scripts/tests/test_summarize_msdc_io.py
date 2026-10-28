@@ -65,6 +65,15 @@ with tempfile.TemporaryDirectory(prefix='iostat-summary-') as d:
   rejected(corrupted,'malformed')
  rejected(good.replace(b'elapsed_ns=10',b'elapsed_ns=19INVALID',1),'malformed')
  rejected(good.replace(b'rows=16',b'rows=9INVALID',1),'malformed')
+ # Only LF and a single CR immediately before LF delimit records.
+ p=run(good.replace(b'\n',b'\r\n'));assert p.returncode==0,p.stderr
+ for control in (b'\x00',b'\x0b',b'\x0c',b'\x1b',b'\x1c',b'\x7f'):
+  rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10'+control+b'INVALID\n',1),'control character')
+ rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10\r\r\n',1),'control character')
+ rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10\rINVALID\n',1),'control character')
+ rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10\tINVALID\n',1),'control character')
+ rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10\xc2\x85INVALID\n',1),'non-ASCII')
+ rejected(good.rstrip(b'\n'),'unterminated MSDC')
  rejected(prefix+sample(1,100,1)+sample(2,200,2,('transfer','write','gt16k')),'out-of-order')
  rejected(prefix+sample(1,100,1)+sample(2,200,2,('offered','read','le4k')),'out-of-order')
  rejected(prefix+sample(1,100,1)+sample(2,200,2,('queue','','')),'incomplete sample')

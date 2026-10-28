@@ -696,8 +696,10 @@ at the end of the interval, not an interval-only maximum. Older reporter logs
 without this framing are rejected. An MSDC record may have no prefix or one
 numeric bracketed timestamp such as `[123.456] `; other prefixes and multiple
 MSDC records on the same line are rejected, including lines joined after a lost
-newline. The tool rejects observed reboot markers even if time and counters
-increased. Capture continuity
+newline. Only LF, or one CR immediately followed by LF, terminates an MSDC
+record; other control characters and non-ASCII bytes in a record are rejected.
+A tab is allowed only in the numeric timestamp prefix. The tool rejects
+observed reboot markers even if time and counters increased. Capture continuity
 still must be established externally: missing UART output or deliberate
 concatenation without a recognizable boundary cannot be disproved from hashes
 or counters. These rates inherit the non-atomic snapshots and logging overhead
