@@ -3,7 +3,7 @@
 #include <thread>
 #include <vector>
 #include <cstdio>
-static NativeWaitSeries make() {NativeWaitSeries s={};s.threshold=1000;s.windowTicks=10000;s.staleTicks=5000;return s;}
+static NativeWaitSeries make() {NativeWaitSeries s={};s.threshold=1000;s.windowTicks=10000;s.staleTicks=5000;s.pendingLeaseTicks=65000;return s;}
 int main() {
  NativeWaitSeries s=make();NativeWaitResult out={};
  assert(!native_wait_begin(&s,56,7,3,100));
@@ -36,6 +36,12 @@ int main() {
  assert(!native_wait_begin(&v,56,99,1,6000) && v.full==1); // pending stays alive
  assert(!native_wait_end(&v,56,1,1,101,6100,0,true,&out) || out.tid==1);
  native_wait_begin(&v,56,99,1,6200); // a completed slot becomes available
+ NativeWaitSeries lease=make();__atomic_store_n(&lease.enabled,1,__ATOMIC_RELEASE);
+ assert(native_wait_begin(&lease,1,1,1,100));
+ lease.lock=1;assert(!native_wait_end(&lease,1,1,1,101,200,-60,false,&out));lease.lock=0;
+ assert(lease.busy==1 && lease.slots[0].pending==1);
+ native_wait_begin(&lease,1,2,2,65101);
+ assert(lease.expiredPending==1);
  NativeWaitSeries rate=make();__atomic_store_n(&rate.enabled,1,__ATOMIC_RELEASE);
  for(unsigned i=0;i<5;i++) {
   bool b=native_wait_begin(&rate,56,i+1,100+i,100+i*1000);

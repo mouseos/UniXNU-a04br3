@@ -487,12 +487,14 @@ extern "C" void native_powervr_io_trace_enable(unsigned enabled)
     uint64_t longThreshold = 0;
     nanoseconds_to_absolutetime(1000000000ull, &longThreshold);
     gNativeIoTrace.immediate_threshold_ticks = longThreshold ? longThreshold : 1;
-    uint64_t sumThreshold=0,window=0,stale=0;
+    uint64_t sumThreshold=0,window=0,stale=0,pendingLease=0;
     nanoseconds_to_absolutetime(1000000000ull,&sumThreshold);
     nanoseconds_to_absolutetime(10000000000ull,&window);
     nanoseconds_to_absolutetime(5000000000ull,&stale);
+    nanoseconds_to_absolutetime(65000000000ull,&pendingLease);
     gNativeWaitSeries.threshold=sumThreshold?sumThreshold:1;gNativeWaitSeries.windowTicks=window?window:1;
     gNativeWaitSeries.staleTicks=stale?stale:1;
+    gNativeWaitSeries.pendingLeaseTicks=pendingLease?pendingLease:1;
   }
   __atomic_store_n(&gNativeWaitSeries.enabled,enabled == 3,__ATOMIC_RELEASE);
   __atomic_store_n(&gNativeIoTrace.immediate_enabled, enabled == 2 || enabled == 3, __ATOMIC_RELEASE);
@@ -568,9 +570,10 @@ extern "C" void native_powervr_io_trace_report(void)
           __atomic_load_n(&gNativeIoTrace.immediate_count,__ATOMIC_RELAXED),
           __atomic_load_n(&gNativeIoTrace.immediate_skipped,__ATOMIC_RELAXED));
   if (__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_RELAXED))
-    IOLog("a04br3 gpu wait series: busy=%u full=%u late=%u evicted=%u suppressed_begin=%u suppressed_series=%u\n",
+    IOLog("a04br3 gpu wait series: busy=%u full=%u late=%u evicted=%u expired_pending=%u suppressed_begin=%u suppressed_series=%u\n",
       __atomic_load_n(&gNativeWaitSeries.busy,__ATOMIC_RELAXED),__atomic_load_n(&gNativeWaitSeries.full,__ATOMIC_RELAXED),
       __atomic_load_n(&gNativeWaitSeries.late,__ATOMIC_RELAXED),__atomic_load_n(&gNativeWaitSeries.evicted,__ATOMIC_RELAXED),
+      __atomic_load_n(&gNativeWaitSeries.expiredPending,__ATOMIC_RELAXED),
       __atomic_load_n(&gNativeWaitSeries.suppressedBegin,__ATOMIC_RELAXED),__atomic_load_n(&gNativeWaitSeries.suppressedSeries,__ATOMIC_RELAXED));
 }
 
