@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include "A04BR3RegisterLock.h"
 #include "A04BR3ChargerCore.h"
+#include "A04BR3GaugeCore.h"
 #include "A04BR3ChargerHandoff.h"
 #include "A04BR3ChargerBoardCore.h"
 extern "C" vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
@@ -19,6 +20,7 @@ extern "C" void thread_terminate_self(void);
 namespace {
 volatile uint8_t *i2c, *gpio, *top, *infra, *apmixed;
 IOLock *bus;
+bool gaugeVoltage;
 a04charger::Owner owner;
 uint32_t rd32(volatile uint8_t *b, unsigned o) {
   uint32_t v = *reinterpret_cast<volatile uint32_t *>(b + o);
@@ -37,24 +39,25 @@ struct IO {
 // Same controller ownership covers the snapshot AND pet. No fuel-gauge client
 // may bypass this lock; no I2C2/PMIC service is registered by this implementation.
 struct Ops : IO {
-  bool read(unsigned reg, uint8_t *value) { return a04charger::transfer(*this, true, uint8_t(reg), value); }
+  uint64_t readStart[8] = {}, readEnd[8] = {};
+  bool read(unsigned reg, uint8_t *value) {
+    readStart[reg] = now();
+    bool ok = a04charger::transfer(*this, true, uint8_t(reg), value);
+    readEnd[reg] = now();
+    return ok;
+  }
   bool kick(uint8_t value) { return a04charger::transfer(*this, false, 0, &value); }
 };
 bool inheritedReady() {
-  uint32_t gate = rd32(top, 0x24), mux = rd32(infra, 0x80);
+  uint32_t gate = rd32(top, 0x24);
   uint32_t dir0 = rd32(gpio, 0), out0 = rd32(gpio, 0x100);
-  uint32_t in0 = rd32(gpio, 0x200), dir1 = rd32(gpio, 0x10), in1 = rd32(gpio, 0x210);
-  IOLog("a04br3 charger: inherited gate=%08x mux=%08x EN mode%u dir%u out%u in%u USB mode%u dir%u in%u AC mode%u dir%u in%u SDA%u SCL%u\n",
-    gate, mux, mode(9), (dir0 >> 9) & 1, (out0 >> 9) & 1, (in0 >> 9) & 1,
-    mode(34), (dir1 >> 2) & 1, (in1 >> 2) & 1, mode(35), (dir1 >> 3) & 1, (in1 >> 3) & 1, mode(60), mode(61));
+  uint32_t in0 = rd32(gpio, 0x200), dir1 = rd32(gpio, 0x10);
   // Observer only; dedicated clock/pin setup is owned by BoardCore initialization.
   // Never drive EN, borrow touch's VGP1, or reset a busy bus.
   if ((gate & (1U << 16)) || mode(60) != 1 || mode(61) != 1 || mode(9) ||
       !(dir0 & (1U << 9)) || (out0 & (1U << 9)) || (in0 & (1U << 9)) ||
       mode(34) || mode(35) || (dir1 & 12)) return false;
   IO io;
-  IOLog("a04br3 charger: i2c2 inherited control=%04x timing=%04x hs=%04x io=%04x div=%04x start=%04x\n",
-    io.rd(0x10), io.rd(0x20), io.rd(0x48), io.rd(0x40), io.rd(0x70), io.rd(0x24));
   return !(io.rd(0x24) & 1) && io.rd(0x20) && !(io.rd(0x48) & 1) && io.rd(0x40) == 3 && io.rd(0x60) == 0;
 }
 void report(a04charger::Result result) {
@@ -66,16 +69,21 @@ void report(a04charger::Result result) {
 void service(void *, wait_result_t) {
   // This already running thread owns all reads and the 10 s servicing cadence.
   // It is established before the first charger transaction; no detached probe.
+  IO serviceClock;
+  uint64_t serviceStarted=serviceClock.now(), initStarted=0, initEnded=0, readyEnded=0;
   bool initialized = false;
   for (;;) {
     IOLockLock(bus);
     if (!initialized) {
-      inheritedReady(); // stage 1 records inherited state, not readiness as a permanent gate
-      IOLog("a04br3 charger: clock ahb=%08x maincon=%08x pcw=%08x pwr=%08x\n",
-            rd32(top,0), rd32(apmixed,0x120), rd32(apmixed,0x124), rd32(apmixed,0x130));
+      initStarted=serviceClock.now();
+      if (owner.handoffPending && initStarted >= owner.handoffDeadline) {
+        owner.stopped=true; IOLockUnlock(bus);
+        IOLog("a04br3 charger: handoff expired before I2C initialization; no I2C access\n");
+        break;
+      }
       Ops setup; auto status = a04charger::initialize(setup);
-      IOLog("a04br3 charger: I2C2 initialize result=%u (0 ready)\n", unsigned(status));
-      if (status != a04charger::BoardReady) { owner.stopped=true; IOLockUnlock(bus); break; }
+      initEnded=serviceClock.now();
+      if (status != a04charger::BoardReady) { owner.stopped=true; IOLockUnlock(bus); IOLog("a04br3 charger: I2C2 initialize result=%u\n", unsigned(status)); break; }
       initialized = true;
     }
     if (!inheritedReady()) {
@@ -84,9 +92,31 @@ void service(void *, wait_result_t) {
       IOLog("a04br3 charger: inherited resources unavailable; owner stopped; no recovery/config writes, charger fallback may occur\n");
       break;
     }
-    Ops ops; a04charger::Result result = a04charger::step(owner, ops);
-    report(result);
+    readyEnded=serviceClock.now();
+    Ops ops; uint64_t started=ops.now(), deadline=owner.handoffPending ? owner.handoffDeadline : 0;
+    a04charger::Result result = a04charger::step(owner, ops);
+    uint64_t ended=ops.now();
+    // Optional measurement client; no additional transaction when OFF or when
+    // the charger owner has stopped. Never another I2C2 thread/private lock.
+    const bool sampled=gaugeVoltage && result==a04charger::Maintained;
+    a04gauge::Sample g;
+    if(sampled) g=a04gauge::sample(ops);
     IOLockUnlock(bus);
+    if(sampled){
+      if(g.valid)
+        IOLog("a04br3 gauge: t=%llu valid=1 mode=%04x raw=%02x,%02x,%02x mV=%u current=unknown\n",
+              (unsigned long long)g.at,g.mode.value,g.voltage.raw[0],g.voltage.raw[1],g.voltage.raw[2],unsigned(g.voltage.value));
+      else
+        IOLog("a04br3 gauge: t=%llu valid=0 result=%u mode=%04x mr=%u raw=%02x,%02x,%02x vr=%u mV=unknown current=unknown\n",
+              (unsigned long long)g.at,unsigned(g.result),g.mode.value,unsigned(g.mode.result),g.voltage.raw[0],g.voltage.raw[1],g.voltage.raw[2],unsigned(g.voltage.result));
+    }
+    report(result);
+    if (owner.kicks <= 1 || result != a04charger::Maintained) IOLog("a04br3 charger: service=%llu init=%llu/%llu ready=%llu step=%llu/%llu handoff_deadline=%llu read0=%llu/%llu read1=%llu/%llu read2=%llu/%llu read3=%llu/%llu read4=%llu/%llu read5=%llu/%llu read6=%llu/%llu read7=%llu/%llu\n",
+      (unsigned long long)serviceStarted,(unsigned long long)initStarted,(unsigned long long)initEnded,(unsigned long long)readyEnded,(unsigned long long)started,(unsigned long long)ended,(unsigned long long)deadline,
+      (unsigned long long)ops.readStart[0],(unsigned long long)ops.readEnd[0],(unsigned long long)ops.readStart[1],(unsigned long long)ops.readEnd[1],
+      (unsigned long long)ops.readStart[2],(unsigned long long)ops.readEnd[2],(unsigned long long)ops.readStart[3],(unsigned long long)ops.readEnd[3],
+      (unsigned long long)ops.readStart[4],(unsigned long long)ops.readEnd[4],(unsigned long long)ops.readStart[5],(unsigned long long)ops.readEnd[5],
+      (unsigned long long)ops.readStart[6],(unsigned long long)ops.readEnd[6],(unsigned long long)ops.readStart[7],(unsigned long long)ops.readEnd[7]);
     if (result != a04charger::Maintained) {
       IOLog("a04br3 charger: owner stopped; no policy repair/retry; 30 s WDT fallback may alter inherited settings\n");
       break;
@@ -121,10 +151,13 @@ extern "C" void a04br3_charger_init(void) {
     IOLog("a04br3 charger: stopped/invalid/late firmware owner; no charger access\n");return;
   }
   const auto fw=static_cast<const uint8_t *>(record);
-  IOLog("a04br3 charger: firmware handoff verified last=%llu exit=%llu now=%llu freq=%llu first=%llx history=%llx\n",
+  IOLog("a04br3 charger: firmware handoff verified last=%llu exit=%llu now=%llu freq=%llu first=%llx history=%llx now_ns=%llu deadline_ns=%llu\n",
         (unsigned long long)a04charger::get64(fw+24),(unsigned long long)a04charger::get64(fw+40),
         (unsigned long long)counter,(unsigned long long)frequency,
-        (unsigned long long)a04charger::get64(fw+72),(unsigned long long)a04charger::get64(fw+56));
+        (unsigned long long)a04charger::get64(fw+72),(unsigned long long)a04charger::get64(fw+56),
+        (unsigned long long)nowNs,(unsigned long long)owner.handoffDeadline);
+  unsigned sampleVoltage=0;
+  gaugeVoltage=PE_parse_boot_argn("a04br3-gauge-voltage",&sampleVoltage,sizeof sampleVoltage)&&sampleVoltage==1;
   bus = IOLockAlloc();
   if (!bus) { IOLog("a04br3 charger: no owner lock; no I2C access\n"); return; }
   i2c = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x1100b000, 0x1000));
