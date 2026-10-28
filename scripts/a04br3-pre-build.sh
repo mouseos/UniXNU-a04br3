@@ -46,7 +46,10 @@ case "${A04BR3_POWERVR_METAL_ROA_COLOR:-0}" in
 esac
 case "${A04BR3_MEMORY_BENCH:-0}" in
   0) ;;
-  1) if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL_MODE:-selftest}" != publish ]; then
+  1) if [ "${A04BR3_MEMORY_STAGED:-0}" != 1 ]; then
+       echo "Memory benchmark pre-build must use an isolated run directory" >&2; exit 1
+     fi
+     if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL_MODE:-selftest}" != publish ]; then
        echo "Memory benchmark requires PowerVR probe and Metal publish mode" >&2; exit 1
      fi ;;
   *) echo "A04BR3_MEMORY_BENCH must be 0 or 1" >&2; exit 1 ;;
@@ -95,8 +98,9 @@ case "${A04BR3_REUSE_DATA_SEED:-0}" in
     ;;
   *) echo "A04BR3_REUSE_DATA_SEED must be 0 or 1" >&2; exit 1 ;;
 esac
-rm -f "$RUNNER_TEMP/a04br3-memory-inputs.json"
-python3 "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$PWD" --out "$RUNNER_TEMP/trustcache"
+if [ "${A04BR3_MEMORY_BENCH:-0}" = 1 ]; then
+  python3 "$DEVICE_DIR/scripts/a04br3-memory-manifest.py" preflight
+fi
 ./unixnu tree -D "$DEVICE_DIR"
 # Match UniXNU Context's expanduser/expandvars/resolve semantics for UNIXNU_OUT.
 OUT_ROOT=$(python3 -c 'import os; from pathlib import Path; print(Path(os.path.expandvars(os.path.expanduser(os.environ.get("UNIXNU_OUT") or "out"))).resolve())')
@@ -105,6 +109,8 @@ if [ "${A04BR3_MEMORY_BENCH:-0}" = 1 ]; then
   export PYTHONDONTWRITEBYTECODE=1
   python3 "$DEVICE_DIR/scripts/a04br3_tree_scripts.py" --stabilize "$PWD" "$DEVICE_DIR" "$TREE"
 fi
+rm -f "$RUNNER_TEMP/a04br3-memory-inputs.json"
+python3 "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$PWD" --out "$RUNNER_TEMP/trustcache"
 MOUNT=
 SEED_SCRATCH=
 SEED_INPUT="$RUNNER_TEMP/data.dbr"

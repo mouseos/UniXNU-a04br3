@@ -33,7 +33,9 @@ set -eu
 mkdir -p "$RUNNER_TEMP/owner-data"
 printf '{"volume_uuid":"12345678-1234-5678-9abc-123456789abc"}\n' > "$RUNNER_TEMP/owner-data/seed.json"
 printf 'export XNU_OWNER_DATA_VOLUME_UUID=12345678-1234-5678-9ABC-123456789ABC\n' > "$RUNNER_TEMP/a04br3-data.env"
+[ "${TEST_FAULT:-}" != prebuild_failure ] || { printf partial > "$RUNNER_TEMP/trustcache"; exit 1; }
 printf seed > "$RUNNER_TEMP/data.dbr"
+printf baseline > "$RUNNER_TEMP/data-32.dbr"
 printf trust > "$RUNNER_TEMP/trustcache"
 ''')
         (source/'unixnu').write_text(r'''#!/bin/bash
@@ -43,8 +45,15 @@ mkdir -p "$TEST_OUT_DIR/a04br3/kernel"
 if [ "$1" = tree ]; then
   mkdir -p "$TEST_OUT_DIR/a04br3/tree/scripts"
   cp -R "$DEVICE_DIR/scripts/." "$TEST_OUT_DIR/a04br3/tree/scripts/"
+  if [ "$TEST_FAULT" = stale_tree ]; then
+    python3 - "$TEST_OUT_DIR/a04br3/tree/scripts/a04br3-memory-build.sh" <<'PY_TAMPER'
+import os, pathlib, sys, time
+p=pathlib.Path(sys.argv[1]); b=p.read_bytes(); p.write_bytes(bytes([b[0]^1])+b[1:]); t=time.time()+60; os.utime(p,(t,t))
+PY_TAMPER
+  fi
 fi
 if [ "$1" = defconfig ]; then echo 'CONFIG_TEST=y' > "$TEST_OUT_DIR/a04br3/.config"; fi
+if [ "$1 $2" = 'build payload' ] && [ "$TEST_FAULT" = payload_failure ]; then exit 1; fi
 if [ "$1 $2" = 'build kernel' ]; then
   [ "$TEST_FAULT" != kernel_failure ] || exit 1
   if [ "$TEST_FAULT" = wrong_kernel_uuid ]; then printf '%s' OLD > "$TEST_OUT_DIR/a04br3/kernel/kernel.macho"
@@ -84,33 +93,55 @@ esac
         if fault:
             assert result.returncode != 0, result.stdout + result.stderr
             assert 'build payload' not in calls
-            assert not (runner/'a04br3-memory-inputs.json').exists()
+            assert (runner/'a04br3-memory-inputs.json').read_text() == '{}'
+            assert not (runner/'current').exists()
+            assert not list(runner.glob('.a04br3-memory-run.*'))
             return
         assert result.returncode == 0, result.stdout + result.stderr
         assert f'build kernel -D {device} uuid={UUID}' in calls
         assert f'build payload -D {device}' in calls
-        record = json.loads((runner/'a04br3-memory-inputs.json').read_text())
+        active = (runner/'current').resolve()
+        assert active.is_dir()
+        record = json.loads((active/'a04br3-memory-inputs.json').read_text())
         assert record['seed_uuid'] == UUID and len(record['kernel_sha256']) == 64
         assert record['kernel_path'] == str(out/'a04br3/kernel/kernel.macho')
         if out_mode: assert (source/'out/a04br3/kernel/kernel.macho').read_text() == 'conflicting default kernel'
         assert len(record['flags_sha256']) == 64 and record['source']['commit']
         if rerun:
-            previous = (runner/'a04br3-memory-inputs.json').read_bytes()
+            previous = (active/'a04br3-memory-inputs.json').read_bytes()
+            previous_trust = (active/'trustcache').read_bytes()
+            previous_kernel = (active/'kernel.macho').read_bytes()
             again = subprocess.run(command, cwd=source, env=env, capture_output=True, text=True)
             assert again.returncode != 0 and 'Existing seed inputs' in again.stderr
-            assert (runner/'a04br3-memory-inputs.json').read_bytes() == previous
+            assert (active/'a04br3-memory-inputs.json').read_bytes() == previous
+            assert (active/'trustcache').read_bytes() == previous_trust
             reuse = dict(env, A04BR3_REUSE_DATA_SEED='1')
+            for injected in ('prebuild_failure', 'kernel_failure', 'payload_failure', 'stale_tree', 'dirty_preflight'):
+                failing = dict(reuse, TEST_FAULT=injected)
+                if injected == 'dirty_preflight': (base/'dirty').touch()
+                failed = subprocess.run(command, cwd=source, env=failing, capture_output=True, text=True)
+                if injected == 'dirty_preflight': (base/'dirty').unlink()
+                assert failed.returncode != 0, injected
+                assert (runner/'current').resolve() == active, injected
+                assert (active/'a04br3-memory-inputs.json').read_bytes() == previous, injected
+                assert (active/'trustcache').read_bytes() == previous_trust, injected
+                assert (active/'kernel.macho').read_bytes() == previous_kernel, injected
+                assert len(list(runner.glob('.a04br3-memory-run.*'))) == 1, injected
+            # The deliberately altered tree is repaired before the successful retry.
+            (out/'a04br3/tree/scripts/a04br3-memory-build.sh').unlink(missing_ok=True)
             repeated = subprocess.run(command, cwd=source, env=reuse, capture_output=True, text=True)
             assert repeated.returncode == 0, repeated.stderr
             # Subsequent verification must reflect the changed build flag.
             env = reuse
+            active = (runner/'current').resolve()
         # A separate invocation must use the same kernel-affecting environment.
-        verify_env = dict(env, DEVICE_DIR=str(device), XNU_OWNER_DATA_VOLUME_UUID=UUID,
+        verify_env = dict(env, DEVICE_DIR=str(device), RUNNER_TEMP=str(active),
+                          A04BR3_MEMORY_OUTPUT_ROOT=str(runner), A04BR3_MEMORY_STAGED='1', XNU_OWNER_DATA_VOLUME_UUID=UUID,
                           A04BR3_MEMORY_BENCH='1', A04BR3_POWERVR_PROBE='1',
                           A04BR3_POWERVR_METAL='1', A04BR3_POWERVR_METAL_MODE='publish')
         verify = ['python3', str(device/'scripts/a04br3-memory-manifest.py'), 'verify']
         assert subprocess.run(verify, cwd=source, env=verify_env, capture_output=True).returncode == 0
-        for path in (runner/'data.dbr', runner/'trustcache', out/'a04br3/.config', out/'a04br3/kernel/kernel.macho'):
+        for path in (active/'data.dbr', active/'trustcache', out/'a04br3/.config', active/'kernel.macho'):
             old = path.read_bytes(); path.write_bytes(old+b'x')
             assert subprocess.run(verify, cwd=source, env=verify_env, capture_output=True).returncode != 0, path
             path.write_bytes(old)
