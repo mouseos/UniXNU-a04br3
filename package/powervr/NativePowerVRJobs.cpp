@@ -488,6 +488,7 @@ bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); 
 
 static void native_wait_monitor(void *, wait_result_t)
 {
+  unsigned aggregateBusy=~0u,aggregateFull=~0u;
   for (;;) {
     IOSleep(250);
     if (!__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE) || gNativeWaitSeries.mode<4) break;
@@ -515,6 +516,12 @@ static void native_wait_monitor(void *, wait_result_t)
           (unsigned long long)r.count[1],(unsigned long long)ns[1],(unsigned long long)r.errors[1],
           (unsigned long long)r.count[2],(unsigned long long)ns[2],(unsigned long long)r.errors[2],
           __atomic_load_n(&gNativeIoAggregate.busy,__ATOMIC_RELAXED),__atomic_load_n(&gNativeIoAggregate.full,__ATOMIC_RELAXED));
+      }
+      const unsigned busy=__atomic_load_n(&gNativeIoAggregate.busy,__ATOMIC_RELAXED);
+      const unsigned full=__atomic_load_n(&gNativeIoAggregate.full,__ATOMIC_RELAXED);
+      if (busy!=aggregateBusy || full!=aggregateFull) {
+        IOLog("a04br3 gpu io aggregate loss: busy=%u full=%u cumulative=1\n",busy,full);
+        aggregateBusy=busy;aggregateFull=full;
       }
     }
   }
