@@ -127,6 +127,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
             env['UNIXNU_OUT'] = '$BENCH_OUT_PARENT/custom output'
         env.pop('A04BR3_MEMORY_BENCH', None)
         if memory is not None: env['A04BR3_MEMORY_BENCH'] = memory
+        if memory == '1': env['A04BR3_MEMORY_STAGED'] = '1'
         if memory == '1': env['A04BR3_POWERVR_METAL_MODE'] = 'publish'
         env.pop('A04BR3_POWERVR_METAL_ROA_COLOR', None)
         if roa_color is not None:

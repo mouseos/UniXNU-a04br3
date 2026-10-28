@@ -31,15 +31,21 @@ tracked files are never exempted. Output roots containing tracked source files
 or the repository root itself are rejected; untracked files elsewhere are also
 rejected.
 `RUNNER_TEMP` defaults to `out/a04br3-memory-inputs`; no existing seed or trust
-file is requested. `UNIXNU_OUT` selects the UniXNU output root for both the
+file is requested. Each run uses a separate directory inside that root, and
+only after the payload succeeds is `current` atomically switched to that run.
+Its `current/trustcache`, `current/data.dbr`, `current/kernel.macho` and
+`current/a04br3-memory-inputs.json` are the completed set. Source/tree
+preflight happens before trust creation. On failure the new directory is
+removed and the previous current set remains intact. The main UniXNU output
+and build caches may still change on a failed build. `UNIXNU_OUT` selects the UniXNU output root for both the
 pre-build tree and the completed-kernel manifest, with the same path expansion
 as UniXNU.
 
-A fresh run refuses to overwrite any existing `owner-data`, `data-32.dbr`,
-`data.dbr`, or `data-probe.dbr` in `RUNNER_TEMP`; it leaves the previous
+A fresh run refuses existing `current`, `owner-data`, `data-32.dbr`,
+`data.dbr`, or `data-probe.dbr` in the `RUNNER_TEMP` root; it leaves the previous
 manifest and seed files intact. To repeat using a complete compatible prior
 seed, retain the nonempty `data.dbr` and baseline `data-32.dbr` plus valid
-`owner-data/seed.json`, then run:
+`owner-data/seed.json` in `current` (or in the legacy root), then run:
 
 ```sh
 A04BR3_REUSE_DATA_SEED=1 /path/to/UniXNU-a04br3/scripts/a04br3-memory-build.sh --enable-memory-bench

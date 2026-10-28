@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -98,7 +99,7 @@ def snapshot():
     if patched_xnu['commit'].lower() != pinned_xnu:
         raise ValueError('patched XNU checkout differs from device lock')
     flags = {k: v for k, v in sorted(os.environ.items()) if k.startswith(('XNU_', 'CONFIG_', 'A04BR3_', 'UNIXNU_'))}
-    return {'version': 1, 'source': repo_identity(source, generated_roots=(out, runner)), 'device': repo_identity(device),
+    return {'version': 1, 'source': repo_identity(source, generated_roots=(out, Path(os.environ.get('A04BR3_MEMORY_OUTPUT_ROOT', str(runner))))), 'device': repo_identity(device),
             'xnu_reference': xnu, 'xnu_patched': patched_xnu, 'tree_scripts_sha256': scripts_hash,
             'lock_sha256': digest(device / 'unixnu.lock'),
             'config_sha256': digest(out / 'a04br3/.config'),
@@ -119,10 +120,18 @@ def atomic_json(path, obj):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('capture', 'seal', 'verify'))
+    parser.add_argument('action', choices=('preflight', 'capture', 'seal', 'verify'))
     action = parser.parse_args().action
     runner = Path(os.environ['RUNNER_TEMP']).resolve()
     pending, complete = runner / 'a04br3-memory-pending.json', runner / 'a04br3-memory-inputs.json'
+    if action == 'preflight':
+        source = Path.cwd().resolve()
+        device = Path(os.environ['DEVICE_DIR']).resolve()
+        out = Path(os.path.expandvars(os.path.expanduser(os.environ.get('UNIXNU_OUT') or str(source / 'out')))).resolve()
+        root = Path(os.environ.get('A04BR3_MEMORY_OUTPUT_ROOT', str(runner))).resolve()
+        repo_identity(source, generated_roots=(out, root))
+        repo_identity(device)
+        return
     if action == 'capture':
         complete.unlink(missing_ok=True)
         pending.unlink(missing_ok=True)
@@ -141,15 +150,27 @@ def main():
         if before['seed_uuid'].encode('ascii') not in kernel.read_bytes():
             raise ValueError('built kernel does not contain the Data seed UUID')
         before['kernel_sha256'] = digest(kernel)
+        staged = runner / 'kernel.macho'
+        temporary_kernel = runner / '.kernel.macho.tmp'
+        try:
+            shutil.copyfile(kernel, temporary_kernel)
+            if digest(temporary_kernel) != before['kernel_sha256']:
+                raise ValueError('kernel changed while it was being staged')
+            os.replace(temporary_kernel, staged)
+        finally:
+            temporary_kernel.unlink(missing_ok=True)
+        before['staged_kernel_sha256'] = digest(staged)
         atomic_json(complete, before)
         pending.unlink(missing_ok=True)
         return
     record = json.loads(complete.read_text())
     expected = dict(record)
     kernel_hash = expected.pop('kernel_sha256')
-    if expected != snapshot() or digest(Path(expected['kernel_path'])) != kernel_hash:
+    staged_hash = expected.pop('staged_kernel_sha256')
+    staged_kernel = runner / 'kernel.macho'
+    if expected != snapshot() or staged_hash != kernel_hash or digest(staged_kernel) != kernel_hash:
         raise ValueError('memory payload inputs, build environment or kernel changed since completed build')
-    if expected['seed_uuid'].encode('ascii') not in Path(expected['kernel_path']).read_bytes():
+    if expected['seed_uuid'].encode('ascii') not in staged_kernel.read_bytes():
         raise ValueError('kernel does not contain the Data seed UUID')
 
 

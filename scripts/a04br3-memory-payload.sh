@@ -5,7 +5,7 @@ set -euo pipefail
 : "${DEVICE_DIR:?}" "${RUNNER_TEMP:?}"
 python3 "$DEVICE_DIR/scripts/a04br3-memory-manifest.py" verify
 ./unixnu build payload -D "$DEVICE_DIR" \
-  --owner-trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" \
+  --kernel "$RUNNER_TEMP/kernel.macho" --owner-trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" \
   --kernel-arg a04br3-membench=1 --kernel-arg sheng-fb-gpu=1 \
   --kernel-arg a04br3-charger-owner=1 --kernel-arg sheng-vsync=60 \
   --kernel-arg a04br3-home-perf=1 --kernel-arg a04br3-proclog=10 \
