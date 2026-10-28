@@ -144,11 +144,17 @@ python3 scripts/tests/test_a04br3_pre_build_seed_reuse.py
 
 When both the benchmark opt-in and `a04br3-home-perf=1` are enabled, the
 existing heartbeat worker also emits `a04br3 memtop` every sixth heartbeat.
-It ranks up to eight processes by physical footprint among at most 256 visited
-processes, including unselected names. The header records the monotonic capture
+It ranks up to eight processes by physical footprint among at most 256
+callback-processed processes, including previously unselected names. The fixed
+XNU `proc_iterate` allocates and constructs a PID list for the whole process
+population before any callback: the limit bounds ledger reads, not this initial
+allocation or scan. On callback 257, `PROC_RETURNED_DONE` stops further PID
+lookups and callbacks. The header records the monotonic capture
 interval, processes visited, unavailable tasks and truncation. A truncated
-result cannot establish the overall maximum; process iteration can omit
-transitional processes or wait in the existing worker. Rows are non-atomic and
+result cannot establish the overall maximum. Even `truncated=0` does not prove
+completeness: `proc_iterate` skips processes being forked or shadow processes,
+and a PID can disappear before its lookup. Missing tasks are counted separately.
+It can wait in the existing worker and delay subsequent heartbeat reports. Rows are non-atomic and
 footprint, resident and compressed are different accounting measures. Shared
 pages, kernel memory and GPU allocations cannot be deduced by summing them.
 This bounded diagnostic still adds process traversal and ledger reads; compare

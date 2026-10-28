@@ -108,6 +108,7 @@ struct fake_task {thread_t threads; unsigned thread_count; int locked;};
 typedef struct fake_task *task_t;
 struct proc {const char *name;int pid;task_t task;};typedef struct proc *proc_t;
 #define PROC_RETURNED 0
+#define PROC_RETURNED_DONE 1
 #define PROC_ALLPROCLIST 1
 #define PROC_NOWAITTRANS 4
 #define TH_RUN 1
@@ -155,8 +156,12 @@ static uint64_t clock_value=99;
 static uint64_t mach_absolute_time(void){return ++clock_value;}
 static void absolutetime_to_nanoseconds(uint64_t t,uint64_t *v){*v=t*2;}
 static struct proc procs[300];
+static unsigned proc_callbacks;
 static void proc_iterate(unsigned flags,int (*cb)(proc_t,void*),void *a,int (*filter)(proc_t,void*),void *b){
- assert(flags==5);for(unsigned i=0;i<300;++i)if(procs[i].name && (!filter || filter(&procs[i],b)))cb(&procs[i],a);
+ assert(flags==5);proc_callbacks=0;
+ for(unsigned i=0;i<300;++i) if(procs[i].name && (!filter || filter(&procs[i],b))) {
+  ++proc_callbacks;if(cb(&procs[i],a)==PROC_RETURNED_DONE)break;
+ }
 }
 static char output[8192];static unsigned output_used;
 static int quiet_printf(const char *fmt,...){va_list ap;va_start(ap,fmt);int n=vsnprintf(output+output_used,sizeof(output)-output_used,fmt,ap);va_end(ap);if(n>0)output_used+=(unsigned)n;assert(output_used<sizeof(output));return n;}
@@ -223,10 +228,10 @@ int main(void){
  for(unsigned i=0;i<260;++i) {score_tasks[i]=&tasks[i];scores[i]=i;procs[i]=(struct proc){"worker",(int)i+1,&tasks[i]};}
  procs[7].task=NULL; procs[12].task=NULL;
  output_used=0;output[0]=0;boot_memory_top_sample();
- assert(mem_top_seen==256 && mem_top_count==8 && mem_top_no_task==2 && mem_top_truncated==1);
+ assert(mem_top_seen==256 && mem_top_count==8 && mem_top_no_task==2 && mem_top_truncated==1 && proc_callbacks==257);
  assert(mem_top_rows[0].pid==256 && mem_top_rows[0].footprint==255);
  assert(mem_top_rows[7].pid==249 && mem_top_rows[7].footprint==248);
- assert(strstr(output,"seen=256 rows=8 no_task=2 truncated=1 non_atomic=1"));
+ assert(strstr(output,"seen=256 rows=8 no_task=2 truncated=1 non_atomic=1 pid_snapshot_unbounded=1 omissions_possible=1"));
  assert(strstr(output,"rank=1 pid=256 name=worker uid=1256 footprint=255"));
  for(unsigned i=0;i<260;++i) procs[i].name=NULL;
  scores[0]=scores[1]=42;procs[0]=(struct proc){"first",71,&tasks[0]};procs[1]=(struct proc){"second",72,&tasks[1]};

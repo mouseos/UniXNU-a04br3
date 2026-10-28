@@ -56,6 +56,7 @@ uint64_t proc_uniqueid(proc_t);
 task_t proc_task(proc_t);
 void proc_iterate(unsigned,int (*)(proc_t,void *),void *,int (*)(proc_t,void *),void *);
 #define PROC_RETURNED 0
+#define PROC_RETURNED_DONE 1
 #define PROC_ALLPROCLIST (1U<<0)
 #define PROC_NOWAITTRANS (1U<<2)
 char boot_process_rows[10][120];
@@ -291,8 +292,10 @@ void boot_home_perf_sample(void) {
  }
 }
 
-// Bounded, opt-in accounting over processes (not a system-wide memory total).
-// proc_iterate can still wait internally; invoke only in the heartbeat worker.
+// Opt-in accounting over processes (not a system-wide memory total).
+// The ledger work is bounded, but proc_iterate allocates and fills a PID list
+// for the whole process population before callouts; it may wait. Run only
+// in the heartbeat worker, where it can delay later heartbeat reports.
 #define MEM_TOP_LIMIT 256u
 #define MEM_TOP_ROWS 8u
 struct mem_top_row { char name[24]; int pid; uint64_t uniqueid, resident, compressed, footprint; };
@@ -300,7 +303,7 @@ static struct mem_top_row mem_top_rows[MEM_TOP_ROWS];
 static unsigned mem_top_seen, mem_top_count, mem_top_no_task, mem_top_truncated;
 static int mem_top_capture(proc_t p, void *unused) {
  (void)unused;
- if (mem_top_seen >= MEM_TOP_LIMIT) { mem_top_truncated=1; return PROC_RETURNED; }
+ if (mem_top_seen >= MEM_TOP_LIMIT) { mem_top_truncated=1; return PROC_RETURNED_DONE; }
  ++mem_top_seen;
  task_t task=proc_task(p); if(!task) { ++mem_top_no_task; return PROC_RETURNED; }
  uint64_t footprint=get_task_phys_footprint(task);
@@ -321,7 +324,7 @@ void boot_memory_top_sample(void) {
  absolutetime_to_nanoseconds(mach_absolute_time(),&begin);
  proc_iterate(PROC_ALLPROCLIST|PROC_NOWAITTRANS,mem_top_capture,NULL,NULL,NULL);
  absolutetime_to_nanoseconds(mach_absolute_time(),&end);
- printf("a04br3 memtop begin_ns=%llu end_ns=%llu seen=%u rows=%u no_task=%u truncated=%u non_atomic=1\n",
+ printf("a04br3 memtop begin_ns=%llu end_ns=%llu seen=%u rows=%u no_task=%u truncated=%u non_atomic=1 pid_snapshot_unbounded=1 omissions_possible=1\n",
   begin,end,mem_top_seen,mem_top_count,mem_top_no_task,mem_top_truncated);
  for(unsigned i=0;i<mem_top_count;++i) {
   struct mem_top_row *r=&mem_top_rows[i];
