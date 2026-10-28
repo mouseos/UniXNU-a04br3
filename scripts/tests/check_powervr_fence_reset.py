@@ -10,8 +10,10 @@ def fn(sig):
     while depth:
         depth += (SRC[i] == '{') - (SRC[i] == '}'); i += 1
     return SRC[start:i] + '\n'
-h = r'''
+h = (ROOT / 'package/powervr/NativePowerVRWaitReason.h').read_text().replace('#pragma once','') + r'''
 #include <atomic>
+#include <cstdarg>
+#include <string>
 #include <cassert>
 #include <cerrno>
 #include <chrono>
@@ -43,6 +45,13 @@ void IOLockUnlock(IOLock*l){assert((l==&jobsLock?jobsHeld:fwHeld)==1);(l==&jobsL
 #define READ_ONCE(x) (x)
 #define WRITE_ONCE(x,v) ((x)=(v))
 void wmb(){}
+struct {unsigned enabled=0,mode=0;} gNativeWaitSeries;
+NativeWaitReasonLimit gNativeWaitReason{};
+std::string reasonLog;
+void proc_selfname(char *p,int n){snprintf(p,n,"backboardd");}
+int proc_selfpid(){return 56;} void*current_thread(){return nullptr;} uint64_t thread_tid(void*){return 1003;}
+void absolutetime_to_nanoseconds(uint64_t t,uint64_t*out){*out=t;}
+void IOLog(const char *fmt,...){assert(!jobsHeld&&!fwHeld);char b[2048];va_list ap;va_start(ap,fmt);vsnprintf(b,sizeof(b),fmt,ap);va_end(ap);reasonLog=b;}
 struct Stop{};thread_local bool stopSleep=false;
 std::atomic<unsigned> sleeps{0},callbacks{0};
 void IOSleep(unsigned){assert(!jobsHeld&&!fwHeld);++sleeps;if(stopSleep)throw Stop{};std::this_thread::sleep_for(std::chrono::milliseconds(1));}
@@ -212,6 +221,23 @@ int main(){
  std::thread submit([&]{IOLockLock(&jobsLock);held=true;while(!go)std::this_thread::yield();
    IOLockUnlock(&jobsLock);});
  while(!held){std::this_thread::yield();}assert(poll()==-ETIMEDOUT);publish();pvr_fwccb_process(&gJobs.dev);go=true;submit.join();assert(poll()==-EIO);
+ // Diagnostic snapshots use the actual WaitFence path and never format under locks.
+ auto field=[](const char *name){auto pos=reasonLog.find(name);assert(pos!=std::string::npos);return strtoul(reasonLog.c_str()+pos+strlen(name),nullptr,10);};
+ auto diag=[](){gNativeWaitSeries={1,5};gNativeWaitReason={};gNativeWaitReason.minTicks=1;gNativeWaitReason.windowTicks=1000000000;gNativeWaitReason.perFenceTicks=1;reasonLog.clear();};
+ setup();diag();ufo=0;assert(native_powervr_fence_wait(&file,1,3000000)==-ETIMEDOUT);
+ assert(field("sample_valid=")==1&&field("found=")==1&&field("seq=")==1&&field("ufo=")==0&&field("ufo_pending=")>0&&field("ready=")==1);
+ setup();diag();publish();assert(native_powervr_fence_wait(&file,1,3000000)==-ETIMEDOUT);
+ assert(field("found=")==1&&field("ufo=")==1&&field("fw_read=")==0&&field("fw_write=")==1&&field("fw_pending=")>0&&field("ready=")==0);
+ setup();diag();gJobs.fwccbActive=1;assert(native_powervr_fence_wait(&file,1,3000000)==-ETIMEDOUT);
+ assert(field("fw_active=")==1&&field("ready=")==0);gJobs.fwccbActive=0;
+ setup();diag();std::atomic<bool> dfw{false},dfree{false};std::thread fl([&]{IOLockLock(&fwLock);dfw=true;while(!dfree)std::this_thread::yield();IOLockUnlock(&fwLock);});
+ while(!dfw){std::this_thread::yield();}assert(native_powervr_fence_wait(&file,1,3000000)==-ETIMEDOUT);dfree=true;fl.join();
+ assert(field("sample_valid=")==0&&field("fw_lock_fail=")>0);
+ setup();diag();dfw=false;dfree=false;std::thread jl([&]{IOLockLock(&jobsLock);dfw=true;while(!dfree)std::this_thread::yield();IOLockUnlock(&jobsLock);});
+ while(!dfw){std::this_thread::yield();}assert(native_powervr_fence_wait(&file,1,3000000)==-ETIMEDOUT);dfree=true;jl.join();
+ assert(field("sample_valid=")==0&&field("jobs_lock_fail=")>0);
+ setup();gNativeWaitSeries={1,4};reasonLog.clear();ufo=0;assert(native_powervr_fence_wait(&file,1,3000000)==-ETIMEDOUT&&reasonLog.empty());
+ gNativeWaitSeries={};
  // A concurrent worker and waiter arbitrate the same queued guilty notification.
  setup();publish();std::thread completion([]{worker();});
  int result=native_powervr_fence_wait(&file,1,1000000000);completion.join();assert(result==-EIO&&poll()==-EIO);

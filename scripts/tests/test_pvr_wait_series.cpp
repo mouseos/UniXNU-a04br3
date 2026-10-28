@@ -70,6 +70,14 @@ int main() {
  assert(test_end(&progress,56,1,20,801,1299,0,true,&out) && out.sum==998 && out.result==0);
  bool pending=false;for(auto &slot:progress.slots)if(slot.pid==56 && slot.tid==1 && slot.fence==20)pending=true;
  assert(!pending && progress.late>0);
+ // Mode5 retains mode4's short-wait and active-snapshot behavior.
+ NativeWaitSeries reasons=make();reasons.mode=5;reasons.threshold=250;reasons.windowTicks=1000;reasons.activeThreshold=500;
+ __atomic_store_n(&reasons.enabled,1,__ATOMIC_RELEASE);
+ assert(!test_begin(&reasons,56,1,44,100));
+ assert(!test_end(&reasons,56,1,44,101,105,0,true,&out));
+ assert(reasons.beginBudget==0 && reasons.seriesBudget==0);
+ assert(!test_begin(&reasons,56,1,45,200));
+ NativeWaitActive mode5Active[2]={};assert(native_wait_active(&reasons,700,mode5Active)==1 && mode5Active[0].fence==45);
  NativeWaitSeries clients=make();__atomic_store_n(&clients.enabled,1,__ATOMIC_RELEASE);
  uint64_t serial1=0,serial2=0;
  assert(native_wait_begin(&clients,56,7,3,101,100,&serial1));

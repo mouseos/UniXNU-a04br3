@@ -62,6 +62,7 @@ extern "C" {
 #include "NativePowerVRABI.h"
 #include "NativePowerVRIoTrace.h"
 #include "NativePowerVRWaitSeries.h"
+#include "NativePowerVRWaitReason.h"
 #undef min
 #undef max
 
@@ -70,6 +71,7 @@ uint64_t mach_absolute_time(void);
 void nanoseconds_to_absolutetime(uint64_t nanoseconds, uint64_t *result);
 void absolutetime_to_nanoseconds(uint64_t absolute, uint64_t *result);
 int proc_selfpid(void);
+void proc_selfname(char *, int);
 kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
 void thread_deallocate(thread_t);
 void thread_terminate_self(void);
@@ -461,6 +463,7 @@ unsigned gSubmitPerfEnabled;
 uint64_t gWaitFenceResult[2][3];
 NativeIoTrace gNativeIoTrace;
 NativeWaitSeries gNativeWaitSeries;
+NativeWaitReasonLimit gNativeWaitReason;
 unsigned gWaitMonitorStarted;
 uint64_t nowAbs() { return mach_absolute_time(); }
 uint64_t perfBegin(PerfStage s)
@@ -484,7 +487,7 @@ static void native_wait_monitor(void *, wait_result_t)
 {
   for (;;) {
     IOSleep(250);
-    if (!__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE) || gNativeWaitSeries.mode!=4) break;
+    if (!__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE) || gNativeWaitSeries.mode<4) break;
     NativeWaitActive active[2]={};
     unsigned count=native_wait_active(&gNativeWaitSeries,mach_absolute_time(),active);
     for (unsigned i=0;i<count;i++) {
@@ -503,7 +506,7 @@ static void native_wait_monitor(void *, wait_result_t)
 
 extern "C" void native_powervr_io_trace_enable(unsigned enabled)
 {
-  if (enabled >= 1 && enabled <= 4) {
+  if (enabled >= 1 && enabled <= 5) {
     uint64_t threshold = 0;
     nanoseconds_to_absolutetime(2000000ull, &threshold);
     gNativeIoTrace.threshold_ticks = threshold ? threshold : 1;
@@ -511,8 +514,8 @@ extern "C" void native_powervr_io_trace_enable(unsigned enabled)
     nanoseconds_to_absolutetime(1000000000ull, &longThreshold);
     gNativeIoTrace.immediate_threshold_ticks = longThreshold ? longThreshold : 1;
     uint64_t sumThreshold=0,window=0,stale=0,pendingLease=0,activeThreshold=0;
-    nanoseconds_to_absolutetime(enabled==4?250000000ull:1000000000ull,&sumThreshold);
-    nanoseconds_to_absolutetime(enabled==4?1000000000ull:10000000000ull,&window);
+    nanoseconds_to_absolutetime(enabled>=4?250000000ull:1000000000ull,&sumThreshold);
+    nanoseconds_to_absolutetime(enabled>=4?1000000000ull:10000000000ull,&window);
     nanoseconds_to_absolutetime(5000000000ull,&stale);
     nanoseconds_to_absolutetime(65000000000ull,&pendingLease);
     nanoseconds_to_absolutetime(500000000ull,&activeThreshold);
@@ -520,11 +523,18 @@ extern "C" void native_powervr_io_trace_enable(unsigned enabled)
     gNativeWaitSeries.staleTicks=stale?stale:1;
     gNativeWaitSeries.pendingLeaseTicks=pendingLease?pendingLease:1;
     gNativeWaitSeries.activeThreshold=activeThreshold?activeThreshold:1;gNativeWaitSeries.mode=enabled;
+    if (enabled==5) {
+      uint64_t shortWait=0,spacing=0;
+      nanoseconds_to_absolutetime(50000000ull,&shortWait);
+      nanoseconds_to_absolutetime(500000000ull,&spacing);
+      gNativeWaitReason.minTicks=shortWait?shortWait:1;gNativeWaitReason.perFenceTicks=spacing?spacing:1;
+      gNativeWaitReason.windowTicks=window?window:1;
+    }
   }
-  __atomic_store_n(&gNativeWaitSeries.enabled,enabled == 3 || enabled == 4,__ATOMIC_RELEASE);
-  __atomic_store_n(&gNativeIoTrace.immediate_enabled, enabled == 2 || enabled == 3 || enabled == 4, __ATOMIC_RELEASE);
-  __atomic_store_n(&gNativeIoTrace.enabled, enabled >= 1 && enabled <= 4, __ATOMIC_RELEASE);
-  if (enabled==4) {
+  __atomic_store_n(&gNativeWaitSeries.enabled,enabled == 3 || enabled == 4 || enabled == 5,__ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeIoTrace.immediate_enabled, enabled == 2 || enabled == 3 || enabled == 4 || enabled == 5, __ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeIoTrace.enabled, enabled >= 1 && enabled <= 5, __ATOMIC_RELEASE);
+  if (enabled==4 || enabled==5) {
     unsigned expected=0;
     if (__atomic_compare_exchange_n(&gWaitMonitorStarted,&expected,1u,false,__ATOMIC_ACQ_REL,__ATOMIC_RELAXED)) {
       thread_t thread=nullptr;
@@ -1840,10 +1850,12 @@ bool fwccbPendingLocked()
 }
 // Nonwaiting: WaitFence must never execute a freelist/KCCB callback, nor wait
 // for a callback or lock on a zero-timeout poll. Pending work is not success.
-bool tryLockJobsAfterResets(bool *ready)
+bool tryLockJobsAfterResets(bool *ready, unsigned *reason = nullptr)
 {
-  if (!IOLockTryLock(gJobs.fwccbLock)) return false;
+  if (reason) *reason = 0;
+  if (!IOLockTryLock(gJobs.fwccbLock)) { if (reason) *reason = 1; return false; }
   if (!IOLockTryLock(gJobs.lock)) {
+    if (reason) *reason = 2;
     IOLockUnlock(gJobs.fwccbLock);
     return false;
   }
@@ -2254,6 +2266,33 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
 extern "C" int native_powervr_fence_wait(struct native_powervr_jobs_file *file, uint64_t fence, uint64_t timeout_ns)
 {
   if (!file || !fence || uint32_t(fence) == NativePowerVRTunnelMagic) return -EINVAL;
+  // Mode 5 only, on the observed backboardd path. All snapshots are copied
+  // under the existing locks and formatted after both locks are released.
+  unsigned pid=0; uint64_t tid=0, started=0;
+  if (__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE) && gNativeWaitSeries.mode==5 && timeout_ns) {
+    char name[20]={};proc_selfname(name,sizeof(name));
+    if (!strcmp(name,"backboardd")) {pid=static_cast<unsigned>(proc_selfpid());tid=thread_tid(current_thread());started=nowAbs();}
+  }
+  struct Snapshot {
+    uint64_t at=0; uint32_t valid=0,found=0,job=0,ctx=0,type=0,seq=0,ufo=0;
+    uint32_t fwRead=0,fwWrite=0,fwActive=0,ready=0,latePending=0;
+    uint32_t fwLockFail=0,jobsLockFail=0,fwPending=0,ufoPending=0;
+  } snap;
+  auto finish = [&](int result) {
+    const uint64_t end=started?nowAbs():0;
+    if (started && native_wait_reason_claim(&gNativeWaitReason,pid,tid,fence,reinterpret_cast<uintptr_t>(file),started,end)) {
+      uint64_t startNs=0,endNs=0,sampleNs=0;
+      absolutetime_to_nanoseconds(started,&startNs);absolutetime_to_nanoseconds(end,&endNs);
+      if (snap.valid) absolutetime_to_nanoseconds(snap.at,&sampleNs);
+      IOLog("a04br3 gpu fence reason: clock=mach_absolute_ns pid=%u tid=%llu fence=%llu start_ns=%llu end_ns=%llu result=%d sample_valid=%u sample_ns=%llu found=%u job=%u ctx=%u type=%u seq=%u ufo=%u fw_read=%u fw_write=%u fw_active=%u ready=%u late_pending=%u fw_lock_fail=%u jobs_lock_fail=%u fw_pending=%u ufo_pending=%u limit_busy=%u limit_suppressed=%u limit_evicted=%u\n",
+            pid,(unsigned long long)tid,(unsigned long long)fence,(unsigned long long)startNs,(unsigned long long)endNs,result,
+            snap.valid,(unsigned long long)sampleNs,snap.found,snap.job,snap.ctx,snap.type,snap.seq,snap.ufo,
+            snap.fwRead,snap.fwWrite,snap.fwActive,snap.ready,snap.latePending,snap.fwLockFail,snap.jobsLockFail,
+            snap.fwPending,snap.ufoPending,__atomic_load_n(&gNativeWaitReason.busy,__ATOMIC_RELAXED),
+            __atomic_load_n(&gNativeWaitReason.suppressed,__ATOMIC_RELAXED),__atomic_load_n(&gNativeWaitReason.evicted,__ATOMIC_RELAXED));
+    }
+    return result;
+  };
   uint64_t deadline = ~0ULL;
   if (timeout_ns < ~0ULL / 2) {
     uint64_t abs = 0;
@@ -2262,11 +2301,19 @@ extern "C" int native_powervr_fence_wait(struct native_powervr_jobs_file *file, 
   }
   for (;;) {
     int status = 1;
-    bool ready;
-    if (!tryLockJobsAfterResets(&ready)) {
-      if (!timeout_ns || nowAbs() >= deadline) return -ETIMEDOUT;
+    bool ready; unsigned reason=0;
+    if (!tryLockJobsAfterResets(&ready,started?&reason:nullptr)) {
+      if (reason==1 && snap.fwLockFail!=~uint32_t(0)) ++snap.fwLockFail;
+      if (reason==2 && snap.jobsLockFail!=~uint32_t(0)) ++snap.jobsLockFail;
+      if (!timeout_ns || nowAbs() >= deadline) return finish(-ETIMEDOUT);
       IOSleep(1);
       continue;
+    }
+    if (started) {
+      snap.at=nowAbs();snap.valid=1;snap.found=0;snap.ready=ready;
+      snap.fwRead=READ_ONCE(gJobs.fwccbCtl->read_offset);snap.fwWrite=READ_ONCE(gJobs.fwccbCtl->write_offset);
+      snap.fwActive=gJobs.fwccbActive;snap.latePending=0;
+      if (!ready && snap.fwPending!=~uint32_t(0)) ++snap.fwPending;
     }
     if (fence >= file->nextFence) {
       status = -EINVAL;
@@ -2278,6 +2325,11 @@ extern "C" int native_powervr_fence_wait(struct native_powervr_jobs_file *file, 
           break;
         }
       }
+      if (started && found) {
+        snap.found=1;snap.job=found->id;snap.ctx=found->ctx->ctx_id;snap.type=static_cast<uint32_t>(found->type);
+        snap.seq=found->seqno;snap.ufo=READ_ONCE(*found->queue->timeline_ufo.value);
+        if (int32_t(snap.ufo-snap.seq)<0 && snap.ufoPending!=~uint32_t(0)) ++snap.ufoPending;
+      }
       if (!found) status = wasFailed(file, fence) ? -EIO : 0;
       else if (found->failed || atomic_read(&found->ctx->faulty)) status = -EIO;
       else if (ready && queueReached(found->queue, found->seqno)) {
@@ -2287,10 +2339,10 @@ extern "C" int native_powervr_fence_wait(struct native_powervr_jobs_file *file, 
     }
     // This is the success publication boundary. Firmware notes published later
     // cannot revoke a success already returned to the caller.
-    if (status == 0 && (!ready || fwccbPendingLocked())) status = 1;
+    if (status == 0 && (!ready || fwccbPendingLocked())) { if (started) snap.latePending=1; status = 1; }
     unlockJobsAfterResets();
-    if (status != 1) return status;
-    if (!timeout_ns || nowAbs() >= deadline) return -ETIMEDOUT;
+    if (status != 1) return finish(status);
+    if (!timeout_ns || nowAbs() >= deadline) return finish(-ETIMEDOUT);
     IOSleep(1);
   }
 }
