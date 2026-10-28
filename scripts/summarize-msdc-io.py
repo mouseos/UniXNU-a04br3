@@ -19,6 +19,9 @@ anchor = b'[pmic6392_init] Preloader Start'
 bldr = b'[BLDR] Build Time:'
 reason = re.compile(rb'(?i)\bBOOT_REASON\s*:')
 sample_marker = b'a04br3 msdc io sample seq='
+record_marker = 'a04br3 msdc '
+# Captures may have no prefix, or one numeric UART/kernel timestamp.
+uart_prefix = re.compile(r'(?:\[[ \t]*[0-9]+(?:\.[0-9]+)?\][ \t]*)?\Z')
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
@@ -45,6 +48,14 @@ def samples(lines):
     current = None
     last_seq = 0
     for line in lines:
+        occurrences = line.count(record_marker)
+        if occurrences > 1:
+            raise ValueError('multiple MSDC records joined on one line')
+        if occurrences == 1:
+            position = line.index(record_marker)
+            if not uart_prefix.fullmatch(line[:position]):
+                raise ValueError('unrecognized UART prefix before MSDC record')
+            line = line[position:]
         h = header.search(line)
         if h:
             if current is not None:

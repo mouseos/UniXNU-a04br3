@@ -47,6 +47,19 @@ with tempfile.TemporaryDirectory(prefix='iostat-summary-') as d:
  # Prefixes such as UART timestamps are allowed; suffixes are not.
  prefixed=prefix+b'\n'.join(b'[123] '+line for line in (sample(1,100,1)+sample(2,200,2)).splitlines())+b'\n'
  p=run(prefixed);assert p.returncode==0,p.stderr
+ prefixed=prefix+b'\n'.join(b'[  123.456] '+line for line in (sample(1,100,1)+sample(2,200,2)).splitlines())+b'\n'
+ p=run(prefixed);assert p.returncode==0,p.stderr
+ # One newline is lost: an old row becomes a prefix of a valid new row.
+ joined_lines=sample(2,200,2).splitlines();joined_lines[1:3]=[joined_lines[1]+joined_lines[2]]
+ joined=prefix+sample(1,100,1)+b'\n'.join(joined_lines)+b'\n'
+ rejected(joined,'multiple MSDC records')
+ # A non-frame MSDC record may not be silently treated as a UART prefix either.
+ joined=prefix+sample(1,100,1)+b'a04br3 msdc irq: captured=1 '+sample(2,200,2)
+ rejected(joined,'multiple MSDC records')
+ badprefix=prefix+sample(1,100,1)+sample(2,200,2).replace(b'a04br3 msdc transfer',b'[kernel] a04br3 msdc transfer',1)
+ rejected(badprefix,'unrecognized UART prefix')
+ badprefix=prefix+sample(1,100,1)+sample(2,200,2).replace(b'a04br3 msdc transfer',b'garbage a04br3 msdc transfer',1)
+ rejected(badprefix,'unrecognized UART prefix')
  for token in (b'elapsed_ns=10', b'rows=16', b'bytes=1024', b'max_wait_ns=5', b'non_atomic=1'):
   corrupted=good.replace(token,token+b'INVALID',1)
   rejected(corrupted,'malformed')
