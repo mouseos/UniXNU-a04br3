@@ -47,15 +47,17 @@ int main() {
  for(unsigned n:seen)assert(n==1);
  unsigned cursor=0;assert(!native_io_live_take(&t,&cursor,&out));
  t={};t.enabled=1;t.threshold_ticks=10;
- unsigned concurrentSeen[400]={},writersDone=0;
+ unsigned concurrentSeen[400]={},writersDone=0,ready=0,start=0;
+ auto barrier=[&]{__atomic_fetch_add(&ready,1u,__ATOMIC_RELEASE);while(!__atomic_load_n(&start,__ATOMIC_ACQUIRE))std::this_thread::yield();};
  std::vector<std::thread> writers;
  for(unsigned k=0;k<4;k++) writers.emplace_back([&,k]{
-  for(unsigned i=0;i<100;i++) {NativeIoRecord x={1,20,3,k*100+i,5,1,-1};native_io_record(&t,x);}
+  barrier();for(unsigned i=0;i<100;i++) {NativeIoRecord x={1,20,3,k*100+i,5,1,-1};native_io_record(&t,x);std::this_thread::yield();}
   __atomic_fetch_add(&writersDone,1u,__ATOMIC_RELEASE);
  });
  auto keep=[&](const NativeIoRecord &x){assert(x.fence<400);__atomic_fetch_add(&concurrentSeen[x.fence],1u,__ATOMIC_RELAXED);};
- std::thread fastConcurrent([&]{unsigned c=0;NativeIoRecord x;while(__atomic_load_n(&writersDone,__ATOMIC_ACQUIRE)!=4) if(native_io_live_take(&t,&c,&x))keep(x);while(native_io_live_take(&t,&c,&x))keep(x);});
- std::thread slowConcurrent([&]{NativeIoRecord x;while(__atomic_load_n(&writersDone,__ATOMIC_ACQUIRE)!=4) for(unsigned i=0;i<128;i++)if(native_io_take(&t,i,&x))keep(x);for(unsigned i=0;i<128;i++)if(native_io_take(&t,i,&x))keep(x);});
+ std::thread fastConcurrent([&]{barrier();unsigned c=0;NativeIoRecord x;while(__atomic_load_n(&writersDone,__ATOMIC_ACQUIRE)!=4) if(native_io_live_take(&t,&c,&x))keep(x);while(native_io_live_take(&t,&c,&x))keep(x);});
+ std::thread slowConcurrent([&]{barrier();NativeIoRecord x;while(__atomic_load_n(&writersDone,__ATOMIC_ACQUIRE)!=4) for(unsigned i=0;i<128;i++)if(native_io_take(&t,i,&x))keep(x);for(unsigned i=0;i<128;i++)if(native_io_take(&t,i,&x))keep(x);});
+ while(__atomic_load_n(&ready,__ATOMIC_ACQUIRE)!=6)std::this_thread::yield();__atomic_store_n(&start,1u,__ATOMIC_RELEASE);
  for(auto &thread:writers)thread.join();fastConcurrent.join();slowConcurrent.join();
  unsigned total=0;for(unsigned n:concurrentSeen){assert(n<=1);total+=n;}
  assert(total+t.dropped==400);
