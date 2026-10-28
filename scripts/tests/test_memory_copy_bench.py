@@ -47,7 +47,12 @@ kern_return_t mach_port_deallocate(mach_port_t, mach_port_t);
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
 static unsigned waits[32], nw, calls; static int scenario;
+static int fake_clock_gettime(clockid_t c, struct timespec *t) {
+ if (scenario==10) { t->tv_sec=1; t->tv_nsec=0; return 0; }
+ return clock_gettime(c,t);
+}
 static FILE *fake_freopen(const char *p,const char *m,FILE *f) {
  (void)p;(void)m;
  if ((scenario==7 && f==stdout) || (scenario==8 && f==stderr)) {errno=EACCES; return NULL;}
@@ -56,6 +61,7 @@ static FILE *fake_freopen(const char *p,const char *m,FILE *f) {
 static unsigned fake_sleep(unsigned n) {waits[nw++]=n; return 0;}
 #define freopen fake_freopen
 #define sleep fake_sleep
+#define clock_gettime fake_clock_gettime
 #define main bench_main
 #include "SOURCE_PATH"
 #undef main
@@ -65,7 +71,7 @@ kern_return_t mach_port_deallocate(mach_port_t p,mach_port_t q) {(void)p;(void)q
 kern_return_t host_page_size(mach_port_t p,vm_size_t *n) {(void)p;*n=4096;return 0;}
 kern_return_t host_statistics64(mach_port_t p,int f,host_info64_t out,mach_msg_type_number_t *n) {
  (void)p;(void)f;(void)n; ++calls;
- if (scenario==3) return 1;
+ if (scenario==3 || (scenario==9 && calls==2)) return 1;
  unsigned pages = scenario==1 ? 8703 : scenario==2 && calls<=2 ? 10239 : scenario>=4 ? 11264 : 10240;
  unsigned spec = scenario==4 ? 1024 : scenario==5 ? 1025 : scenario==6 ? 11265 : 0;
  ((vm_statistics64_data_t *)out)->free_count=pages;
@@ -111,6 +117,16 @@ int main(int argc,char **argv) {
                 self.assertEqual(result.returncode, 1)
                 self.assertIn('phase=console_error stream=' + stream, result.stdout + result.stderr)
                 self.assertNotIn('phase=waiting', result.stdout)
+                self.assertIn('waits=0', result.stderr)
+            result = subprocess.run([str(binary), '9'], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('phase=exit code=1 reason=vm_statistics_error samples=1', result.stdout)
+            self.assertEqual(result.stdout.count('logical_bytes='), 1)
+            result = subprocess.run([str(binary), '10'], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('phase=error reason=invalid_elapsed', result.stdout)
+            self.assertIn('phase=exit code=1 reason=copy_failed samples=0', result.stdout)
+            self.assertNotIn('logical_bytes=', result.stdout)
 
 if __name__ == '__main__':
     unittest.main()

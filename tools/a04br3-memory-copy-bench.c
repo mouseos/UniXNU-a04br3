@@ -64,11 +64,16 @@ static int run_copy(unsigned long mib, int checked) {
     memcpy(dst, src, size);
     uint64_t end_ns = now_ns();
     int ok = memcmp(src, dst, size) == 0;
+    if (!ok || end_ns <= start) {
+        printf("a04br3_mem_copy phase=error reason=%s\n", !ok ? "verification_failed" : "invalid_elapsed");
+        free(dst); free(src);
+        return 1;
+    }
     printf("a04br3_mem_copy synthetic=1 threads=1 size_bytes=%zu start_monotonic_ns=%" PRIu64
            " end_monotonic_ns=%" PRIu64 " elapsed_ns=%" PRIu64 " logical_bytes=%zu verified=%d\n",
            size, start, end_ns, end_ns - start, size, ok);
     free(dst); free(src);
-    return ok && end_ns > start ? 0 : 1;
+    return 0;
 }
 
 static void wait_seconds(unsigned seconds) {
@@ -84,7 +89,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "a04br3_mem_copy phase=console_error stream=stdout errno=%d\n", saved);
             return 1;
         }
-        setvbuf(stdout, NULL, _IOLBF, 0);
+        setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
         printf("a04br3_mem_copy phase=console_stdout_ready\n");
         if (!freopen("/dev/console", "w", stderr)) {
             int saved = errno;
@@ -113,15 +118,22 @@ int main(int argc, char **argv) {
                     wait_seconds(15);
                 }
 #endif
-                if (available < 0) return 1;
+                if (available < 0) {
+                    printf("a04br3_mem_copy phase=exit code=1 reason=vm_statistics_error samples=%u\n", completed);
+                    return 1;
+                }
                 if (!available) { ++skipped_sizes; break; }
-                if (run_copy(sizes[i], 1)) return 1;
+                if (run_copy(sizes[i], 1)) {
+                    printf("a04br3_mem_copy phase=exit code=1 reason=copy_failed samples=%u\n", completed);
+                    return 1;
+                }
                 ++completed;
             }
         }
         printf("a04br3_mem_copy synthetic=1 phase=complete samples=%u incomplete_sizes=%u\n", completed, skipped_sizes);
-        if (!completed) return 1;
-        return 0;
+        printf("a04br3_mem_copy phase=exit code=%u reason=%s samples=%u\n",
+               completed ? 0u : 1u, completed ? "complete" : "no_samples", completed);
+        return completed ? 0 : 1;
     }
     if (argc != 3 || strcmp(argv[1], "--run")) {
         fprintf(stderr, "usage: %s --run size_mib (1..64)\n", argv[0]); return 2;
