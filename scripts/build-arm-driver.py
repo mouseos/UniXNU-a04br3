@@ -99,6 +99,10 @@ if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_GICV2') == '1':
 # Explicit experiment only: the regular build is byte-for-byte unaffected.
 if component == 'ArmCpu' and os.environ.get('XNU_MSDC_IRQ_WAIT') == '1':
     command += ['-DARMCPU_SPI_SERIALIZE=1']
+if component == 'ArmCpu' and os.environ.get('XNU_MSDC_GIC_NS') == '1':
+    if os.environ.get('XNU_MSDC_IRQ_WAIT') != '1':
+        parser.error('XNU_MSDC_GIC_NS=1 requires XNU_MSDC_IRQ_WAIT=1')
+    command += ['-DARMCPU_GICV2_ASSUME_NONSECURE=1']
 # a04br3 eMMC (MSDC0, github.com/mouseos/NativeMsdc). CONFIG_XNU_NATIVE_MSDC_BLOCK=y builds the userdata windows as
 # IOBlockStorageDevice subclasses; their kernel link needs the audited storage aliases (board.toml, the NativeMsdc bindings
 # entry). Without it the driver serves the persistent store only and links on its own. With the RAM block linked and no

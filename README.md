@@ -625,6 +625,13 @@ also use the worker; writable windows and store callbacks continue to poll.
 A rejected GIC mask readback is recorded; persistent unquenchable IRQs panic.
 SYSIRQ writers that bypass ArmCpu controller synchronization can still race.
 
+On this board, the explicit experimental build option `XNU_MSDC_GIC_NS=1`
+requires `XNU_MSDC_IRQ_WAIT=1` and declares a non-secure GICv2 access path.
+It permits a Security-Extensions implementation to expose IGROUPR as RAZ/WI;
+priority, target and enable readbacks are still required. This does not prove
+interrupt delivery. The option is off by default and must not be assumed on
+other hardware without establishing its security state.
+
 Experimental verified-root read executor: additionally export
 `XNU_MSDC_IRQ_WORKER=1` together with `XNU_MSDC_IRQ_WAIT=1` when building;
 `XNU_NATIVE_MSDC_BLOCK=1` and `--verified-root` are required. The new executor
