@@ -26,7 +26,7 @@ def run_case(initial_uuid, fault=None, out_mode=None, rerun=False):
         if out_mode:
             (source/'out/a04br3/kernel').mkdir(parents=True)
             (source/'out/a04br3/kernel/kernel.macho').write_text('conflicting default kernel')
-        for name in ('a04br3-memory-build.sh', 'a04br3-memory-payload.sh', 'a04br3-memory-manifest.py'):
+        for name in ('a04br3-memory-build.sh', 'a04br3-memory-payload.sh', 'a04br3-memory-manifest.py', 'a04br3_tree_scripts.py'):
             shutil.copy(ROOT/'scripts'/name, device/'scripts'/name)
         (device/'scripts/a04br3-pre-build.sh').write_text(r'''#!/bin/bash
 set -eu
@@ -40,6 +40,10 @@ printf trust > "$RUNNER_TEMP/trustcache"
 set -eu
 printf '%s uuid=%s\n' "$*" "${XNU_OWNER_DATA_VOLUME_UUID:-unset}" >> "$TEST_LOG"
 mkdir -p "$TEST_OUT_DIR/a04br3/kernel"
+if [ "$1" = tree ]; then
+  mkdir -p "$TEST_OUT_DIR/a04br3/tree/scripts"
+  cp -R "$DEVICE_DIR/scripts/." "$TEST_OUT_DIR/a04br3/tree/scripts/"
+fi
 if [ "$1" = defconfig ]; then echo 'CONFIG_TEST=y' > "$TEST_OUT_DIR/a04br3/.config"; fi
 if [ "$1 $2" = 'build kernel' ]; then
   [ "$TEST_FAULT" != kernel_failure ] || exit 1
@@ -50,6 +54,7 @@ if [ "$1 $2" = 'build kernel' ]; then
   if [ "$TEST_FAULT" = alter_config ]; then printf altered > "$TEST_OUT_DIR/a04br3/.config"; fi
   if [ "$TEST_FAULT" = alter_source ]; then touch "$TEST_GIT_DIRTY"; fi
   if [ "$TEST_FAULT" = alter_lock ]; then printf altered >> "$DEVICE_DIR/unixnu.lock"; fi
+  if [ "$TEST_FAULT" = alter_tree_script ]; then printf altered >> "$TEST_OUT_DIR/a04br3/tree/scripts/a04br3-memory-build.sh"; fi
 fi
 ''')
         (source/'unixnu').chmod(0o755)
@@ -119,7 +124,7 @@ for initial in ('', OLD):
 run_case(OLD, rerun=True)
 for mode in ('absolute', 'relative', 'expanded'):
     run_case(OLD, out_mode=mode)
-for fault in ('kernel_failure', 'wrong_kernel_uuid', 'alter_seed', 'alter_trust', 'alter_config', 'alter_source', 'alter_lock'):
+for fault in ('kernel_failure', 'wrong_kernel_uuid', 'alter_seed', 'alter_trust', 'alter_config', 'alter_source', 'alter_lock', 'alter_tree_script'):
     run_case(OLD, fault)
 print('PASS: clean/stale parent UUID, kernel and input integrity, flags and failure injection')
 

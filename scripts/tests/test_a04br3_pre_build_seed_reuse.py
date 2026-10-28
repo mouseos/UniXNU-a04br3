@@ -195,6 +195,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
                 else:
                     assert '--expected-volume-uuid ' + UUID in calls
                 if memory == '1':
+                    assert 'a04br3_tree_scripts.py --stabilize ' in calls
                     assert 'build-a04br3-memory-bench.py' in calls and '--memory-bench ' in calls
                     assert 'a04br3-memory-bench/trust.json' in calls and '--extra-trust ' in calls
                 else:

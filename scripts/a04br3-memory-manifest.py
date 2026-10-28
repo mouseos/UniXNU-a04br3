@@ -10,6 +10,8 @@ import sys
 import tomllib
 import uuid
 
+from a04br3_tree_scripts import verify_tree_scripts
+
 
 def digest(path):
     h = hashlib.sha256()
@@ -88,6 +90,7 @@ def snapshot():
     lock = tomllib.loads((device / 'unixnu.lock').read_text())
     pinned_xnu = lock['source']['xnu']['commit'].lower()
     tree = out / 'a04br3/tree'
+    scripts_hash = verify_tree_scripts(source, device, tree)
     xnu = repo_identity(tree / 'refer/xnu')
     if xnu['commit'].lower() != pinned_xnu:
         raise ValueError('XNU checkout differs from device lock')
@@ -96,7 +99,7 @@ def snapshot():
         raise ValueError('patched XNU checkout differs from device lock')
     flags = {k: v for k, v in sorted(os.environ.items()) if k.startswith(('XNU_', 'CONFIG_', 'A04BR3_', 'UNIXNU_'))}
     return {'version': 1, 'source': repo_identity(source, generated_roots=(out, runner)), 'device': repo_identity(device),
-            'xnu_reference': xnu, 'xnu_patched': patched_xnu,
+            'xnu_reference': xnu, 'xnu_patched': patched_xnu, 'tree_scripts_sha256': scripts_hash,
             'lock_sha256': digest(device / 'unixnu.lock'),
             'config_sha256': digest(out / 'a04br3/.config'),
             'flags_sha256': hashlib.sha256(json.dumps(flags, sort_keys=True).encode()).hexdigest(),
@@ -123,6 +126,10 @@ def main():
     if action == 'capture':
         complete.unlink(missing_ok=True)
         pending.unlink(missing_ok=True)
+        source = Path.cwd().resolve()
+        device = Path(os.environ['DEVICE_DIR']).resolve()
+        out = Path(os.path.expandvars(os.path.expanduser(os.environ.get('UNIXNU_OUT') or str(source / 'out')))).resolve()
+        verify_tree_scripts(source, device, out / 'a04br3/tree', stabilize=True)
         atomic_json(pending, snapshot())
         return
     if action == 'seal':

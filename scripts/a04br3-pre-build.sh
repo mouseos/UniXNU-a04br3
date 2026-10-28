@@ -101,6 +101,10 @@ python3 "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$PWD" --out "$
 # Match UniXNU Context's expanduser/expandvars/resolve semantics for UNIXNU_OUT.
 OUT_ROOT=$(python3 -c 'import os; from pathlib import Path; print(Path(os.path.expandvars(os.path.expanduser(os.environ.get("UNIXNU_OUT") or "out"))).resolve())')
 TREE=$OUT_ROOT/a04br3/tree
+if [ "${A04BR3_MEMORY_BENCH:-0}" = 1 ]; then
+  export PYTHONDONTWRITEBYTECODE=1
+  python3 "$DEVICE_DIR/scripts/a04br3_tree_scripts.py" --stabilize "$PWD" "$DEVICE_DIR" "$TREE"
+fi
 MOUNT=
 SEED_SCRATCH=
 SEED_INPUT="$RUNNER_TEMP/data.dbr"
