@@ -8,10 +8,20 @@ incomplete list is not a four-core utilization measurement. This uses the
 same `processor_cpu_load_info` counters as XNU's PROCESSOR_CPU_LOAD_INFO;
 XNU's current implementation reports nice as zero.
 
+Each row reports the raw processor state immediately before and after reading
+the counters: 0 OFF_LINE, 1 SHUTDOWN, 2 START, 3 PENDING_OFFLINE, 4 IDLE,
+5 DISPATCHING, 6 RUNNING. The state is read as in XNU's PROCESSOR_BASIC_INFO
+without holding the processor-list lock; the two reads and counters are not
+atomic. A difference proves that the sampled endpoints differ; equality does
+not rule out intervening transitions. CPU hotplug can occur between reports
+and leave matching endpoints, so these samples do not prove uninterrupted
+online time. In particular IDLE is an online scheduler state, not OFF_LINE.
+
 Use unsigned 32-bit subtraction between consecutive samples of the same CPU
 and the same boot, including wrap, then divide each delta by the sum of the
 user, system and idle deltas. Sum deltas over the same set of CPUs for an
-aggregate. Reject zero totals, CPU hotplug or missing cores, boot changes and
+aggregate. Reject zero totals, observed offline or startup/shutdown states,
+changed states, missing cores, boot changes and
 intervals long enough for multiple wraps. The per-CPU `at_ns` and batch start
 and end are XNU monotonic time, not a simultaneous snapshot; sleep and
 console output make the interval longer than 10 seconds. Recount, sequential
