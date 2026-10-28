@@ -726,7 +726,10 @@ BLDR の境界は１組とし、CPU サンプル開始後の boot reason を拒�
 UART の欠落や未知の再起動表記がないことまでは証明できません。
 
 各サンプルは CPU 0–3 の順序付き４行と対応する summary が必須です。状態の
-前後の読み取りはともに IDLE・DISPATCHING・RUNNING とし、時刻の順序と
+前後の読み取りはともに IDLE・DISPATCHING・RUNNING とし、その３状態間の
+変化は通常の scheduler 遷移として受理します。OFF_LINE・SHUTDOWN・START・
+PENDING_OFFLINE および未知の状態は拒否します。読み取り間の未観測の offline・
+hotplug・再起動は、同一の状態が両端で観測されても否定できません。時刻の順序と
 サンプル範囲の非重複を検査します。各 core の interval は名目10秒に対して
 9–12秒を許容し、欠損、ゼロまたは不自然に大きい tick 差分は JSON 出力前に
 拒否します。32-bit tick は 2^32 の剰余差分で扱い、core あたり毎秒1000 tick

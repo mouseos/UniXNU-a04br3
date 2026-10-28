@@ -18,11 +18,18 @@ and leave matching endpoints, so these samples do not prove uninterrupted
 online time. In particular IDLE is an online scheduler state, not OFF_LINE.
 
 Use unsigned 32-bit subtraction between consecutive samples of the same CPU
-and the same boot, including wrap, then divide each delta by the sum of the
-user, system and idle deltas. Sum deltas over the same set of CPUs for an
-aggregate. Reject zero totals, observed offline or startup/shutdown states,
-changed states, missing cores, boot changes and
-intervals long enough for multiple wraps. The per-CPU `at_ns` and batch start
+and the same boot, including wrap, then calculate non-idle from the user,
+system, nice and idle deltas. Sum deltas over the same set of CPUs for a
+tick-weighted aggregate. Reject zero totals, missing cores, boot changes,
+intervals long enough for multiple wraps, and samples where either state read
+is OFF_LINE, SHUTDOWN, START, PENDING_OFFLINE or unknown. Accept transitions
+among IDLE, DISPATCHING and RUNNING: those are ordinary online scheduler
+states, so a changed value alone is not an offline event. Neither matching nor
+different online endpoints rule out unobserved offline/hotplug and restart
+between reads or between samples. The analyzer's finite 1000-tick/second
+plausibility bound and single-wrap assumption also cannot prove that a reset
+near wrap did not happen. The user/system accounting split is under
+investigation; an undercounted user component can also understate non-idle. The per-CPU `at_ns` and batch start
 and end are XNU monotonic time, not a simultaneous snapshot; sleep and
 console output make the interval longer than 10 seconds. Recount, sequential
 sampling and UART output add overhead. The values are scheduler accounting,

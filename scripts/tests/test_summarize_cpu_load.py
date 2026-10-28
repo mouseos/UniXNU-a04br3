@@ -40,8 +40,25 @@ with tempfile.TemporaryDirectory(prefix='cpu-load-') as d:
  rejected(good, 'capture differs',raw=good[:-1]+b'X')
  rejected(good, 'invalid flash UART offsets',overrides={'uart_offset_before_reboot':0})
  rejected(boot+frame(1_000_000_000,old)+frame(11_000_000_000,new,[(4,4),(4,4),(0,0),(4,4)]),'not online')
- # IDLE to RUNNING is online at both reads, not proof of continuity between them.
- p=run(boot+frame(1_000_000_000,old)+frame(11_000_000_000,new,[(4,6)]*4));assert p.returncode==0,p.stderr
+ # All nine IDLE/DISPATCHING/RUNNING pairs are admitted; these endpoint
+ # observations cannot prove that offline/hotplug did not occur in between.
+ for before in (4,5,6):
+  for after in (4,5,6):
+   p=run(boot+frame(1_000_000_000,old)+frame(11_000_000_000,new,[(before,after)]*4));assert p.returncode==0,p.stderr
+   row=json.loads(p.stdout);assert all(c['end_state_before']==before and c['end_state_after']==after for c in row['cores'])
+   assert 'intervening offline/hotplug unknown' in row['limitations']
+ p=run(boot+frame(1_000_000_000,old,[(6,5)]*4)+frame(11_000_000_000,new,[(5,4)]*4))
+ assert p.returncode==0,p.stderr
+ row=json.loads(p.stdout);assert all((c['start_state_before'],c['start_state_after'],c['end_state_before'],c['end_state_after'])==(6,5,5,4) for c in row['cores'])
+ # Any offline/start/shutdown/unknown state on either side of either sample
+ # must reject the entire input without partial output.
+ for state in (0,1,2,3,7):
+  for endpoint in (0,1):
+   pair=(state,4) if endpoint==0 else (4,state)
+   for previous in (False,True):
+    left=[pair]*4 if previous else [(4,4)]*4
+    right=[(4,4)]*4 if previous else [pair]*4
+    rejected(boot+frame(1_000_000_000,old,left)+frame(11_000_000_000,new,right),'not online')
  rejected(good.replace(b'cpu=2 at_ns=',b'cpu=3 at_ns=',1),'out-of-order CPU')
  rejected(good.replace(b'cpu=1 at_ns=1000100000',b'cpu=1 at_ns=1000000000',1),'timestamps outside')
  rejected(good.replace(b'cpu=1 at_ns=1000100000',b'cpu=1 at_ns=999999999',1),'timestamps outside')

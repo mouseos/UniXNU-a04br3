@@ -114,7 +114,7 @@ def summarize(frames,identity):
                        'sample_begin_ns':current['begin_ns'],'sample_end_ns':current['end_ns'],
                        'cores':cores,'combined_non_idle_percent':100*total_active/(total_active+total_idle),
                        'combined_definition':'tick-weighted four-core non-idle; separate reads, not instantaneous',
-                       'limitations':'online at state reads only; single-wrap assumption; unvalidated user accounting may understate non-idle'})
+                       'limitations':'online state endpoints only; online-state changes allowed; intervening offline/hotplug unknown; single-wrap assumption; user accounting may understate non-idle'})
     return output
 
 def main():
