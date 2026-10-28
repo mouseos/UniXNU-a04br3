@@ -22,9 +22,10 @@ with tempfile.TemporaryDirectory() as tmp:
 #include <stddef.h>
 #include <sys/sysproto.h>
 static unsigned char area[4096];
-static int enabled, spawns, fail;
+static int enabled, short_enabled, spawns, fail;
 int PE_parse_boot_argn(const char *name, void *v, int n) {
- (void)n; if (strcmp(name,"a04br3-membench")) return 0;
+ (void)n; if (!strcmp(name,"mb")) { *(uint32_t *)v=short_enabled; return short_enabled!=0; }
+ if (strcmp(name,"a04br3-membench")) return 0;
  *(uint32_t *)v=enabled; return enabled!=0;
 }
 int copyout(const void *p, unsigned long a, size_t n) { memcpy((void*)a,p,n); return 0; }
@@ -39,7 +40,7 @@ int a04br3_memory_bench_spawn(void *,uint64_t);
 int main(void) { uint64_t scratch=(uint64_t)area; enabled=0;
  assert(!a04br3_memory_bench_spawn(0,scratch) && !spawns);
  enabled=2; assert(!a04br3_memory_bench_spawn(0,scratch) && !spawns);
- enabled=1; fail=5; assert(a04br3_memory_bench_spawn(0,scratch)==5 && spawns==1);
+ enabled=0; short_enabled=1; fail=5; assert(a04br3_memory_bench_spawn(0,scratch)==5 && spawns==1);
  fail=0; assert(!a04br3_memory_bench_spawn(0,scratch) && spawns==2);
  assert(!a04br3_memory_bench_spawn(0,scratch) && spawns==2); return 0; }
 ''')

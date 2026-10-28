@@ -59,7 +59,10 @@ int a04br3_memory_bench_spawn(void *process, uint64_t scratch)
 {
   static int started;
   uint32_t enabled = 0;
-  if (started || !PE_parse_boot_argn("a04br3-membench", &enabled, sizeof(enabled)) || enabled != 1) return 0;
+  if (started) return 0;
+  if (!PE_parse_boot_argn("a04br3-membench", &enabled, sizeof(enabled)))
+    PE_parse_boot_argn("mb", &enabled, sizeof(enabled)); // bounded iostat4 profile
+  if (enabled != 1) return 0;
   static const char path[] = "/private/var/ngpu/bin/a04br3-memory-copy-bench";
   static const char option[] = "--boot-run";
   const user_addr_t pathAddr = scratch + 0xc00, optionAddr = scratch + 0xc40;
