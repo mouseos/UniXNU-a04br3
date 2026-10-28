@@ -31,8 +31,24 @@ case "${A04BR3_REUSE_DATA_SEED:-0}" in
   1) ;;
   *) echo "A04BR3_REUSE_DATA_SEED must be 0 or 1" >&2; exit 1 ;;
 esac
+# Atomic directory lock serializes cooperating memory builds using this output.
+OUT_ROOT=$(python3 -c 'import os; from pathlib import Path; print(Path(os.path.expandvars(os.path.expanduser(os.environ.get("UNIXNU_OUT") or "out"))).resolve())')
+mkdir -p "$OUT_ROOT"
+lock="$OUT_ROOT/.a04br3-memory-build.lock"
+if ! mkdir "$lock" 2>/dev/null; then
+  echo "Memory build output is locked: $OUT_ROOT" >&2; exit 1
+fi
+staging=
+cleanup() {
+  # Once publication is attempted, retaining an orphan is safer than deleting
+  # a run that may already be visible through current.
+  if [ -n "$staging" ] && [ -d "$staging" ] && [ ! -e "$staging/.retain-after-publication-attempt" ]; then
+    rm -rf -- "$staging"
+  fi
+  rmdir "$lock" || true
+}
+trap cleanup EXIT
 staging=$(mktemp -d "$A04BR3_MEMORY_OUTPUT_ROOT/.a04br3-memory-run.XXXXXXXX")
-trap 'if [ -n "$staging" ]; then rm -rf -- "$staging"; fi' EXIT
 if [ "${A04BR3_REUSE_DATA_SEED:-0}" = 1 ]; then
   previous="$A04BR3_MEMORY_OUTPUT_ROOT"
   if [ -L "$current" ]; then previous="$current"; fi
@@ -47,7 +63,6 @@ fi
 export RUNNER_TEMP="$staging" A04BR3_MEMORY_STAGED=1
 ./unixnu defconfig a04br3_defconfig -D "$DEVICE_DIR"
 ./unixnu tree -D "$DEVICE_DIR"
-OUT_ROOT=$(python3 -c 'import os; from pathlib import Path; print(Path(os.path.expandvars(os.path.expanduser(os.environ.get("UNIXNU_OUT") or "out"))).resolve())')
 python3 "$DEVICE_DIR/scripts/a04br3_tree_scripts.py" --stabilize "$PWD" "$DEVICE_DIR" "$OUT_ROOT/a04br3/tree"
 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh"
 XNU_OWNER_DATA_VOLUME_UUID=$(python3 - "$RUNNER_TEMP/owner-data/seed.json" <<'PY_UUID'
@@ -63,19 +78,10 @@ python3 "$DEVICE_DIR/scripts/a04br3-memory-manifest.py" capture
 ./unixnu build kernel -D "$DEVICE_DIR"
 python3 "$DEVICE_DIR/scripts/a04br3-memory-manifest.py" seal
 bash "$DEVICE_DIR/scripts/a04br3-memory-payload.sh" "$@"
-# Publish one pointer only after the complete run succeeds; prior run remains intact.
-python3 - "$A04BR3_MEMORY_OUTPUT_ROOT" "$staging" <<'PY_PUBLISH'
-import os, pathlib, sys, uuid
-root, run = map(lambda p: pathlib.Path(p).resolve(), sys.argv[1:])
-if run.parent != root:
-    raise SystemExit('run is not inside the output root')
-temporary = root / ('.current-' + uuid.uuid4().hex)
-try:
-    temporary.symlink_to(run.name, target_is_directory=True)
-    os.replace(temporary, root / 'current')
-finally:
-    temporary.unlink(missing_ok=True)
-print('memory build published:', root / 'current')
-PY_PUBLISH
+# Stage and validate the payload before publishing the complete set.
+python3 "$DEVICE_DIR/scripts/a04br3-memory-publish.py" stage "$A04BR3_MEMORY_OUTPUT_ROOT" "$staging" "$OUT_ROOT/a04br3/payload"
+# A failed or interrupted publication may have switched current already.
+# Keep the candidate in either case; a later cleanup can inspect it safely.
+: > "$staging/.retain-after-publication-attempt"
+python3 "$DEVICE_DIR/scripts/a04br3-memory-publish.py" publish "$A04BR3_MEMORY_OUTPUT_ROOT" "$staging"
 staging=
-trap - EXIT

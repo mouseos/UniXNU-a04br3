@@ -34,10 +34,18 @@ rejected.
 file is requested. Each run uses a separate directory inside that root, and
 only after the payload succeeds is `current` atomically switched to that run.
 Its `current/trustcache`, `current/data.dbr`, `current/kernel.macho` and
-`current/a04br3-memory-inputs.json` are the completed set. Source/tree
+`current/a04br3-memory-inputs.json`, `current/payload.img` and
+`current/payload.json` are the completed set. The payload report is checked
+against the staged kernel, trust and payload image before publication. Source/tree
 preflight happens before trust creation. On failure the new directory is
-removed and the previous current set remains intact. The main UniXNU output
-and build caches may still change on a failed build. `UNIXNU_OUT` selects the UniXNU output root for both the
+removed and the previous current set remains intact. Once publication has
+been attempted, the new directory is retained even if the process reports an
+error; inspect `current` before removing any orphaned run. Cooperating memory
+builds targeting the same resolved `UNIXNU_OUT` are serialized by an atomic
+directory lock; other build commands do not honor that lock. A killed process
+may leave a stale `.a04br3-memory-build.lock` directory: confirm that no build
+is using that output before removing it. The main UniXNU output and build
+caches may still change on a failed build. `UNIXNU_OUT` selects the UniXNU output root for both the
 pre-build tree and the completed-kernel manifest, with the same path expansion
 as UniXNU.
 
