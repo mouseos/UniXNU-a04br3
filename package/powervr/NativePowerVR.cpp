@@ -96,6 +96,7 @@ IOLock *gLock;           // the heap bump allocator and the KCCB
 pvr_device gPvr;         // what pvr_mmu.c reads of struct pvr_device
 pvr_fw_object *gMmuSync; // fw_dev.mem.mmucache_sync_obj
 bool gMmuAckEnabled;     // cached before the firmware thread starts; diagnostic only
+bool gKccbFastPoll;       // opt-in, cached before the firmware thread starts
 uint32_t gMmuAckLast;    // nonzero token sequence, protected by gLock
 uint32_t gFwMemCtx;      // FW address of the VM context's rogue_fwif_fwmemcontext
 pvr_mmu_context *gMmuCtx;
@@ -557,6 +558,8 @@ void native_powervr_boot(void)
   packetDiagnosticInit();
   unsigned mmuAck = 0;
   gMmuAckEnabled = PE_parse_boot_argn("a04br3-mmu-ack", &mmuAck, sizeof(mmuAck)) && mmuAck == 1;
+  unsigned fastPoll = 0;
+  gKccbFastPoll = PE_parse_boot_argn("a04br3-kccb-fast", &fastPoll, sizeof(fastPoll)) && fastPoll == 1;
   if (!a04br3_gpu_bvnc || a04br3_gpu_bvnc == ~0ULL) { IOLog("powervr: no core identified; firmware not booted\n"); return; }
   // Its own thread: the boot waits up to 10 s for the firmware and must not hold up unixnu_board_init().
   thread_t thread = nullptr;
@@ -720,7 +723,20 @@ extern "C" int native_powervr_kccb_submit(const struct rogue_fwif_kccb_cmd *cmd,
   IOLockUnlock(gLock);
   // Wait outside the lock, sleeping (thread context only: callers are kernel threads).
   int err = -ETIMEDOUT;
-  for (uint32_t ms = 0; ms <= timeout_ms; ms++) {
+  // Experimental: only job kicks, no MMU/cleanup commands. If firmware has
+  // already acknowledged a kick, avoid rounding its wait up to IOSleep(1).
+  // Five bounded 10-us delays cost at most 50 us of CPU before the existing
+  // sleeping loop; the same cumulative executed-counter predicate is used.
+  if (gKccbFastPoll && timeout_ms &&
+      (local.cmd_type == ROGUE_FWIF_KCCB_CMD_KICK ||
+       local.cmd_type == ROGUE_FWIF_KCCB_CMD_COMBINED_GEOM_FRAG_KICK)) {
+    for (unsigned poll=0; poll<5; ++poll) {
+      clean(gOsdata, sizeof(*gOsdata));
+      if (mmuAckComplete(READ_ONCE_A04(gOsdata->kccb_cmds_executed), target, 0, 0)) { err=0; break; }
+      IODelay(10);
+    }
+  }
+  for (uint32_t ms = 0; err && ms <= timeout_ms; ms++) {
     clean(gOsdata, sizeof(*gOsdata));
     uint32_t observed = 0;
     if (token) {
