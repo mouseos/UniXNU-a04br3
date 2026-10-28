@@ -61,6 +61,7 @@ extern "C" {
 #include "native_powervr_pte.h"
 #include "NativePowerVRABI.h"
 #include "NativePowerVRIoTrace.h"
+#include "NativePowerVRIoAggregate.h"
 #include "NativePowerVRWaitSeries.h"
 #include "NativePowerVRWaitReason.h"
 #undef min
@@ -466,6 +467,7 @@ NativeWaitSeries gNativeWaitSeries;
 NativeWaitReasonLimit gNativeWaitReason;
 unsigned gWaitMonitorStarted;
 unsigned gIoLiveEnabled;
+NativeIoAggregate gNativeIoAggregate;
 uint64_t nowAbs() { return mach_absolute_time(); }
 uint64_t perfBegin(PerfStage s)
 {
@@ -486,7 +488,6 @@ bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); 
 
 static void native_wait_monitor(void *, wait_result_t)
 {
-  unsigned ioCursor=0;
   for (;;) {
     IOSleep(250);
     if (!__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE) || gNativeWaitSeries.mode<4) break;
@@ -502,13 +503,18 @@ static void native_wait_monitor(void *, wait_result_t)
         (unsigned long long)begin,(unsigned long long)now,(unsigned long long)sum,active[i].count,active[i].errors);
     }
     if (__atomic_load_n(&gIoLiveEnabled,__ATOMIC_ACQUIRE)) {
-      for (unsigned i=0;i<2;i++) {
-        NativeIoRecord r={};
-        if (!native_io_live_take(&gNativeIoTrace,&ioCursor,&r)) break;
-        uint64_t startNs=0,endNs=0;
-        absolutetime_to_nanoseconds(r.start,&startNs);absolutetime_to_nanoseconds(r.end,&endNs);
-        IOLog("a04br3 gpu io live: clock=mach_absolute_ns pid=%u tid=%llu kind=%u start_ns=%llu end_ns=%llu fence=%llu result=%d\n",
-          r.pid,(unsigned long long)r.tid,r.kind,(unsigned long long)startNs,(unsigned long long)endNs,(unsigned long long)r.fence,r.result);
+      NativeIoAggregateRow rows[2]={};
+      unsigned n=native_io_aggregate_take(&gNativeIoAggregate,rows);
+      for (unsigned i=0;i<n;i++) {
+        const auto &r=rows[i];uint64_t first=0,last=0,ns[3]={};
+        absolutetime_to_nanoseconds(r.first,&first);absolutetime_to_nanoseconds(r.last,&last);
+        for (unsigned k=0;k<3;k++) absolutetime_to_nanoseconds(r.ticks[k],&ns[k]);
+        IOLog("a04br3 gpu io aggregate: pid=%u tid=%llu first_ns=%llu last_ns=%llu wait=%llu/%llu/%llu lock=%llu/%llu/%llu call=%llu/%llu/%llu busy=%u full=%u\n",
+          r.pid,(unsigned long long)r.tid,(unsigned long long)first,(unsigned long long)last,
+          (unsigned long long)r.count[0],(unsigned long long)ns[0],(unsigned long long)r.errors[0],
+          (unsigned long long)r.count[1],(unsigned long long)ns[1],(unsigned long long)r.errors[1],
+          (unsigned long long)r.count[2],(unsigned long long)ns[2],(unsigned long long)r.errors[2],
+          __atomic_load_n(&gNativeIoAggregate.busy,__ATOMIC_RELAXED),__atomic_load_n(&gNativeIoAggregate.full,__ATOMIC_RELAXED));
       }
     }
   }
@@ -579,7 +585,8 @@ extern "C" void native_powervr_io_trace_record(uint64_t start, uint64_t end, uin
 {
   if (!start || end < start) return;
   NativeIoRecord record = {start, end, tid, fence, pid, kind, result};
-  native_io_record(&gNativeIoTrace, record);
+  if (__atomic_load_n(&gIoLiveEnabled,__ATOMIC_ACQUIRE)) native_io_aggregate_record(&gNativeIoAggregate,record);
+  else native_io_record(&gNativeIoTrace, record);
   NativeWaitResult series={};
   if (kind==1 && native_wait_end(&gNativeWaitSeries,pid,tid,fence,owner,start,end,result,result!=-ETIMEDOUT,&series)) {
     uint64_t firstNs=0,lastNs=0,sumNs=0;
