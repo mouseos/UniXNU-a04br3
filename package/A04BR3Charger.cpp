@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include "A04BR3RegisterLock.h"
 #include "A04BR3ChargerCore.h"
+#include "A04BR3ChargerFresh.h"
 #include "A04BR3GaugeCore.h"
 #include "A04BR3ChargerHandoff.h"
 #include "A04BR3ChargerBoardCore.h"
@@ -94,7 +95,8 @@ void service(void *, wait_result_t) {
     }
     readyEnded=serviceClock.now();
     Ops ops; uint64_t started=ops.now(), deadline=owner.handoffPending ? owner.handoffDeadline : 0;
-    a04charger::Result result = a04charger::step(owner, ops);
+    unsigned attempts=0;
+    a04charger::Result result = a04charger::stepFresh(owner, ops, attempts);
     uint64_t ended=ops.now();
     // Optional measurement client; no additional transaction when OFF or when
     // the charger owner has stopped. Never another I2C2 thread/private lock.
@@ -111,8 +113,8 @@ void service(void *, wait_result_t) {
               (unsigned long long)g.at,unsigned(g.result),g.mode.value,unsigned(g.mode.result),g.voltage.raw[0],g.voltage.raw[1],g.voltage.raw[2],unsigned(g.voltage.result));
     }
     report(result);
-    if (owner.kicks <= 1 || result != a04charger::Maintained) IOLog("a04br3 charger: service=%llu init=%llu/%llu ready=%llu step=%llu/%llu handoff_deadline=%llu read0=%llu/%llu read1=%llu/%llu read2=%llu/%llu read3=%llu/%llu read4=%llu/%llu read5=%llu/%llu read6=%llu/%llu read7=%llu/%llu\n",
-      (unsigned long long)serviceStarted,(unsigned long long)initStarted,(unsigned long long)initEnded,(unsigned long long)readyEnded,(unsigned long long)started,(unsigned long long)ended,(unsigned long long)deadline,
+    if (owner.kicks <= 1 || result != a04charger::Maintained) IOLog("a04br3 charger: attempts=%u service=%llu init=%llu/%llu ready=%llu step=%llu/%llu handoff_deadline=%llu read0=%llu/%llu read1=%llu/%llu read2=%llu/%llu read3=%llu/%llu read4=%llu/%llu read5=%llu/%llu read6=%llu/%llu read7=%llu/%llu\n",
+      attempts,(unsigned long long)serviceStarted,(unsigned long long)initStarted,(unsigned long long)initEnded,(unsigned long long)readyEnded,(unsigned long long)started,(unsigned long long)ended,(unsigned long long)deadline,
       (unsigned long long)ops.readStart[0],(unsigned long long)ops.readEnd[0],(unsigned long long)ops.readStart[1],(unsigned long long)ops.readEnd[1],
       (unsigned long long)ops.readStart[2],(unsigned long long)ops.readEnd[2],(unsigned long long)ops.readStart[3],(unsigned long long)ops.readEnd[3],
       (unsigned long long)ops.readStart[4],(unsigned long long)ops.readEnd[4],(unsigned long long)ops.readStart[5],(unsigned long long)ops.readEnd[5],
