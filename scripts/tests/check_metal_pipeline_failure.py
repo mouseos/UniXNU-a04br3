@@ -3,7 +3,7 @@
 from pathlib import Path
 import os, subprocess, tempfile
 ROOT=Path(__file__).resolve().parents[2]
-FRONT=(ROOT.parent/'UniXNU/drivers/NativeMetal/NativeBridgeMetalFrontend.mm').read_text()
+FRONT=(Path(os.environ.get('NATIVE_METAL_ROOT', ROOT.parent/'UniXNU/drivers/NativeMetal'))/'NativeBridgeMetalFrontend.mm').read_text()
 BOARD=(ROOT/'package/powervr/user/NativePowerVRMetalBoard.mm').read_text()
 def function(source, signature):
  start=source.index(signature);p=source.index('{',start);depth=1;end=p+1

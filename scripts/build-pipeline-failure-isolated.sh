@@ -1,0 +1,43 @@
+#!/bin/bash
+# Build a bounded diagnostic Metal bundle without changing the shared SSH tree.
+set -euo pipefail
+if [ "$#" -ne 3 ]; then echo 'usage: build-pipeline-failure-isolated.sh TREE VULKAN_DYLIB NEW_OUTPUT' >&2; exit 2; fi
+tree=$1; driver=$2; output=$3
+here=$(cd "$(dirname "$0")/.." && pwd)
+[ ! -e "$output" ] || { echo 'output already exists' >&2; exit 2; }
+[ "$(shasum -a 256 "$tree/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" | cut -d ' ' -f 1)" = a892b7ddd0882ac8a3461c7fcbc6f939e4d686917671e4c686e3fe87db90f1cc ] || { echo 'NativeMetal frontend differs from pinned source' >&2; exit 2; }
+[ "$(shasum -a 256 "$tree/build/native-metal-bridge/ios/libnative_metal_bridge.a" | cut -d ' ' -f 1)" = 7dcf78a7dc2d05caa7010b48e85224bab5cb087297f656d15502f517ed73b819 ] || { echo 'bridge archive differs from matched build' >&2; exit 2; }
+[ "$(shasum -a 256 "$driver" | cut -d ' ' -f 1)" = 8098ef68747a7f351215cb93ec5082bfade0043454f24db1a6bf96abb89d7bc1 ] || { echo 'Vulkan driver differs from matched build' >&2; exit 2; }
+mkdir -p "$output/tree/scripts" "$output/tree/drivers/NativeMetal" "$output/tree/package" "$output/tree/build/native-metal-bridge/ios"
+cp -R "$tree/drivers/NativeMetal/." "$output/tree/drivers/NativeMetal/"
+cp -R "$here/package/powervr" "$output/tree/package/powervr"
+cp "$tree/scripts/build-vulkan-metal-plugin.py" "$output/tree/scripts/"
+cp "$here/scripts/build-a04br3-metal-plugin.py" "$output/tree/scripts/"
+cp -c "$tree/build/native-metal-bridge/ios/libnative_metal_bridge.a" "$output/tree/build/native-metal-bridge/ios/"
+cp "$tree/build/native-metal-bridge/ios/libnative_metal_bridge.json" "$output/tree/build/native-metal-bridge/ios/"
+python3 "$output/tree/scripts/build-a04br3-metal-plugin.py" --skip-bridge --pipeline-timing --pipeline-failure-diag --vulkan "$driver" --out "$output/bundle"
+codesign --verify --strict "$output/bundle/NativePowerVRMetal.bundle"
+python3 - "$output" "$here" "$driver" <<'PY'
+import hashlib,json,pathlib,subprocess,sys
+out,device,driver=map(pathlib.Path,sys.argv[1:])
+def digest(p):
+ h=hashlib.sha256()
+ with p.open('rb') as f:
+  for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
+ return h.hexdigest()
+paths={'driver_input':driver,'bridge':out/'tree/build/native-metal-bridge/ios/libnative_metal_bridge.a',
+       'frontend':out/'tree/drivers/NativeMetal/NativeBridgeMetalFrontend.mm',
+       'board':out/'tree/package/powervr/user/NativePowerVRMetalBoard.mm',
+       'plugin_builder':out/'tree/scripts/build-vulkan-metal-plugin.py',
+       'device_builder':out/'tree/scripts/build-a04br3-metal-plugin.py',
+       'plugin':out/'bundle/NativePowerVRMetal.bundle/NativePowerVRMetal',
+       'bundled_driver':out/'bundle/NativePowerVRMetal.bundle/libvulkan_powervr_mesa.dylib'}
+record={'device_commit':subprocess.check_output(['git','-C',str(device),'rev-parse','HEAD'],text=True).strip(),
+        'native_metal_commit':'043a94f5f04f2ea06ee3706dad06ff6d266b2c39',
+        'mesa_commit':'132ac2441b96e716e6ca69fb2ea7fd3b9888fc69',
+        'pipeline_timing':True,'pipeline_failure_diagnostic':True,'shader_capture':False,
+        'reused_bridge':True,'runtime_verified':False,'sha256':{k:digest(v) for k,v in paths.items()},
+        'trust':json.loads((out/'bundle/trust.json').read_text())}
+(out/'provenance.json').write_text(json.dumps(record,indent=2)+'\n')
+PY
+echo 'isolated pipeline failure diagnostic bundle complete'
