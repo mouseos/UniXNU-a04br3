@@ -46,11 +46,39 @@ def powervr_dir():
 def shader_capture_constructor(start):
     if not isinstance(start, int) or not 0 <= start <= 1000000:
         raise ValueError('shader capture start must be between 0 and 1000000')
-    return ('#include <stdlib.h>\n'
-            '__attribute__((constructor)) static void a04br3_spirv_capture_enable(void) {\n'
-            '  setenv("METAL2VULKAN_CAPTURE_SPIRV", "1", 1);\n'
-            '  setenv("METAL2VULKAN_CAPTURE_SPIRV_START", "' + str(start) + '", 1);\n'
-            '}\n')
+    return r'''#include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <unistd.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+void native_metal_board_text(const char *line);
+void metal2vulkan_shader_capture_set_output(void (*output)(const char *));
+#ifdef __cplusplus
+}
+#endif
+static void a04br3_spirv_capture_output(const char *text) {
+  static unsigned sequence;
+  if (!text) return;
+  size_t length = strlen(text), parts = (length + 34) / 35;
+  if (!parts || parts > 65535) return;
+  unsigned id = __sync_fetch_and_add(&sequence, 1);
+  for (unsigned part = 0; part < parts; ++part) {
+    char line[64];
+    snprintf(line, sizeof line, "sc%08x%08x%04x%04x:%.*s",
+             (unsigned)getpid(), id, part, (unsigned)parts,
+             35, text + (size_t)part * 35);
+    native_metal_board_text(line);
+  }
+}
+__attribute__((constructor)) static void a04br3_spirv_capture_enable(void) {
+  setenv("METAL2VULKAN_CAPTURE_SPIRV", "1", 1);
+  setenv("METAL2VULKAN_CAPTURE_SPIRV_START", "CAPTURE_START_VALUE", 1);
+  metal2vulkan_shader_capture_set_output(a04br3_spirv_capture_output);
+}
+'''.replace("CAPTURE_START_VALUE", str(start))
 
 
 def main():

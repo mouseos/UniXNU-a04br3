@@ -20,12 +20,22 @@ with tempfile.TemporaryDirectory(prefix='pvr-shader-capture-') as temp:
     path = Path(temp)
     program = path / 'test.c'
     executable = path / 'test'
-    program.write_text(constructor(42) + '''
+    program.write_text('''
+#include <assert.h>
+#include <string.h>
+static void (*capture_output)(const char *);
+static unsigned lines;
+void metal2vulkan_shader_capture_set_output(void (*output)(const char *)) { capture_output = output; }
+void native_metal_board_text(const char *line) { assert(strlen(line) <= 63); ++lines; }
+''' + constructor(42) + '''
 #include <assert.h>
 #include <string.h>
 int main(void) {
     assert(!strcmp(getenv("METAL2VULKAN_CAPTURE_SPIRV"), "1"));
     assert(!strcmp(getenv("METAL2VULKAN_CAPTURE_SPIRV_START"), "42"));
+    assert(capture_output);
+    capture_output("0123456789012345678901234567890123456789012345678901234567890123456789");
+    assert(lines == 2);
 }
 ''')
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall', '-Wextra', '-Werror', str(program), '-o', str(executable)], check=True)
