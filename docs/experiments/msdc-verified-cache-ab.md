@@ -18,8 +18,9 @@ The P54 iostat4 boot argument string is 1018 ASCII bytes without its NUL.
 Adding ` mcv=0` or ` mcv=1` alone gives 1024 bytes, exceeding the 1023-byte
 text capacity of the ARM64 1024-byte field. For a candidate pair, remove the
 initial `-v ` in both arms and add one alias: each is 1021 bytes before NUL.
-This changes verbose boot display in both arms versus P54; check that the
-resulting capture still contains all required UART records. Validate the actual
+This changes verbose boot display in both arms versus P54. UART output with
+`-v` removed has not been verified on hardware; a complete capture containing
+all required UART records is a prerequisite for accepting either arm. Validate the actual
 UTF-8 byte length and image's kernel command line after building, rather than
 assuming this example applies to another image. Do not truncate arguments.
 

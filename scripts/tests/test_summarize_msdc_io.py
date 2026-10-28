@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='iostat-summary-') as d:
  assert all(r['calls']==2 and r['bytes']==2048 and r['activity_observed'] for r in offer)
  assert q['kind']=='queue' and q['started']==2 and q['wait_ns']==40 and q['max_wait_ns_cumulative']==15 and q['activity_observed']
  assert all(r['source_sha256']==digest(good) and r['boot_segment_sha256']==digest(good[good.find(anchor):]) and r['boot_start_offset']==good.find(anchor) for r in rows)
- # New optional cache snapshots share the frame timestamps and sequence.
+ # Cache rows obey the same framing and sequence rules as the other records.
  def with_cache(data, seq, hits, misses, reused):
   return data.replace(f'a04br3 msdc io end seq={seq}'.encode(),
    f'a04br3 msdc cache sample seq={seq} hits={hits} misses={misses} reused_bytes={reused}\na04br3 msdc io end seq={seq}'.encode())
@@ -52,6 +52,22 @@ with tempfile.TemporaryDirectory(prefix='iostat-summary-') as d:
  rejected(prefix+ca+with_cache(sample(2,200,2),2,0,2,4096),'cache counter decreased')
  rejected(prefix+ca+cb.replace(b'cache sample seq=2',b'cache sample seq=1'),'mixed')
  rejected(prefix+ca+cb.replace(b'reused_bytes=12288',b'reused_bytes=bad'),'malformed')
+ # A valid numeric timestamp prefix and CRLF are accepted for cache rows.
+ cache_marker=b'a04br3 msdc cache sample seq='
+ prefixed_cache=(prefix+ca+cb).replace(cache_marker,b'[  123.456] '+cache_marker)
+ p=run(prefixed_cache,require_cache=True);assert p.returncode==0,p.stderr
+ p=run((prefix+ca+cb).replace(b'\n',b'\r\n'),require_cache=True);assert p.returncode==0,p.stderr
+ for badprefix in (b'junk ',b'[kernel] ',b'[123][456] '):
+  rejected(prefix+ca+cb.replace(cache_marker,badprefix+cache_marker,1),'unrecognized UART prefix')
+ for control in (b'\x00',b'\x0b',b'\x0c',b'\x1b',b'\x1c',b'\x7f',b'\r',b'\t'):
+  rejected(prefix+ca+cb.replace(b'reused_bytes=12288\n',b'reused_bytes=12288'+control+b'INVALID\n',1),'control character')
+ rejected(prefix+ca+cb.replace(b'reused_bytes=12288\n',b'reused_bytes=12288\r\r\n',1),'control character')
+ rejected(prefix+ca+cb.replace(b'reused_bytes=12288\n',b'reused_bytes=12288\xc2\x85\n',1),'non-ASCII')
+ rejected(prefix+ca+cb.replace(b'reused_bytes=12288\n',b'reused_bytes=12288',1),'multiple MSDC records')
+ # A cache line from a different sequence joined to a valid cache row must fail.
+ foreign=b'a04br3 msdc cache sample seq=99 hits=1 misses=1 reused_bytes=1'
+ rejected(prefix+ca+cb.replace(cache_marker,foreign+cache_marker,1),'multiple MSDC records')
+ rejected(prefix+ca+cb[:cb.index(b'a04br3 msdc io end seq=2')].rstrip(b'\n'),'unterminated MSDC')
  # A complete idle interval is valid and reports inactive, zero rates, and a cumulative queue maximum.
  p=run(prefix+sample(1,100,1)+sample(2,200,1));assert p.returncode==0,p.stderr
  idle=[json.loads(x) for x in p.stdout.splitlines()];assert len(idle)==16 and not any(r['activity_observed'] for r in idle)
@@ -59,11 +75,33 @@ with tempfile.TemporaryDirectory(prefix='iostat-summary-') as d:
  # Prefixes such as UART timestamps are allowed; suffixes are not.
  prefixed=prefix+b'\n'.join(b'[123] '+line for line in (sample(1,100,1)+sample(2,200,2)).splitlines())+b'\n'
  p=run(prefixed);assert p.returncode==0,p.stderr
+ prefixed=prefix+b'\n'.join(b'[  123.456] '+line for line in (sample(1,100,1)+sample(2,200,2)).splitlines())+b'\n'
+ p=run(prefixed);assert p.returncode==0,p.stderr
+ # One newline is lost: an old row becomes a prefix of a valid new row.
+ joined_lines=sample(2,200,2).splitlines();joined_lines[1:3]=[joined_lines[1]+joined_lines[2]]
+ joined=prefix+sample(1,100,1)+b'\n'.join(joined_lines)+b'\n'
+ rejected(joined,'multiple MSDC records')
+ # A non-frame MSDC record may not be silently treated as a UART prefix either.
+ joined=prefix+sample(1,100,1)+b'a04br3 msdc irq: captured=1 '+sample(2,200,2)
+ rejected(joined,'multiple MSDC records')
+ badprefix=prefix+sample(1,100,1)+sample(2,200,2).replace(b'a04br3 msdc transfer',b'[kernel] a04br3 msdc transfer',1)
+ rejected(badprefix,'unrecognized UART prefix')
+ badprefix=prefix+sample(1,100,1)+sample(2,200,2).replace(b'a04br3 msdc transfer',b'garbage a04br3 msdc transfer',1)
+ rejected(badprefix,'unrecognized UART prefix')
  for token in (b'elapsed_ns=10', b'rows=16', b'bytes=1024', b'max_wait_ns=5', b'non_atomic=1'):
   corrupted=good.replace(token,token+b'INVALID',1)
   rejected(corrupted,'malformed')
  rejected(good.replace(b'elapsed_ns=10',b'elapsed_ns=19INVALID',1),'malformed')
  rejected(good.replace(b'rows=16',b'rows=9INVALID',1),'malformed')
+ # Only LF and a single CR immediately before LF delimit records.
+ p=run(good.replace(b'\n',b'\r\n'));assert p.returncode==0,p.stderr
+ for control in (b'\x00',b'\x0b',b'\x0c',b'\x1b',b'\x1c',b'\x7f'):
+  rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10'+control+b'INVALID\n',1),'control character')
+ rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10\r\r\n',1),'control character')
+ rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10\rINVALID\n',1),'control character')
+ rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10\tINVALID\n',1),'control character')
+ rejected(good.replace(b'elapsed_ns=10\n',b'elapsed_ns=10\xc2\x85INVALID\n',1),'non-ASCII')
+ rejected(good.rstrip(b'\n'),'unterminated MSDC')
  rejected(prefix+sample(1,100,1)+sample(2,200,2,('transfer','write','gt16k')),'out-of-order')
  rejected(prefix+sample(1,100,1)+sample(2,200,2,('offered','read','le4k')),'out-of-order')
  rejected(prefix+sample(1,100,1)+sample(2,200,2,('queue','','')),'incomplete sample')

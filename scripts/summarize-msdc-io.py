@@ -20,6 +20,9 @@ anchor = b'[pmic6392_init] Preloader Start'
 bldr = b'[BLDR] Build Time:'
 reason = re.compile(rb'(?i)\bBOOT_REASON\s*:')
 sample_marker = b'a04br3 msdc io sample seq='
+record_marker = 'a04br3 msdc '
+# Captures may have no prefix, or one numeric UART/kernel timestamp.
+uart_prefix = re.compile(r'(?:\[[ \t]*[0-9]+(?:\.[0-9]+)?\][ \t]*)?\Z')
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
@@ -42,10 +45,44 @@ def verify_source(data, source_hash, offset, boot_id):
         raise ValueError('missing boot reason or boot boundary after sampling began')
     return segment
 
+def uart_lines(segment):
+    # UART framing is LF, optionally preceded by exactly one CR. Python's
+    # splitlines() also recognizes VT, FF, CR and Unicode separators; those
+    # must never split or silently truncate a diagnostic record.
+    parts = segment.split(b'\n')
+    marker = record_marker.encode('ascii')
+    for index, raw in enumerate(parts):
+        if marker in raw:
+            if index == len(parts) - 1:
+                raise ValueError('unterminated MSDC UART record')
+            if raw.endswith(b'\r'):
+                raw = raw[:-1]
+            if any((byte < 32 and byte != 9) or byte == 127 for byte in raw):
+                raise ValueError('unexpected control character in MSDC UART record')
+            try:
+                line = raw.decode('ascii')
+            except UnicodeDecodeError as exc:
+                raise ValueError('non-ASCII character in MSDC UART record') from exc
+            if '\t' in line[line.index(record_marker):]:
+                raise ValueError('unexpected control character in MSDC UART record')
+            yield line
+        else:
+            # Other UART lines can contain binary boot noise. They are not
+            # interpreted as MSDC records, and LF remains the only delimiter.
+            yield raw.decode('utf-8', errors='replace')
+
 def samples(lines):
     current = None
     last_seq = 0
     for line in lines:
+        occurrences = line.count(record_marker)
+        if occurrences > 1:
+            raise ValueError('multiple MSDC records joined on one line')
+        if occurrences == 1:
+            position = line.index(record_marker)
+            if not uart_prefix.fullmatch(line[:position]):
+                raise ValueError('unrecognized UART prefix before MSDC record')
+            line = line[position:]
         h = header.search(line)
         if h:
             if current is not None:
@@ -99,7 +136,7 @@ def summarize(segment, source_hash, boot_id, offset, require_cache=False):
     previous = None
     last_end = None
     output = []
-    for sample in samples(segment.decode('utf-8', errors='replace').splitlines()):
+    for sample in samples(uart_lines(segment)):
         begin, end, rows = sample['begin'], sample['end'], sample['rows']
         if require_cache and sample['cache'] is None:
             raise ValueError('missing cache sample')
