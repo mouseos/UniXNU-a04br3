@@ -12,7 +12,8 @@ cleanupなど他のコマンドやtimeout 0には短時間pollを行わない。
 この区間には他の処理とスケジュール待ちも含まれ、firmware完了時刻は未測定。
 実機のfirmwareが50μs以内に完了する保証はなく、CPU負荷・充電への影響も
 未測定。ホスト試験による早期発見はロジックの検証で、実機改善の証明ではない。
-最大5回のdelay後はsleepに戻す。submit経路では `gJobs.lock` を保持したまま
+最大5回のdelay後はsleepに戻す。既存のtimeoutはsleep回数で数えており、
+短時間poll分はそのtimeoutに加わる。submit経路では `gJobs.lock` を保持したまま
 この短時間pollを行うため、待機中の他スレッドにも影響し得る。
 
 根本的にはLinuxのような非同期slot予約・完了通知と、全enqueue経路の予約および
