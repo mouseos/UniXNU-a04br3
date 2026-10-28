@@ -1,11 +1,23 @@
 // SPDX-License-Identifier: MIT
 // Optional, bounded board diagnostic using XNU's PROCESSOR_CPU_LOAD_INFO source.
 #include <kern/processor.h>
+#include <kern/spl.h>
 #include <kern/clock.h>
 #include <mach/mach_time.h>
 #include <mach/processor_info.h>
 #include <sys/systm.h>
 #include <stdint.h>
+
+static processor_state_t a04br3_cpu_state(processor_t cpu)
+{
+    processor_set_t pset = cpu->processor_set;
+    spl_t s = splsched();
+    pset_lock(pset);
+    processor_state_t state = cpu->state;
+    pset_unlock(pset);
+    splx(s);
+    return state;
+}
 
 void a04br3_cpu_load_report(void)
 {
@@ -23,11 +35,10 @@ void a04br3_cpu_load_report(void)
     absolutetime_to_nanoseconds(mach_absolute_time(), &begin);
     for (unsigned i = 0; i < count; ++i) {
         natural_t ticks[CPU_STATE_MAX] = {0};
-        // XNU processor_info(PROCESSOR_BASIC_INFO) likewise reads state
-        // without the list lock. These are observations, not a transition log.
-        processor_state_t state_before = cpus[i]->state;
+        // Hold the scheduler lock only around each state read, not recount.
+        processor_state_t state_before = a04br3_cpu_state(cpus[i]);
         processor_cpu_load_info(cpus[i], ticks);
-        processor_state_t state_after = cpus[i]->state;
+        processor_state_t state_after = a04br3_cpu_state(cpus[i]);
         uint64_t at = 0;
         absolutetime_to_nanoseconds(mach_absolute_time(), &at);
         printf("a04br3 cpu-load cpu=%d at_ns=%llu user=%u system=%u idle=%u nice=%u state_before=%u state_after=%u ticks32=1 non_atomic=1\n",
