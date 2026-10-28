@@ -62,14 +62,16 @@ int a04br3_memory_bench_spawn(void *process, uint64_t scratch)
   if (started) return 0;
   if (!PE_parse_boot_argn("a04br3-membench", &enabled, sizeof(enabled)))
     PE_parse_boot_argn("mb", &enabled, sizeof(enabled)); // bounded iostat4 profile
-  if (enabled != 1) return 0;
+  if (enabled != 1 && enabled != 2) return 0;
   static const char path[] = "/private/var/ngpu/bin/a04br3-memory-copy-bench";
-  static const char option[] = "--boot-run";
+  static const char normal[] = "--boot-run", early[] = "--boot-run-early";
+  const char *option = enabled == 2 ? early : normal;
+  size_t optionSize = enabled == 2 ? sizeof(early) : sizeof(normal);
   const user_addr_t pathAddr = scratch + 0xc00, optionAddr = scratch + 0xc40;
   const user_addr_t argvAddr = scratch + 0xc80, envpAddr = scratch + 0xca0, pidAddr = scratch + 0xcb0;
   const user64_addr_t argv[3] = {pathAddr, optionAddr, 0}, envp[1] = {0};
   int error = copyout(path, pathAddr, sizeof(path));
-  if (!error) error = copyout(option, optionAddr, sizeof(option));
+  if (!error) error = copyout(option, optionAddr, optionSize);
   if (!error) error = copyout(argv, argvAddr, sizeof(argv));
   if (!error) error = copyout(envp, envpAddr, sizeof(envp));
   if (!error) {
@@ -79,6 +81,6 @@ int a04br3_memory_bench_spawn(void *process, uint64_t scratch)
   }
   int32_t pid = 0;
   if (!error) { started = 1; if (copyin(pidAddr, &pid, sizeof(pid))) pid = 0; }
-  printf("a04br3: memory bench spawn %d (pid %d)\n", error, pid);
+  printf("a04br3: memory bench spawn %d (pid %d) mode=%u\n", error, pid, enabled);
   return error;
 }

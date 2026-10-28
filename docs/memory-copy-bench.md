@@ -79,8 +79,12 @@ of the existing board pre-build. This clean build recipe has not yet been run
 on macOS, and GPU functionality of its output is not verified.
 
 The board hook spawns `/private/var/ngpu/bin/a04br3-memory-copy-bench` only
-when `a04br3-membench=1` or `mb=1` is present. The child opens `/dev/console`,
-waits 180 seconds, then attempts up to three samples each at 4 MiB and 1 MiB.
+when `a04br3-membench=1` or `mb=1` is present. Value 2 selects an early boot
+experiment (`--boot-run-early`), waiting 30 seconds rather than the normal 180
+seconds after main enters. It remains a boot workload, not an idle result, and
+the timing still depends on when the child reaches main. Value 0 and values
+other than 1 or 2 do not launch it. The child opens `/dev/console`, waits, then
+attempts up to three samples each at 4 MiB and 1 MiB.
 It excludes speculative pages from free pages and retains a 32 MiB reserve;
 the thresholds are 40 MiB and 34 MiB respectively. Insufficient pages are
 retried twice with 15-second gaps, and samples have 10-second recovery gaps.

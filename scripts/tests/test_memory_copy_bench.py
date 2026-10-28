@@ -72,14 +72,14 @@ kern_return_t host_page_size(mach_port_t p,vm_size_t *n) {(void)p;*n=4096;return
 kern_return_t host_statistics64(mach_port_t p,int f,host_info64_t out,mach_msg_type_number_t *n) {
  (void)p;(void)f;(void)n; ++calls;
  if (scenario==3 || (scenario==9 && calls==2)) return 1;
- unsigned pages = scenario==1 ? 8703 : scenario==2 && calls<=2 ? 10239 : scenario>=4 ? 11264 : 10240;
+ unsigned pages = scenario==1 || scenario==12 ? 8703 : scenario==2 && calls<=2 ? 10239 : scenario>=4 ? 11264 : 10240;
  unsigned spec = scenario==4 ? 1024 : scenario==5 ? 1025 : scenario==6 ? 11265 : 0;
  ((vm_statistics64_data_t *)out)->free_count=pages;
  ((vm_statistics64_data_t *)out)->speculative_count=spec; return 0;
 }
 int main(int argc,char **argv) {
  scenario=argc>1 ? atoi(argv[1]) : 0;
- char *args[]={"bench","--boot-run",0}; int result=bench_main(2,args);
+ char *args[]={"bench",scenario==11 || scenario==12 ? "--boot-run-early" : "--boot-run",0}; int result=bench_main(2,args);
  fprintf(stderr,"test waits=%u first=%u second=%u calls=%u result=%d\n",nw,waits[0],waits[1],calls,result);
  return result;
 }
@@ -126,6 +126,17 @@ int main(int argc,char **argv) {
             self.assertEqual(result.returncode, 1)
             self.assertIn('phase=error reason=invalid_elapsed', result.stdout)
             self.assertIn('phase=exit code=1 reason=copy_failed samples=0', result.stdout)
+            self.assertNotIn('logical_bytes=', result.stdout)
+            result = subprocess.run([str(binary), '11'], text=True, capture_output=True, check=True)
+            self.assertIn('delay_seconds=30 workload=boot', result.stdout)
+            self.assertIn('first=30', result.stderr)
+            self.assertEqual(result.stdout.count('logical_bytes='), 6)
+            self.assertIn('phase=complete samples=6 incomplete_sizes=0', result.stdout)
+            self.assertIn('phase=exit code=0 reason=complete samples=6', result.stdout)
+            result = subprocess.run([str(binary), '12'], text=True, capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('first=30', result.stderr)
+            self.assertIn('phase=exit code=1 reason=no_samples samples=0', result.stdout)
             self.assertNotIn('logical_bytes=', result.stdout)
 
 if __name__ == '__main__':

@@ -20,9 +20,10 @@ with tempfile.TemporaryDirectory() as tmp:
 #include <stdint.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <sys/sysproto.h>
 static unsigned char area[4096];
-static int enabled, short_enabled, spawns, fail;
+static int enabled, short_enabled, spawns, fail, mode;
 int PE_parse_boot_argn(const char *name, void *v, int n) {
  (void)n; if (!strcmp(name,"mb")) { *(uint32_t *)v=short_enabled; return short_enabled!=0; }
  if (strcmp(name,"a04br3-membench")) return 0;
@@ -33,18 +34,19 @@ int copyin(unsigned long a, void *p, size_t n) { memcpy(p,(void*)a,n); return 0;
 int posix_spawn(void *p, struct posix_spawn_args *a, int *r) {
  (void)p; (void)r; ++spawns;
  assert(!strcmp((char*)a->path,"/private/var/ngpu/bin/a04br3-memory-copy-bench"));
- uint64_t *v=(uint64_t*)a->argv; assert(v[0]==a->path && !strcmp((char*)v[1],"--boot-run") && !v[2]);
+ uint64_t *v=(uint64_t*)a->argv; assert(v[0]==a->path && !strcmp((char*)v[1],mode==2 ? "--boot-run-early" : "--boot-run") && !v[2]);
  assert(!*(uint64_t*)a->envp && !a->adesc); *(int*)a->pid=42; return fail;
 }
 int a04br3_memory_bench_spawn(void *,uint64_t);
-int main(void) { uint64_t scratch=(uint64_t)area; enabled=0;
+int main(int argc,char **argv) { mode=argc>1 ? atoi(argv[1]) : 1; uint64_t scratch=(uint64_t)area; enabled=0;
  assert(!a04br3_memory_bench_spawn(0,scratch) && !spawns);
- enabled=2; assert(!a04br3_memory_bench_spawn(0,scratch) && !spawns);
- enabled=0; short_enabled=1; fail=5; assert(a04br3_memory_bench_spawn(0,scratch)==5 && spawns==1);
+ enabled=3; assert(!a04br3_memory_bench_spawn(0,scratch) && !spawns);
+ enabled=0; short_enabled=mode; fail=5; assert(a04br3_memory_bench_spawn(0,scratch)==5 && spawns==1);
  fail=0; assert(!a04br3_memory_bench_spawn(0,scratch) && spawns==2);
  assert(!a04br3_memory_bench_spawn(0,scratch) && spawns==2); return 0; }
 ''')
     exe = d / 'test'
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-I',str(d),str(harness),str(root/'package/A04BR3ProbeLaunch.c'),'-o',str(exe)],check=True)
-    subprocess.run([str(exe)],check=True)
+    subprocess.run([str(exe), '1'],check=True)
+    subprocess.run([str(exe), '2'],check=True)
 print('PASS: disabled, invalid, spawn failure, argv, retry and one successful spawn')
