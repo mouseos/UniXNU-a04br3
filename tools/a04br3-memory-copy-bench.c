@@ -22,11 +22,18 @@ static int enough_free_memory(size_t size) {
     kern_return_t r2 = host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&stats, &count);
     mach_port_deallocate(mach_task_self(), host);
     if (r1 != KERN_SUCCESS || r2 != KERN_SUCCESS) {
-        fprintf(stderr, "a04br3_mem_copy phase=skip reason=vm_statistics_unavailable\n"); return 0;
+        fprintf(stderr, "a04br3_mem_copy phase=skip reason=vm_statistics_unavailable\n"); return -1;
     }
-    uint64_t free_bytes = (uint64_t)stats.free_count * page_size;
+    // XNU host_statistics64 includes speculative pages in free_count. They
+    // are cached pages, not unoccupied pages; exclude them from the reserve.
+    if (stats.speculative_count > stats.free_count || !page_size) {
+        fprintf(stderr, "a04br3_mem_copy phase=skip reason=vm_statistics_inconsistent\n"); return -1;
+    }
+    uint64_t reported_free = (uint64_t)stats.free_count * page_size;
+    uint64_t speculative = (uint64_t)stats.speculative_count * page_size;
+    uint64_t free_bytes = reported_free - speculative;
     uint64_t threshold = 2 * (uint64_t)size + 32 * UINT64_C(1024) * 1024;
-    printf("a04br3_mem_copy phase=memory_check free_bytes=%" PRIu64 " threshold_bytes=%" PRIu64 "\n", free_bytes, threshold);
+    printf("a04br3_mem_copy phase=memory_check reported_free_bytes=%" PRIu64 " speculative_bytes=%" PRIu64 " free_bytes=%" PRIu64 " threshold_bytes=%" PRIu64 "\n", reported_free, speculative, free_bytes, threshold);
     if (free_bytes < threshold) {
         fprintf(stderr, "a04br3_mem_copy phase=skip reason=insufficient_free_pages\n"); return 0;
     }
@@ -38,12 +45,13 @@ static uint64_t now_ns(void) {
     if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) { perror("clock_gettime"); exit(1); }
     return (uint64_t)t.tv_sec * UINT64_C(1000000000) + (uint64_t)t.tv_nsec;
 }
-static int run_copy(unsigned long mib) {
+static int run_copy(unsigned long mib, int checked) {
     size_t size = (size_t)mib * 1024 * 1024;
     printf("a04br3_mem_copy synthetic=1 phase=prepare size_bytes=%zu monotonic_ns=%" PRIu64 "\n", size, now_ns());
 #ifdef __APPLE__
-    if (!enough_free_memory(size)) return 1;
+    if (!checked && enough_free_memory(size) != 1) return 1;
 #endif
+    (void)checked;
     unsigned char *src = malloc(size), *dst = malloc(size);
     if (!src || !dst) { fprintf(stderr, "allocation failed\n"); free(src); free(dst); return 1; }
     /* Touch both buffers and use nonuniform data before timing. */
@@ -72,14 +80,34 @@ int main(int argc, char **argv) {
         setvbuf(stdout, NULL, _IOLBF, 0);
         printf("a04br3_mem_copy synthetic=1 phase=waiting delay_seconds=180\n");
         wait_seconds(180);
-        static const unsigned long sizes[] = {1, 4};
+        // One bounded observation per size and sample. Retry insufficient
+        // unoccupied pages without allocating; no retry on statistics errors.
+        static const unsigned long sizes[] = {4, 1};
+        unsigned completed = 0, skipped_sizes = 0;
         for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
-            if (i) {
-                printf("a04br3_mem_copy synthetic=1 phase=recovery delay_seconds=10\n");
-                wait_seconds(10);
+            for (unsigned sample = 1; sample <= 3; ++sample) {
+                if (i || sample > 1) {
+                    printf("a04br3_mem_copy synthetic=1 phase=recovery delay_seconds=10\n");
+                    wait_seconds(10);
+                }
+                printf("a04br3_mem_copy synthetic=1 phase=sample size_mib=%lu sample=%u\n", sizes[i], sample);
+                int available = 1;
+#ifdef __APPLE__
+                for (unsigned attempt = 1; attempt <= 3; ++attempt) {
+                    available = enough_free_memory((size_t)sizes[i] * 1024 * 1024);
+                    if (available != 0 || attempt == 3) break;
+                    printf("a04br3_mem_copy synthetic=1 phase=retry attempt=%u delay_seconds=15\n", attempt);
+                    wait_seconds(15);
+                }
+#endif
+                if (available < 0) return 1;
+                if (!available) { ++skipped_sizes; break; }
+                if (run_copy(sizes[i], 1)) return 1;
+                ++completed;
             }
-            if (run_copy(sizes[i])) return 1;
         }
+        printf("a04br3_mem_copy synthetic=1 phase=complete samples=%u incomplete_sizes=%u\n", completed, skipped_sizes);
+        if (!completed) return 1;
         return 0;
     }
     if (argc != 3 || strcmp(argv[1], "--run")) {
@@ -91,5 +119,5 @@ int main(int argc, char **argv) {
     if (errno || !*argv[2] || *argv[2] == '-' || *end || mib < 1 || mib > 64) {
         fprintf(stderr, "invalid size_mib (1..64)\n"); return 2;
     }
-    return run_copy(mib);
+    return run_copy(mib, 0);
 }

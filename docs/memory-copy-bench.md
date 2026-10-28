@@ -81,22 +81,30 @@ on macOS, and GPU functionality of its output is not verified.
 The board hook spawns `/private/var/ngpu/bin/a04br3-memory-copy-bench` only
 when `a04br3-membench=1` (or the matched profile's `mb=1`) is present. After
 the process reaches its entry point and opens `/dev/console`, it waits 180
-seconds. It then tests 1 MiB and 4 MiB per buffer in that order, once each,
-with a 10-second recovery gap after freeing the first pair. Each stage checks
-free VM pages immediately before allocation, requiring twice the buffer size
-plus a 32 MiB reserve (34 MiB and 40 MiB respectively). If a check, allocation,
-copy verification or timing fails, it stops without running later stages.
-The prior matched boot reported 40.5 MiB free and skipped the old 16 MiB
-stage; that observation does not guarantee either new stage will run. Free
-pages can change between checking and allocating. Reclaimable or inactive pages
-are not added to free pages: their availability and reclamation cost are not
-established by these counters. The reserve is conservative, not a safety
-guarantee; the allocator may retain freed pages during the recovery gap.
-Both stages initialize and touch their buffers outside the timed copy. This is
-an artificial workload, not an idle or real-application measurement; record the
-surrounding load separately. The 180-second delay begins after the process
-starts, not at boot, and neither it nor the recovery interval guarantees idle.
-No rendering path or GPU/Data/VM setting is changed.
+seconds. It tries 4 MiB and then 1 MiB per buffer, up to three single-copy
+samples per size, with at least 10 seconds between samples. Each attempt checks
+memory before allocation. If insufficient, it retries twice at 15-second
+intervals, then skips the remainder of that size and tries the next size.
+Statistics errors, allocation errors or failed verification stop the process.
+
+In the fixed XNU source `osfmk/kern/host.c`, `HOST_VM_INFO64.free_count`
+includes `vm_page_speculative_count`; these speculative pages are not all
+unoccupied. The guard now subtracts `speculative_count` and reports all three
+values separately. It requires the remaining unoccupied pages to cover two
+buffers plus a 32 MiB reserve: 40 MiB for 4 MiB and 34 MiB for 1 MiB. If the
+non-atomic counters are inconsistent, the guard stops. This is a snapshot, not
+a reservation or a safety guarantee, and the allocator may retain pages after
+free. The previous matched run's 41,861,120-byte `free_bytes` included
+speculative pages, so it cannot be treated as unoccupied memory; the adjacent
+kernel VM counters are different-time snapshots. With pressure still present,
+the stricter check may skip both sizes. It does not force reclamation or weaken
+VM settings to manufacture a result.
+
+Each copy initializes and touches its buffers outside the timed interval.
+These are synthetic workloads, not idle or real-application measurements; record
+the surrounding load separately. The initial 180-second delay begins after the
+process starts, not at boot, and none of the waits guarantees idle. No rendering
+path or GPU/Data/VM setting is changed.
 
 The normal standalone `--run size_mib` accepts 1–64 MiB per buffer: this is an
 input limit, not a safe allocation limit. Output includes monotonic start/end,
@@ -115,7 +123,7 @@ system DRAM traffic.
 Record source and image IDs, workload, free pages and boot identity. Separate
 idle and real-workload observations from the artificial test, and compare
 before/after baselines. For distributions, run separately with recovery gaps;
-the automatic path performs one pass at each permitted size per boot. Verify the relationship
+the automatic path performs up to three separated passes at each permitted size per boot. Samples can be correlated through shared cache state and system load, so they are not independent. Verify the relationship
 between user `CLOCK_MONOTONIC` and kernel timestamps before joining them.
 Heartbeat lines are sequential, not an atomic snapshot. Target compilation,
 signature, trust, spawn, console and measurement are all unverified until the

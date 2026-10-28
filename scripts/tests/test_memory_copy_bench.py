@@ -31,7 +31,7 @@ class MemoryCopyBenchTest(unittest.TestCase):
 #include <stdint.h>
 typedef int mach_port_t; typedef unsigned long vm_size_t;
 typedef unsigned mach_msg_type_number_t; typedef int kern_return_t;
-typedef struct { unsigned free_count; } vm_statistics64_data_t;
+typedef struct { unsigned free_count, speculative_count; } vm_statistics64_data_t;
 typedef void *host_info64_t;
 #define HOST_VM_INFO64_COUNT 1
 #define HOST_VM_INFO64 1
@@ -46,7 +46,7 @@ kern_return_t mach_port_deallocate(mach_port_t, mach_port_t);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-static unsigned waits[4], nw, calls; static int scenario;
+static unsigned waits[32], nw, calls; static int scenario;
 static FILE *fake_freopen(const char *p,const char *m,FILE *f) {(void)p;(void)m;return f;}
 static unsigned fake_sleep(unsigned n) {waits[nw++]=n; return 0;}
 #define freopen fake_freopen
@@ -61,8 +61,10 @@ kern_return_t host_page_size(mach_port_t p,vm_size_t *n) {(void)p;*n=4096;return
 kern_return_t host_statistics64(mach_port_t p,int f,host_info64_t out,mach_msg_type_number_t *n) {
  (void)p;(void)f;(void)n; ++calls;
  if (scenario==3) return 1;
- unsigned pages= scenario==1 ? 8703 : scenario==2 ? (calls==1 ? 8704 : 10239) : 10240;
- ((vm_statistics64_data_t *)out)->free_count=pages; return 0;
+ unsigned pages = scenario==1 ? 8703 : scenario==2 && calls<=2 ? 10239 : scenario>=4 ? 11264 : 10240;
+ unsigned spec = scenario==4 ? 1024 : scenario==5 ? 1025 : scenario==6 ? 11265 : 0;
+ ((vm_statistics64_data_t *)out)->free_count=pages;
+ ((vm_statistics64_data_t *)out)->speculative_count=spec; return 0;
 }
 int main(int argc,char **argv) {
  scenario=argc>1 ? atoi(argv[1]) : 0;
@@ -74,20 +76,31 @@ int main(int argc,char **argv) {
             binary = root / 'bench'
             subprocess.run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                             '-D_POSIX_C_SOURCE=200809L', '-D__APPLE__', '-I', str(root), str(harness), '-o', str(binary)], check=True)
-            expected = [(0, 0, 2, 2), (1, 1, 1, 0), (2, 1, 2, 1), (3, 1, 1, 0)]
+            expected = [(0, 0, 6, 6), (1, 1, 6, 0), (2, 0, 8, 6),
+                        (3, 1, 1, 0), (4, 0, 6, 6), (5, 0, 6, 3), (6, 1, 1, 0)]
             for scenario, rc, calls, results in expected:
                 result = subprocess.run([str(binary), str(scenario)], text=True, capture_output=True)
                 self.assertEqual(result.returncode, rc, result.stderr)
-                self.assertEqual(len(re.findall(r'logical_bytes=.*verified=1', result.stdout)), results)
+                rows = re.findall(r'logical_bytes=.*verified=1', result.stdout)
+                self.assertEqual(len(rows), results, result.stdout)
                 self.assertIn(f'calls={calls} result={rc}', result.stderr)
-                if calls == 2:
-                    self.assertIn('waits=2 first=180 second=10', result.stderr)
-                else:
-                    self.assertIn('waits=1 first=180', result.stderr)
+                self.assertIn('first=180', result.stderr)
+                if scenario == 0:
+                    self.assertEqual(result.stdout.count('phase=recovery delay_seconds=10'), 5)
+                    self.assertEqual(result.stdout.count('phase=sample size_mib=4'), 3)
+                    self.assertEqual(result.stdout.count('phase=sample size_mib=1'), 3)
+                    self.assertIn('phase=complete samples=6 incomplete_sizes=0', result.stdout)
+                if scenario == 1:
+                    self.assertIn('phase=complete samples=0 incomplete_sizes=2', result.stdout)
                 if scenario == 2:
-                    self.assertIn('reason=insufficient_free_pages', result.stderr)
+                    self.assertEqual(result.stdout.count('phase=retry'), 2)
                 if scenario == 3:
                     self.assertIn('reason=vm_statistics_unavailable', result.stderr)
+                if scenario == 5:
+                    self.assertEqual(result.stdout.count('phase=retry'), 2)
+                    self.assertEqual(result.stdout.count('size_bytes=1048576 start_monotonic_ns='), 3)
+                if scenario == 6:
+                    self.assertIn('reason=vm_statistics_inconsistent', result.stderr)
 
 if __name__ == '__main__':
     unittest.main()
