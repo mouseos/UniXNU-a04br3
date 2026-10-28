@@ -23,12 +23,16 @@ void a04br3_cpu_load_report(void)
     absolutetime_to_nanoseconds(mach_absolute_time(), &begin);
     for (unsigned i = 0; i < count; ++i) {
         natural_t ticks[CPU_STATE_MAX] = {0};
+        // XNU processor_info(PROCESSOR_BASIC_INFO) likewise reads state
+        // without the list lock. These are observations, not a transition log.
+        processor_state_t state_before = cpus[i]->state;
         processor_cpu_load_info(cpus[i], ticks);
+        processor_state_t state_after = cpus[i]->state;
         uint64_t at = 0;
         absolutetime_to_nanoseconds(mach_absolute_time(), &at);
-        printf("a04br3 cpu-load cpu=%d at_ns=%llu user=%u system=%u idle=%u nice=%u ticks32=1 non_atomic=1\n",
+        printf("a04br3 cpu-load cpu=%d at_ns=%llu user=%u system=%u idle=%u nice=%u state_before=%u state_after=%u ticks32=1 non_atomic=1\n",
             cpus[i]->cpu_id, (unsigned long long)at, ticks[CPU_STATE_USER], ticks[CPU_STATE_SYSTEM],
-            ticks[CPU_STATE_IDLE], ticks[CPU_STATE_NICE]);
+            ticks[CPU_STATE_IDLE], ticks[CPU_STATE_NICE], (unsigned)state_before, (unsigned)state_after);
     }
     absolutetime_to_nanoseconds(mach_absolute_time(), &end);
     printf("a04br3 cpu-load sample_begin_ns=%llu sample_end_ns=%llu cpus=%u extra=%u non_atomic=1\n",
