@@ -50,6 +50,9 @@ void native_powervr_submit_perf_enable(unsigned);
 void native_powervr_submit_perf_report(void);
 void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
 extern volatile uint64_t native_msdc_verified_cache_stats[3] __attribute__((weak_import));
+extern volatile uint64_t native_msdc_irq_stats[4] __attribute__((weak_import));
+extern volatile uint64_t native_msdc_worker_stats[4] __attribute__((weak_import));
+extern volatile uint64_t native_msdc_irq_mask_failures __attribute__((weak_import));
 void native_root_timing_snapshot(uint64_t out[6]) __attribute__((weak_import));
 extern volatile uint32_t native_keyevents_stage;
 extern volatile int native_keyevents_status;
@@ -202,6 +205,29 @@ void msdcRootTimingReport(unsigned enabled)
         (unsigned long long)values[3], (unsigned long long)values[4], (unsigned long long)values[5]);
 }
 
+// Diagnostic-only cumulative counters. Each load is atomic, but fields can
+// advance independently between loads; the group is not one atomic snapshot.
+void msdcIrqReport(unsigned enabled)
+{
+  if (enabled != 1) return;
+  if (native_msdc_irq_stats) {
+    uint64_t v[4];
+    for (unsigned i = 0; i < 4; ++i) v[i] = __atomic_load_n(&native_msdc_irq_stats[i], __ATOMIC_RELAXED);
+    IOLog("a04br3 msdc irq: captured=%llu waits=%llu no_delivery=%llu wait_ns=%llu (non-atomic snapshot)\n",
+          (unsigned long long)v[0], (unsigned long long)v[1], (unsigned long long)v[2], (unsigned long long)v[3]);
+  } else IOLog("a04br3 msdc irq: unavailable\n");
+  if (native_msdc_worker_stats) {
+    uint64_t v[4];
+    for (unsigned i = 0; i < 4; ++i) v[i] = __atomic_load_n(&native_msdc_worker_stats[i], __ATOMIC_RELAXED);
+    IOLog("a04br3 msdc worker: queued=%llu completed=%llu direct_fallback=%llu reserved=%llu (non-atomic snapshot)\n",
+          (unsigned long long)v[0], (unsigned long long)v[1], (unsigned long long)v[2], (unsigned long long)v[3]);
+  } else IOLog("a04br3 msdc worker: unavailable\n");
+  if (&native_msdc_irq_mask_failures) {
+    uint64_t failures = __atomic_load_n(&native_msdc_irq_mask_failures, __ATOMIC_RELAXED);
+    IOLog("a04br3 msdc irq mask_failures=%llu\n", (unsigned long long)failures);
+  } else IOLog("a04br3 msdc irq mask_failures=unavailable\n");
+}
+
 // Diagnostic sampling only. Registers and per-core counters are independently read,
 // not an atomic snapshot. CNTFRQ is the architectural timer, not CPU frequency.
 void cpuDiagnosticReport()
@@ -240,8 +266,9 @@ void cpuDiagnosticReport()
 
 void procLogThread(void *, wait_result_t)
 {
-  unsigned perf = 0, rootTiming = 0;
+  unsigned perf = 0, rootTiming = 0, msdcPerf = 0;
   PE_parse_boot_argn("a04br3-home-perf", &perf, sizeof(perf));
+  PE_parse_boot_argn("a04br3-msdc-perf", &msdcPerf, sizeof(msdcPerf));
   PE_parse_boot_argn("native-root-timing", &rootTiming, sizeof(rootTiming));
   uint64_t cacheReportSeconds = 0;
   for (unsigned round = 1;; ++round) {
@@ -261,6 +288,7 @@ void procLogThread(void *, wait_result_t)
       IOLog("a04br3 perf vm pagesize=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu throttled=%llu pageable_internal=%llu pageable_external=%llu mode=%d active_compressor=%u active_swap=%u\n",
             m[0],m[1],m[2],m[3],m[4],m[5],m[6],q.throttled,q.pageable_internal,q.pageable_external,q.compressor_mode,q.compressor_active,q.swap_active);
       boot_home_perf_sample();
+      msdcIrqReport(msdcPerf);
       cpuDiagnosticReport();
     }
     boot_home_irq_report();

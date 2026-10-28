@@ -639,3 +639,18 @@ is otherwise compiled out. At saturation or thread-creation failure a read
 uses the original polled path. It begins with one I/O thread and one completion
 thread and grows completion threads on demand to at most 64. Physical testing,
 peak resource impact and full kernel link remain unverified.
+
+The opt-in UART reporter for MSDC IRQ and read-worker counters uses the existing
+process heartbeat: set `a04br3-proclog=10 a04br3-home-perf=1 a04br3-msdc-perf=1` in the kernel arguments. All three
+are required; `a04br3-msdc-perf` defaults to off and must equal exactly 1.
+Each heartbeat prints cumulative IRQ captures, wait attempts, undelivered wait
+timeouts and wait nanoseconds; worker jobs queued and completed, direct-path
+fallbacks and the reserved counter; and GIC mask failures. `unavailable` means
+the weakly imported symbol is absent, not that its value is zero. A zero worker
+count alone does not prove the worker was compiled or started. `no_delivery`
+counts the timeout case after sleeping without ISR delivery, not every reason a
+transfer can fall back to polling. `wait_ns` is elapsed wait time, not CPU
+time. Individual counters use relaxed atomic loads; the collection is not an
+atomic snapshot and counters may change between loads. The reporter neither
+enables IRQ nor verifies data or IRQ delivery. Test the actual formatter and
+weak-symbol handling with `python3 scripts/tests/test_msdc_irq_report.py`.
