@@ -655,7 +655,7 @@ atomic snapshot and counters may change between loads. The reporter neither
 enables IRQ nor verifies data or IRQ delivery. Test the actual formatter and
 weak-symbol handling with `python3 scripts/tests/test_msdc_irq_report.py`.
 
-With NativeMsdc `c67fccbb4ee4f20db6f02129057a8409cd817185`, add
+With NativeMsdc `965ecd384a9fbd33b21674380edddd2bd57a4acc`, add
 `native-msdc-iostat=1` to the three heartbeat arguments above. The same heartbeat
 then emits a monotonic begin/end bracket and cumulative size-binned transport,
 block-offer, and worker queue counters. Use deltas between sample timestamps:
