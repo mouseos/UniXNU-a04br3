@@ -705,3 +705,36 @@ concatenation without a recognizable boundary cannot be disproved from hashes
 or counters. These rates inherit the non-atomic snapshots and logging overhead
 above. This tool covers MSDC transport, not whole-system utilization or memory
 bandwidth.
+
+CPU 負荷 probe の UART ログは、user/system の分類が検証済みであると
+仮定せず、次のコマンドで初回起動を集計できます。
+
+```
+python3 device/scripts/summarize-cpu-load.py \
+  --capture path/to/first-boot.txt \
+  --flash-json path/to/flash.json \
+  --uart-source path/to/original-uart.log
+```
+
+flash 記録の `uart_offset_before_reboot` から UART 原本を読み、解析時点の
+capture 全体とバイト単位で一致することを必須とします。JSON 各行には flash
+記録、boot image、capture、boot 区間、捕捉終端までの UART 原本 prefix の
+SHA-256 と各 offset・長さを記録します。ログが後から伸びても、その時点の
+snapshot を識別できます。flash 記録のハッシュとバイト一致は、実機が実際に
+どの image で起動したかを独立に証明するものではありません。preloader と
+BLDR の境界は１組とし、CPU サンプル開始後の boot reason を拒否します。
+UART の欠落や未知の再起動表記がないことまでは証明できません。
+
+各サンプルは CPU 0–3 の順序付き４行と対応する summary が必須です。状態の
+前後の読み取りはともに IDLE・DISPATCHING・RUNNING とし、時刻の順序と
+サンプル範囲の非重複を検査します。各 core の interval は名目10秒に対して
+9–12秒を許容し、欠損、ゼロまたは不自然に大きい tick 差分は JSON 出力前に
+拒否します。32-bit tick は 2^32 の剰余差分で扱い、core あたり毎秒1000 tick
+を保守的な上限とします。小さな１回の wrap は扱えますが、wrap 付近の counter
+reset との区別や、上限の仮定なしに複数 wrap がないことの証明はできません。
+
+各 core の non-idle 割合は `(user + system + nice) / (user + system + nice + idle)`
+の差分、全体は４ core の tick 数で重み付けした割合です。core ごとの読み取りは
+同時ではなく、端点で online でも区間中ずっと online とは限りません。user と
+system の分類は調査中のため、内訳の割合は出しません。
+テスト: `python3 scripts/tests/test_summarize_cpu_load.py`。
