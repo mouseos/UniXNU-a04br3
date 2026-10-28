@@ -51,6 +51,7 @@ def shader_capture_constructor(start):
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -77,6 +78,8 @@ static void a04br3_spirv_capture_output(const char *text) {
              (unsigned)getpid(), id, part, (unsigned)parts, check,
              27, text + (size_t)part * 27);
     native_metal_board_text(line);
+    const struct timespec pause = { 0, 25000000 };
+    nanosleep(&pause, NULL);
   }
 }
 __attribute__((constructor)) static void a04br3_spirv_capture_enable(void) {
