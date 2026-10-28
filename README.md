@@ -705,3 +705,23 @@ concatenation without a recognizable boundary cannot be disproved from hashes
 or counters. These rates inherit the non-atomic snapshots and logging overhead
 above. This tool covers MSDC transport, not whole-system utilization or memory
 bandwidth.
+
+### livepcログのホスト集計
+
+`python3 scripts/summarize-livepc.py <1起動のUARTログ> > profile.json` は
+`a04br3 livepc` の標本、CPUリング、後時点の画像一覧、CPU累計を集計する。
+`reset requested on UART` がある場合はその手前で区切る。別の再起動形式や
+欠落した境界は自動判定できないため、入力は事前に1起動へ分離する。
+4 CPUの各リングについて、同じepochの重複、識別できない不正行、重複標本、欠落・torn・連番不一致は拒否する。
+数字途中の切断など、完全な行と区別できない破損は検出できない。
+
+画像候補は同epochの一覧とPID・unique ID・exec versionが一致し、
+有効な画像範囲が1件だけ重なるuser標本を数える。`status=changed`、
+プロセス識別の不一致、範囲なし、重複範囲は候補にしない。画像一覧は
+標本取得後の非原子的な記録なので、候補は標本時点の対応を証明しない。
+標本数はCPU時間や初回フレームまでの時間比ではない。検証は
+`python3 scripts/tests/test_summarize_livepc.py` で行う。
+
+`python3 scripts/summarize-livepc-functions.py profile.json <Mach-O> <UUID> > functions.json`
+はUUIDが一致するMach-Oの関数開始位置ごとに画像候補をまとめる。
+次の開始位置は範囲の上限であり、関数本体の確定や関数名の推定は行わない。
