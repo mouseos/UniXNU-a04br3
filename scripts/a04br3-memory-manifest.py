@@ -23,11 +23,31 @@ def git_output(repo, *args):
     return subprocess.check_output(['git', '-C', str(repo), *args])
 
 
-def repo_identity(repo, allow_tracked_changes=False):
+def repo_identity(repo, allow_tracked_changes=False, generated_roots=()):
+    repo = repo.resolve()
+    prefixes = []
+    for root in generated_roots:
+        try:
+            relative = root.resolve().relative_to(repo)
+        except ValueError:
+            continue
+        if not relative.parts:
+            raise ValueError('generated output must not be the source repository root')
+        prefixes.append(os.fsencode(relative.as_posix()) + b'/')
+    def generated(name):
+        return any(name == prefix[:-1] or name.startswith(prefix) for prefix in prefixes)
+    if prefixes:
+        tracked = git_output(repo, 'ls-files', '-z').split(b'\0')
+        if any(generated(name) for name in tracked if name):
+            raise ValueError('generated output contains tracked source files')
     head = git_output(repo, 'rev-parse', 'HEAD').decode().strip()
-    status = git_output(repo, 'status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=none')
+    status = git_output(repo, 'status', '--porcelain', '--untracked-files=no', '--ignore-submodules=none')
     if status.strip() and not allow_tracked_changes:
-        raise ValueError('source checkout has unexpected changes: ' + str(repo))
+        raise ValueError('source checkout has unexpected tracked changes: ' + str(repo))
+    if not allow_tracked_changes:
+        entries = git_output(repo, 'ls-files', '--others', '--exclude-standard', '-z').split(b'\0')
+        if any(not generated(name) for name in entries if name):
+            raise ValueError('source checkout has untracked files outside generated output: ' + str(repo))
     diff = git_output(repo, 'diff', '--binary', 'HEAD', '--', '.')
     sub = git_output(repo, 'submodule', 'status', '--recursive')
     if any(line[:1] in (b'-', b'+', b'U') for line in sub.splitlines()):
@@ -75,7 +95,7 @@ def snapshot():
     if patched_xnu['commit'].lower() != pinned_xnu:
         raise ValueError('patched XNU checkout differs from device lock')
     flags = {k: v for k, v in sorted(os.environ.items()) if k.startswith(('XNU_', 'CONFIG_', 'A04BR3_', 'UNIXNU_'))}
-    return {'version': 1, 'source': repo_identity(source), 'device': repo_identity(device),
+    return {'version': 1, 'source': repo_identity(source, generated_roots=(out, runner)), 'device': repo_identity(device),
             'xnu_reference': xnu, 'xnu_patched': patched_xnu,
             'lock_sha256': digest(device / 'unixnu.lock'),
             'config_sha256': digest(out / 'a04br3/.config'),

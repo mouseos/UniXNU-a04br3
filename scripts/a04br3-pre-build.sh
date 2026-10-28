@@ -71,7 +71,13 @@ print(str(value).upper())
 PY_UUID
 }
 case "${A04BR3_REUSE_DATA_SEED:-0}" in
-  0) ;;
+  0)
+    for previous in "$RUNNER_TEMP/owner-data" "$RUNNER_TEMP/data-32.dbr" "$RUNNER_TEMP/data.dbr" "$RUNNER_TEMP/data-probe.dbr"; do
+      if [ -e "$previous" ]; then
+        echo "Existing seed inputs in RUNNER_TEMP; use A04BR3_REUSE_DATA_SEED=1 for a complete compatible seed or choose a fresh RUNNER_TEMP" >&2
+        exit 1
+      fi
+    done ;;
   1)
     if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ]; then
       echo "Data seed reuse requires A04BR3_POWERVR_PROBE=1 for mounted volume UUID validation" >&2

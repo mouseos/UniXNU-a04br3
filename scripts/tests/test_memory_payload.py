@@ -12,7 +12,7 @@ UUID = '12345678-1234-5678-9ABC-123456789ABC'
 OLD = '87654321-1234-5678-9ABC-123456789ABC'
 
 
-def run_case(initial_uuid, fault=None, out_mode=None):
+def run_case(initial_uuid, fault=None, out_mode=None, rerun=False):
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         runner, device, source, bindir = [base / n for n in ('runner', 'device', 'source', 'bin')]
@@ -89,6 +89,16 @@ esac
         assert record['kernel_path'] == str(out/'a04br3/kernel/kernel.macho')
         if out_mode: assert (source/'out/a04br3/kernel/kernel.macho').read_text() == 'conflicting default kernel'
         assert len(record['flags_sha256']) == 64 and record['source']['commit']
+        if rerun:
+            previous = (runner/'a04br3-memory-inputs.json').read_bytes()
+            again = subprocess.run(command, cwd=source, env=env, capture_output=True, text=True)
+            assert again.returncode != 0 and 'Existing seed inputs' in again.stderr
+            assert (runner/'a04br3-memory-inputs.json').read_bytes() == previous
+            reuse = dict(env, A04BR3_REUSE_DATA_SEED='1')
+            repeated = subprocess.run(command, cwd=source, env=reuse, capture_output=True, text=True)
+            assert repeated.returncode == 0, repeated.stderr
+            # Subsequent verification must reflect the changed build flag.
+            env = reuse
         # A separate invocation must use the same kernel-affecting environment.
         verify_env = dict(env, DEVICE_DIR=str(device), XNU_OWNER_DATA_VOLUME_UUID=UUID,
                           A04BR3_MEMORY_BENCH='1', A04BR3_POWERVR_PROBE='1',
@@ -106,6 +116,7 @@ esac
 
 for initial in ('', OLD):
     run_case(initial)
+run_case(OLD, rerun=True)
 for mode in ('absolute', 'relative', 'expanded'):
     run_case(OLD, out_mode=mode)
 for fault in ('kernel_failure', 'wrong_kernel_uuid', 'alter_seed', 'alter_trust', 'alter_config', 'alter_source', 'alter_lock'):

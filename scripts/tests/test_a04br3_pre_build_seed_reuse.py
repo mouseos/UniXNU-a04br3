@@ -20,7 +20,7 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None, memory=None, out_mode=None):
+def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None, memory=None, out_mode=None, fresh_existing=False):
     with tempfile.TemporaryDirectory(prefix='pre-build-reuse-') as directory:
         root = Path(directory)
         work, temporary, device, tools = [root / p for p in ('work', 'temp', 'device', 'bin')]
@@ -41,6 +41,9 @@ def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_gr
         log = root / 'calls'
         log.touch()
         baseline_uuid = '87654321-1234-5678-9ABC-123456789ABC' if mismatch else UUID
+        if fresh_existing:
+            (temporary/'owner-data').mkdir()
+            (temporary/'owner-data/retained').write_bytes(b'preserve')
         if reuse and baseline:
             (temporary / 'data-32.dbr').write_bytes(('baseline:' + baseline_uuid).encode())
         if reuse:
@@ -155,7 +158,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
             diagnostic_failure = memory not in (None, '0', '1') or (memory == '1' and not (probe and metal))
             diagnostic_failure |= pipeline_diag not in (None, '0', '1') or (pipeline_diag == '1' and not (metal and probe))
             diagnostic_failure |= roa_color not in (None, '0', '1') or (roa_color == '1' and not (metal and probe))
-            failure = diagnostic_failure or reuse and (metadata != 'valid' or not data or data == 'empty' or not baseline) or fail_seed or generation == fail_round or fail_grow or mismatch or (reuse and not probe)
+            failure = diagnostic_failure or fresh_existing or reuse and (metadata != 'valid' or not data or data == 'empty' or not baseline) or fail_seed or generation == fail_round or fail_grow or mismatch or (reuse and not probe)
             assert (result.returncode != 0) == failure, result.stdout
             if reuse:
                 for forbidden in ('hdiutil ', 'unixnu ipsw', 'prepare-owner-data-fixture.py',
@@ -167,9 +170,10 @@ elif name == 'a04br3-seed-powervr-probe.py':
                     assert required in calls, calls
             if failure:
                 assert 'unixnu build' not in calls, calls
-                if not reuse and not diagnostic_failure:
+                if not reuse and not diagnostic_failure and not fresh_existing:
                     assert 'hdiutil detach' in calls, calls
-                if diagnostic_failure or reuse and (metadata != 'valid' or not data or data == 'empty' or not probe or not baseline):
+                if fresh_existing: assert (temporary/'owner-data/retained').read_bytes() == b'preserve'
+                if fresh_existing or diagnostic_failure or reuse and (metadata != 'valid' or not data or data == 'empty' or not probe or not baseline):
                     assert not calls, calls  # 不備はtrust/data変更より前に停止する。
                 if reuse and data:
                     assert (temporary / 'data.dbr').read_bytes() == previous_data
@@ -336,3 +340,6 @@ for mode in (None, 'absolute', 'relative', 'expanded'):
     run_case(True, memory='1', out_mode=mode)
     run_case(False, memory='1', out_mode=mode)
 print('PASS: default and alternate UNIXNU_OUT select one tree despite conflicting default tree')
+
+run_case(False, fresh_existing=True)
+print('PASS: fresh seed creation refuses existing inputs before modifying them')
