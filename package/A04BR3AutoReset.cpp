@@ -319,6 +319,15 @@ void cycleThread(void *, wait_result_t)
 
 }  // namespace
 
+// Fresh watchdog mode read after the PMU worker has bound to its target CPU.
+// This does not re-read the RTC fastboot bit or prevent another agent from
+// changing either register after this observation.
+extern "C" bool a04br3_runtime_watchdog_armed(void)
+{
+  if (!gToprgu || !__atomic_load_n(&a04br3_runtime_recovery_ready, __ATOMIC_ACQUIRE)) return false;
+  return (rd(gToprgu, kWdtMode) & 0x5dU) == 0x15U;
+}
+
 extern "C" void a04br3_autoreset_init(void)
 {
   unsigned seconds = 0;
