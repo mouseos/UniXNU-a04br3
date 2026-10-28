@@ -13,6 +13,10 @@ struct A04BR3CpuMeterResult {
   uint64_t khz;
 };
 
+// A write occurred and its resulting control state is not established.
+static inline bool a04br3_cpu_meter_requires_recovery(unsigned status)
+{ return status == 3 || status == 4 || status == 6; }
+
 template<class IO> static A04BR3CpuMeterResult a04br3_cpu_meter(IO &io)
 {
   A04BR3CpuMeterResult r = {};
