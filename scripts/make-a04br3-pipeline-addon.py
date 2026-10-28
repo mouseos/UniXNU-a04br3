@@ -15,8 +15,8 @@ PINS = {
     'kernel.macho.trustcache': '7123f78d892a993771586eebf27a76abdcd2bf68afe60bc97b7002c49df8dc1c',
 }
 SOURCE = 'b9824adabfa7206dc07978f183474960856085fc'
-DEVICE = '0482e1b087fc7bd49d34007acb24f39f1dfa057e'
-MESA = '0c0bdbd5a4f9f16d79666211080e5948debfe3a2'
+DEVICE = '44ad10e14ba8c34162ef4473859aaa5b139bc952'
+MESA = '132ac2441b96e716e6ca69fb2ea7fd3b9888fc69'
 PREFIX = 'addons/NativePowerVRMetal.bundle/'
 NAMES = ('Info.plist', 'NativePowerVRMetal', '_CodeSignature/CodeResources', 'libvulkan_powervr_mesa.dylib')
 
