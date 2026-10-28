@@ -44,6 +44,13 @@ case "${A04BR3_POWERVR_METAL_ROA_COLOR:-0}" in
     ;;
   *) echo "A04BR3_POWERVR_METAL_ROA_COLOR must be 0 or 1" >&2; exit 1 ;;
 esac
+case "${A04BR3_MEMORY_BENCH:-0}" in
+  0) ;;
+  1) if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL_MODE:-selftest}" != publish ]; then
+       echo "Memory benchmark requires PowerVR probe and Metal publish mode" >&2; exit 1
+     fi ;;
+  *) echo "A04BR3_MEMORY_BENCH must be 0 or 1" >&2; exit 1 ;;
+esac
 # SSH incremental builds opt in; default builds still create a fresh fixture.
 read_seed_uuid() {
   python3 - "$RUNNER_TEMP/owner-data/seed.json" <<'PY_UUID'
@@ -82,6 +89,7 @@ case "${A04BR3_REUSE_DATA_SEED:-0}" in
     ;;
   *) echo "A04BR3_REUSE_DATA_SEED must be 0 or 1" >&2; exit 1 ;;
 esac
+rm -f "$RUNNER_TEMP/a04br3-memory-inputs.json"
 python3 "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$PWD" --out "$RUNNER_TEMP/trustcache"
 ./unixnu tree -D "$DEVICE_DIR"
 TREE=$PWD/out/a04br3/tree
@@ -147,13 +155,29 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
     METAL_TRUST=(--extra-trust "$RUNNER_TEMP/powervr-metal/trust.json")
     METAL_SEED=(--metal-plugin "$RUNNER_TEMP/powervr-metal" --metal-mode "${A04BR3_POWERVR_METAL_MODE:-selftest}")
   fi
+  MEMORY_SEED=()
+  if [ "${A04BR3_MEMORY_BENCH:-0}" = 1 ]; then
+    python3 "$DEVICE_DIR/scripts/build-a04br3-memory-bench.py" --out "$RUNNER_TEMP/a04br3-memory-bench"
+    METAL_TRUST+=(--extra-trust "$RUNNER_TEMP/a04br3-memory-bench/trust.json")
+    MEMORY_SEED=(--memory-bench "$RUNNER_TEMP/a04br3-memory-bench/a04br3-memory-copy-bench")
+  fi
   # ${a[@]+...}: an empty array under set -u in the bash 3.2 of macOS.
   python3 "$DEVICE_DIR/scripts/build-a04br3-powervr-probe.py" --out "$RUNNER_TEMP/powervr-probe" ${PROBE_VULKAN[@]+"${PROBE_VULKAN[@]}"} \
     --trust-base "$RUNNER_TEMP/trustcache" --trust-out "$RUNNER_TEMP/trustcache-owner" ${METAL_TRUST[@]+"${METAL_TRUST[@]}"}
   python3 "$DEVICE_DIR/scripts/a04br3-seed-powervr-probe.py" --tree "$TREE" --probe-dir "$RUNNER_TEMP/powervr-probe" \
-    ${METAL_SEED[@]+"${METAL_SEED[@]}"} ${SEED_IDENTITY[@]+"${SEED_IDENTITY[@]}"} "$SEED_INPUT" "$SEED_OUTPUT"
+    ${METAL_SEED[@]+"${METAL_SEED[@]}"} ${MEMORY_SEED[@]+"${MEMORY_SEED[@]}"} ${SEED_IDENTITY[@]+"${SEED_IDENTITY[@]}"} "$SEED_INPUT" "$SEED_OUTPUT"
   mv "$SEED_OUTPUT" "$RUNNER_TEMP/data.dbr"
   mv "$RUNNER_TEMP/trustcache-owner" "$RUNNER_TEMP/trustcache"
+  if [ "${A04BR3_MEMORY_BENCH:-0}" = 1 ]; then
+    python3 - "$RUNNER_TEMP" <<'PY_MEMORY_MARKER'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+def digest(name):
+    return hashlib.sha256((root / name).read_bytes()).hexdigest()
+record = {'data_sha256': digest('data.dbr'), 'trust_sha256': digest('trustcache')}
+(root / 'a04br3-memory-inputs.json').write_text(json.dumps(record, sort_keys=True) + '\n')
+PY_MEMORY_MARKER
+  fi
   echo "PowerVR probe staged; the payload step needs owner_trust_cache = true (--owner-trust-cache)"
 fi
 # The kernel's owner Data mount (CONFIG_XNU_OWNER_DATA_MOUNT) selects this seed's volume by UUID.

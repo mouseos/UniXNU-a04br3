@@ -90,6 +90,7 @@ def main():
     parser.add_argument('--tree', type=Path, help='UniXNU build tree (for drivers/DarwinBoot/Test/packed_ramdisk.py)')
     parser.add_argument('--probe-dir', type=Path, required=True)
     parser.add_argument('--launchd-job', action='store_true')
+    parser.add_argument('--memory-bench', type=Path, help='signed optional memory benchmark executable')
     parser.add_argument('--metal-plugin', type=Path, help='output directory of build-a04br3-metal-plugin.py')
     parser.add_argument('--metal-mode', choices=('selftest', 'publish'), default='selftest')
     parser.add_argument('--metal-clients', help='processes besides backboardd with their own Metal device (comma separated)')
@@ -106,6 +107,10 @@ def main():
     marker_dir = Path(tempfile.mkdtemp(prefix='a04br3-metal-markers-'))
     files = plan(args.probe_dir.resolve(), args.launchd_job, args.metal_plugin.resolve() if args.metal_plugin else None,
                  args.metal_mode, clients, marker_dir)
+    if args.memory_bench:
+        if not args.memory_bench.is_file():
+            sys.exit('Missing signed memory benchmark')
+        files.append((args.memory_bench.resolve(), 'bin/a04br3-memory-copy-bench', '0755'))
     for source, target, mode in files:
         print('%s %10d /private/var/ngpu/%s' % (mode, source.stat().st_size, target))
     publish = bool(args.metal_plugin) and args.metal_mode == 'publish'

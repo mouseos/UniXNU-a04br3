@@ -46,6 +46,7 @@ void boot_ast_caller_report(void);
 void native_keystore_probe(void);
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch);
 int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
+int a04br3_memory_bench_spawn(void *process, uint64_t scratch);
 void native_powervr_submit_perf_enable(unsigned);
 void native_powervr_submit_perf_report(void);
 void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
@@ -359,6 +360,7 @@ extern "C" int unixnu_board_launch(void *process, uint64_t scratch)
         native_gpu_addon2_stage, native_gpu_addon2_status, native_gpu_addon3_stage, native_gpu_addon3_status);
   // Not fatal: its result is printed and kept in a04br3_powervrprobed_status, never returned (a nonzero result stops the boot).
   a04br3_powervrprobed_spawn(process, scratch);
+  a04br3_memory_bench_spawn(process, scratch);
   // The PowerVR accelerator for the original Metal discovery, before launchd starts backboardd (its own thread; a04br3-gpu-metal=1).
   native_powervr_metal_publish();
   return policy;
