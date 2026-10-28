@@ -8,7 +8,7 @@
 // changes PLL hopping, PLL test selection, CPU mux or the debug selector.
 // A local lock cannot exclude firmware or an external debug agent.
 struct A04BR3CpuMeterResult {
-  unsigned status; // 0 candidate, 1 busy, 2 precondition, 3 reset, 4 conflict, 5 zero, 6 restore, 7 changed
+  unsigned status; // 0 candidate, 1 busy, 2 precondition, 3 reset, 4 conflict, 5 zero, 6 restore, 7 changed, 8 unsettled
   uint32_t ctrl, debug, hopping, mux, dcm, pll0, pll1, power, baseline, count;
   uint64_t khz;
 };
@@ -38,6 +38,12 @@ template<class IO> static A04BR3CpuMeterResult a04br3_cpu_meter(IO &io)
   io.write(0x10, configured); io.delay(40);
   if (io.top(0x10) != configured) { r.status = 4; return r; }
   r.count = io.top(0x14);
+  // A nonzero latched value is not a completion flag. Require a second
+  // identical reading after another interval, while acknowledging that even
+  // a stable value does not prove the meter's undocumented completion state.
+  io.delay(10);
+  const uint32_t second = io.top(0x14);
+  if (io.top(0x10) != configured) { r.status = 4; return r; }
   io.write(0x10, 1U << 14);
   if (io.top(0x10) != (1U << 14)) { r.status = 6; return r; }
   io.write(0x10, 0);
@@ -47,6 +53,7 @@ template<class IO> static A04BR3CpuMeterResult a04br3_cpu_meter(IO &io)
       io.pll(0x100) != r.pll0 || io.pll(0x104) != r.pll1 ||
       io.pll(0x110) != r.power) { r.status = 7; return r; }
   if (!r.count) { r.status = 5; return r; }
+  if (r.count != second) { r.status = 8; return r; }
   r.khz = (uint64_t(r.count) * 26000U) / 520U;
   return r;
 }
