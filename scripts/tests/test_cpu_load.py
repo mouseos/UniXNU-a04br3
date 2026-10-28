@@ -15,6 +15,7 @@ with tempfile.TemporaryDirectory(prefix='a04-cpuload-') as tmp:
 #endif
 #include <stdint.h>
 typedef unsigned natural_t;
+typedef int boolean_t;
 typedef unsigned processor_state_t;
 typedef struct pset { int dummy; } *processor_set_t;
 typedef struct processor { struct processor *processor_list; int cpu_id; processor_state_t state; processor_set_t processor_set; } *processor_t;
@@ -28,7 +29,7 @@ void processor_cpu_load_info(processor_t, natural_t *);
     (d/'kern/clock.h').write_text('#include <stdint.h>\nvoid absolutetime_to_nanoseconds(uint64_t, uint64_t *);\n')
     (d/'mach/mach_time.h').write_text('#include <stdint.h>\nuint64_t mach_absolute_time(void);\n')
     (d/'mach/processor_info.h').write_text('#define CPU_STATE_USER 0\n#define CPU_STATE_SYSTEM 1\n#define CPU_STATE_IDLE 2\n#define CPU_STATE_NICE 3\n#define CPU_STATE_MAX 4\n')
-    (d/'sys/systm.h').write_text('#include <stdio.h>\n')
+    (d/'kern/misc_protos.h').write_text('#include <stdio.h>\n')
     harness = d/'test.c'
     harness.write_text(r'''
 #include <assert.h>
