@@ -97,6 +97,10 @@ int main(int argc,char **argv) {
                 self.assertIn(f'calls={calls} result={rc}', result.stderr)
                 self.assertIn('first=180', result.stderr)
                 if scenario in (0, 7):
+                    match = re.search(r'query_begin_ns=(\d+) query_end_ns=(\d+) cache_freshness=unknown', result.stdout)
+                    self.assertIsNotNone(match)
+                    self.assertLessEqual(int(match.group(1)), int(match.group(2)))
+                    self.assertIn('threshold_bytes=41943040 cache_freshness=unknown', result.stdout)
                     self.assertIn('page_size=4096 pageins=11 pageouts=12 reactivations=13 faults=14 purgeable_pages=15 purges=16 non_atomic=1', result.stdout)
                 if scenario == 0:
                     self.assertIn('phase=vm_activity_extended compressions=17 decompressions=18 swapins=19 swapouts=20 non_atomic=1', result.stdout)

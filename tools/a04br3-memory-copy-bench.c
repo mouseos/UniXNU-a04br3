@@ -21,7 +21,9 @@ static int enough_free_memory(size_t size) {
     mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
     vm_size_t page_size = 0;
     kern_return_t r1 = host_page_size(host, &page_size);
+    uint64_t query_begin = now_ns();
     kern_return_t r2 = host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&stats, &count);
+    uint64_t query_end = now_ns();
     mach_port_deallocate(mach_task_self(), host);
     if (r1 != KERN_SUCCESS || r2 != KERN_SUCCESS || count < HOST_VM_INFO64_REV0_COUNT) {
         fprintf(stderr, "a04br3_mem_copy phase=skip reason=vm_statistics_unavailable\n"); return -1;
@@ -33,10 +35,10 @@ static int enough_free_memory(size_t size) {
     }
     // Reuse this same VM snapshot: counters are cumulative and non-atomic.
     printf("a04br3_mem_copy phase=vm_activity monotonic_ns=%" PRIu64
-           " page_size=%lu pageins=%" PRIu64 " pageouts=%" PRIu64
+           " query_begin_ns=%" PRIu64 " query_end_ns=%" PRIu64 " cache_freshness=unknown page_size=%lu pageins=%" PRIu64 " pageouts=%" PRIu64
            " reactivations=%" PRIu64 " faults=%" PRIu64
            " purgeable_pages=%" PRIu64 " purges=%" PRIu64 " non_atomic=1\n",
-           now_ns(), (unsigned long)page_size, (uint64_t)stats.pageins,
+           now_ns(), query_begin, query_end, (unsigned long)page_size, (uint64_t)stats.pageins,
            (uint64_t)stats.pageouts, (uint64_t)stats.reactivations,
            (uint64_t)stats.faults, (uint64_t)stats.purgeable_count, (uint64_t)stats.purges);
     if (count >= HOST_VM_INFO64_REV1_COUNT) {
@@ -51,7 +53,7 @@ static int enough_free_memory(size_t size) {
     uint64_t speculative = (uint64_t)stats.speculative_count * page_size;
     uint64_t free_bytes = reported_free - speculative;
     uint64_t threshold = 2 * (uint64_t)size + 32 * UINT64_C(1024) * 1024;
-    printf("a04br3_mem_copy phase=memory_check reported_free_bytes=%" PRIu64 " speculative_bytes=%" PRIu64 " free_bytes=%" PRIu64 " threshold_bytes=%" PRIu64 "\n", reported_free, speculative, free_bytes, threshold);
+    printf("a04br3_mem_copy phase=memory_check reported_free_bytes=%" PRIu64 " speculative_bytes=%" PRIu64 " free_bytes=%" PRIu64 " threshold_bytes=%" PRIu64 " cache_freshness=unknown\n", reported_free, speculative, free_bytes, threshold);
     if (free_bytes < threshold) {
         fprintf(stderr, "a04br3_mem_copy phase=skip reason=insufficient_free_pages\n"); return 0;
     }

@@ -172,7 +172,13 @@ Each boot benchmark memory check also prints `phase=vm_activity` from the same
 byte count and do not distinguish clean from dirty inactive pages. Use deltas
 within one boot, retain `page_size`, and do not combine overlapping categories.
 Extended counters are reported as unavailable if the returned structure is too
-short. The user-space timestamp marks reporting after the syscall; it must not
-be treated as interchangeable with the kernel heartbeat clock without checking
-the relationship. These readings add no extra VM statistics call and do not
+short. The user-space timestamp marks reporting after the syscall; query_begin_ns and
+query_end_ns bracket the call. Fixed XNU `host.c` rate-limits third-party
+host statistics in a shared per-flavor cache; platform binaries bypass this
+limit, but this benchmark's platform classification must be verified at runtime.
+The API does not identify a cached response or report when it was computed, so
+`cache_freshness=unknown` applies to the safety check as well as the counters.
+Even widely spaced calls cannot prove freshness when other tasks use the shared
+cache. The query timestamps are not interchangeable with the kernel heartbeat
+clock without checking the relationship. These readings add no extra VM statistics call and do not
 force reclaim, though console output itself has a cost.
