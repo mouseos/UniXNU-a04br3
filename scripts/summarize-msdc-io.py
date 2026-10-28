@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Summarize a single-boot UART log with opt-in MSDC I/O samples as JSON lines."""
+"""Summarize an identified, single-boot a04br3 UART capture as JSON lines."""
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -8,6 +9,31 @@ import sys
 header = re.compile(r'a04br3 msdc io sample begin_ns=(\d+) end_ns=(\d+) non_atomic=1')
 row = re.compile(r'a04br3 msdc transfer mode=(dma_read|pio_read|write) size=(le4k|4k_16k|gt16k) calls=(\d+) ok_bytes=(\d+) errors=(\d+) elapsed_ns=(\d+)')
 expected = {(m, b) for m in ('dma_read','pio_read','write') for b in ('le4k','4k_16k','gt16k')}
+anchor = b'[pmic6392_init] Preloader Start'
+bldr = b'[BLDR] Build Time:'
+reason = re.compile(rb'(?i)\bBOOT_REASON\s*:')
+sample_marker = b'a04br3 msdc io sample begin_ns='
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+def verify_source(data, source_hash, offset, boot_id):
+    if not re.fullmatch(r'[0-9a-f]{64}', source_hash) or sha256(data) != source_hash:
+        raise ValueError('source SHA-256 mismatch')
+    if offset < 0 or data.find(anchor) != offset or data.count(anchor) != 1:
+        raise ValueError('boot start offset must identify the only preloader anchor in the source')
+    if data.count(bldr) != 1 or data.find(bldr) < offset:
+        raise ValueError('missing or repeated BLDR boot boundary')
+    segment = data[offset:]
+    if not re.fullmatch(r'[0-9a-f]{64}', boot_id) or sha256(segment) != boot_id:
+        raise ValueError('boot segment SHA-256 mismatch')
+    first_sample = data.find(sample_marker)
+    if first_sample < 0 or first_sample < data.find(bldr):
+        raise ValueError('missing sample after boot anchor')
+    reasons = list(reason.finditer(data))
+    if not reasons or any(x.start() < offset or x.start() >= first_sample for x in reasons):
+        raise ValueError('missing boot reason or boot boundary after sampling began')
+    return segment
 
 def samples(lines):
     current = None
@@ -18,7 +44,11 @@ def samples(lines):
                 yield current
             current = {'begin':int(h[1]), 'end':int(h[2]), 'rows':{}, 'invalid':False}
             continue
+        if 'a04br3 msdc io sample begin_ns=' in line:
+            raise ValueError('malformed sample header')
         r = row.search(line)
+        if 'a04br3 msdc transfer mode=' in line and not r:
+            raise ValueError('malformed transfer row')
         if r and current is not None:
             key = (r[1], r[2])
             if key in current['rows']:
@@ -27,37 +57,56 @@ def samples(lines):
     if current is not None:
         yield current
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('uart_log', help='one boot only; do not concatenate reboots')
-    args = parser.parse_args()
+def summarize(segment, source_hash, boot_id, offset):
     previous = None
     last_time = None
-    with open(args.uart_log, encoding='utf-8', errors='replace') as stream:
-        for sample in samples(stream):
-            begin, end, rows = sample['begin'], sample['end'], sample['rows']
-            if end < begin or (last_time is not None and begin <= last_time):
-                raise ValueError('non-monotonic sample timestamps: supply one complete boot per file')
-            last_time = begin
-            if sample['invalid'] or set(rows) != expected:
-                print('incomplete or duplicate sample; interval discarded', file=sys.stderr)
-                previous = None
-                continue
-            if previous is not None:
-                dt = begin - previous['begin']
-                deltas = {key: tuple(a-b for a,b in zip(rows[key], previous['rows'][key])) for key in expected}
-                if any(v < 0 for values in deltas.values() for v in values):
-                    raise ValueError('counter decreased: reboot, reset or mixed source; split the log')
-                for mode, size in sorted(expected):
-                    calls, byte_count, errors, elapsed = deltas[(mode,size)]
-                    print(json.dumps({'begin_ns':previous['begin'], 'end_ns':begin, 'mode':mode, 'size':size,
-                        'calls':calls, 'ok_bytes':byte_count, 'errors':errors, 'transport_ns':elapsed,
-                        'observed_bytes_per_second':byte_count * 1_000_000_000 / dt}, separators=(',',':')))
-            previous = sample
+    output = []
+    warnings = []
+    for sample in samples(segment.decode('utf-8', errors='replace').splitlines()):
+        begin, end, rows = sample['begin'], sample['end'], sample['rows']
+        if end < begin or (last_time is not None and begin <= last_time):
+            raise ValueError('non-monotonic sample timestamps')
+        last_time = begin
+        if sample['invalid'] or set(rows) != expected:
+            warnings.append('incomplete or duplicate sample; interval discarded')
+            previous = None
+            continue
+        if previous is not None:
+            dt = begin - previous['begin']
+            deltas = {key: tuple(a-b for a,b in zip(rows[key], previous['rows'][key])) for key in expected}
+            if any(v < 0 for values in deltas.values() for v in values):
+                raise ValueError('counter decreased: reboot, reset or mixed source')
+            for mode, size in sorted(expected):
+                calls, byte_count, errors, elapsed = deltas[(mode,size)]
+                output.append({'source_sha256':source_hash, 'boot_segment_sha256':boot_id,
+                    'boot_start_offset':offset, 'begin_ns':previous['begin'], 'end_ns':begin,
+                    'mode':mode, 'size':size, 'calls':calls, 'ok_bytes':byte_count,
+                    'errors':errors, 'transport_ns':elapsed,
+                    'observed_bytes_per_second':byte_count * 1_000_000_000 / dt})
+        previous = sample
+    return output, warnings
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('uart_log', help='one complete boot capture, with a preloader anchor')
+    parser.add_argument('--source-sha256', required=True, help='SHA-256 of the complete source file')
+    parser.add_argument('--boot-start-offset', required=True, type=int, help='byte offset of preloader anchor')
+    parser.add_argument('--boot-id', required=True, help='SHA-256 of source bytes from the anchor through EOF')
+    args = parser.parse_args()
+    with open(args.uart_log, 'rb') as stream:
+        data = stream.read()
+    segment = verify_source(data, args.source_sha256, args.boot_start_offset, args.boot_id)
+    output, warnings = summarize(segment, args.source_sha256, args.boot_id, args.boot_start_offset)
+    # All source, boundary, timestamp and counter checks precede any JSON output.
+    rendered = [json.dumps(x, separators=(',',':'), allow_nan=False) for x in output]
+    for warning in warnings:
+        print(warning, file=sys.stderr)
+    if rendered:
+        sys.stdout.write('\n'.join(rendered) + '\n')
 
 if __name__ == '__main__':
     try:
         main()
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, OverflowError) as exc:
         print(f'msdc iostat: {exc}', file=sys.stderr)
         sys.exit(2)

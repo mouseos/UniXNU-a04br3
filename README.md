@@ -673,11 +673,18 @@ windows even within one heartbeat. These counters do not establish the cause of
 a slowdown without same-boot measurements and a comparison. Run
 `python3 scripts/tests/test_msdc_io_report.py` for reporter coverage.
 
-For a UART file containing exactly one boot, run
-`python3 device/scripts/summarize-msdc-io.py path/to/first-boot.txt`. It emits
-JSON lines with per-size interval deltas and observed bytes per second. It
-rejects reversed timestamps or decreasing counters and discards incomplete or
-duplicate samples. Monotonic timestamps cannot prove that an arbitrarily
-concatenated log contains only one boot; isolate the boot first. These derived
-rates inherit the non-atomic snapshots and logging overhead above. This tool
-covers MSDC transport, not whole-system utilization or memory bandwidth.
+For a UART capture of one boot, identify the byte offset of the unique
+`[pmic6392_init] Preloader Start` anchor in the original source. Record the
+SHA-256 of the complete original source and the SHA-256 of bytes from that
+anchor through EOF; pass them as `--source-sha256`, `--boot-start-offset`, and
+`--boot-id` respectively to `device/scripts/summarize-msdc-io.py`. The boot ID
+is a hash of the captured segment, not an authenticated hardware boot UUID.
+The analyzer requires these exact identities and checks the unique preloader
+and BLDR boundaries, boot reason position, counter monotonicity and sample
+ordering before writing any JSON. It discards incomplete intervals and rejects
+observed reboot markers even if time and counters increased. Capture continuity
+still must be established externally: missing UART output or deliberate
+concatenation without a recognizable boundary cannot be disproved from hashes
+or counters. These rates inherit the non-atomic snapshots and logging overhead
+above. This tool covers MSDC transport, not whole-system utilization or memory
+bandwidth.
