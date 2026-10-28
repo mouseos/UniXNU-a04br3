@@ -5,6 +5,7 @@
 
   build-a04br3-metal-plugin.py [--vulkan LIBRARY] [--out DIR] [--skip-bridge] [--sipf1-dump] [--submit-barrier] [--serial-transfer] [--tq-clip] [--pipeline-failure-diag] [--require-fetch-for-apple3] [--roa-color] [--async-creation]
 
+--queue-timing is off by default; see docs/pvr-queue-timing.md.
 --roa-color is off by default and sets PVR_DARWIN_ROA_COLOR=1 only in this bundle.
 It selects the experimental Darwin GE8300 COLOR ROA path in the supplied Mesa
 library, independently of --require-fetch-for-apple3. It does not qualify UI/XR
