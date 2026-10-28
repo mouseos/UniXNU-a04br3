@@ -10,6 +10,9 @@ is processing submit waits, `s3` is command buffers, and `s4` is signals.
 `k1` through `k5` give graphics, compute, transfer, query, and event
 sub-command counts and inclusive elapsed times, respectively. Error markers
 invalidate the corresponding timing. A result and phase identify an early exit.
+The additional `u0`, `u1`, and `u2` counts and elapsed times respectively cover
+transfer sync creation, transfer job submission, and subsequent sync updates.
+These are nested inside `k3`; the sections do not include all surrounding code.
 
 `XT` measures a single transfer command in the same thread: `k1` is transfer
 preparation and `k2` is the winsys submit, inclusive of any nested CPU waits.
