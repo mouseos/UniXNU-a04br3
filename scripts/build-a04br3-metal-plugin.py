@@ -57,15 +57,15 @@ def shader_capture_constructor(start):
 extern "C" {
 #endif
 void native_metal_board_text(const char *line);
-void metal2vulkan_shader_capture_set_output(void (*output)(const char *));
+void metal2vulkan_shader_capture_set_output(int (*output)(const char *));
 #ifdef __cplusplus
 }
 #endif
-static void a04br3_spirv_capture_output(const char *text) {
+static int a04br3_spirv_capture_output(const char *text) {
   static unsigned sequence;
-  if (!text) return;
+  if (!text) return -1;
   size_t length = strlen(text), parts = (length + 26) / 27;
-  if (!parts || parts > 65535) return;
+  if (!parts || parts > 65535) return -1;
   unsigned id = __sync_fetch_and_add(&sequence, 1);
   for (unsigned part = 0; part < parts; ++part) {
     char material[64], line[64];
@@ -78,12 +78,13 @@ static void a04br3_spirv_capture_output(const char *text) {
     snprintf(line, sizeof line, "sc%08x%08x%04x%04x%08x:%.*s",
              (unsigned)getpid(), id, part, (unsigned)parts, check,
              27, text + (size_t)part * 27);
-    native_metal_board_text(line);
     struct timespec pause = { 0, 25000000 };
     while (nanosleep(&pause, &pause) != 0) {
-      if (errno != EINTR) return;
+      if (errno != EINTR) return -1;
     }
+    native_metal_board_text(line);
   }
+  return 0;
 }
 __attribute__((constructor)) static void a04br3_spirv_capture_enable(void) {
   setenv("METAL2VULKAN_CAPTURE_SPIRV", "1", 1);

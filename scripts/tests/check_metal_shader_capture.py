@@ -37,9 +37,9 @@ static int fake_sleep(const struct timespec *request, struct timespec *remain) {
     return 0;
 }
 #define nanosleep fake_sleep
-static void (*capture_output)(const char *);
+static int (*capture_output)(const char *);
 static unsigned lines;
-void metal2vulkan_shader_capture_set_output(void (*output)(const char *)) { capture_output = output; }
+void metal2vulkan_shader_capture_set_output(int (*output)(const char *)) { capture_output = output; }
 void native_metal_board_text(const char *line) { assert(strlen(line) <= 63); ++lines; }
 ''' + constructor(42) + '''
 #include <assert.h>
@@ -48,12 +48,12 @@ int main(void) {
     assert(!strcmp(getenv("METAL2VULKAN_CAPTURE_SPIRV"), "1"));
     assert(!strcmp(getenv("METAL2VULKAN_CAPTURE_SPIRV_START"), "42"));
     assert(capture_output);
-    capture_output("0123456789012345678901234567890123456789012345678901234567890123456789");
+    assert(capture_output("0123456789012345678901234567890123456789012345678901234567890123456789") == 0);
     assert(lines == 3);
     assert(sleeps == 4);
     failure_mode = 1;
-    capture_output("0123456789012345678901234567890123456789012345678901234567890123456789");
-    assert(lines == 4);
+    assert(capture_output("0123456789012345678901234567890123456789012345678901234567890123456789") == -1);
+    assert(lines == 3);
     assert(sleeps == 5);
 }
 ''')
