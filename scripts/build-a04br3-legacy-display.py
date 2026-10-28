@@ -28,6 +28,7 @@ build/native-legacy-display/libNativeLegacyDisplay.late.a and checks the archive
 After the archive is made, its definitions are compared with the board archive (duplicates stop the build) and its
 undefined symbols with the previous kernel, the board archive and itself (unresolved names are reported).
 """
+import os
 import hashlib
 import json
 from pathlib import Path
@@ -88,7 +89,7 @@ require(recorded,'audit-mobile-graphics-legacy.py no longer records RUNTIME_SHA'
 observation=ROOT/'build/darwinboot-owner-hvf-mobile-graphics-legacy-class/gdb-stop.json'
 analysis=ROOT/'build/display-analysis/mobile-graphics-legacy-abi.json'
 analysis.parent.mkdir(parents=True,exist_ok=True)   # the audit writes its result there without creating it
-if not observation.exists():
+if not observation.exists() or os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')=='final':
     try:previous=json.loads(analysis.read_text()).get('runtime_metadata_checkpoint_sha256')
     except (OSError,ValueError):previous=None
     if previous!=recorded.group(1):
@@ -185,8 +186,9 @@ for segment in image['segments']:
                 if bits>>27&1 and bits>>28==0 and bits>>25&3==3:relocations[sec['va']+offset]=symbols[bits&0xffffff][0]
 compiled=[relocations.get(vtable+16+i*8) for i in range(358)]
 require(all(compiled) and vtable+16+358*8 not in relocations,'Exact owned 358-entry vtable')
-candidate=ROOT/'build/native-prelink/native-owner-mobile-graphics-candidate.macho'
-if not candidate.exists():  # pruned: same fallback as scripts/audit-mobile-graphics-legacy.py (identical original family executable)
+candidate=(board_kernel if os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')=='final'
+           else ROOT/'build/native-prelink/native-owner-mobile-graphics-candidate.macho')
+if not candidate.exists() and os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')!='final':  # pruned: same fallback as scripts/audit-mobile-graphics-legacy.py (identical original family executable)
     later=sorted((ROOT/'build/native-prelink').glob('native-owner-ufs-cpu-desktop-*-candidate.macho'),key=lambda f:f.stat().st_mtime)
     require(later,'No reference candidate available');candidate=later[-1]
 old=candidate.read_bytes();old_image=macho(old)
