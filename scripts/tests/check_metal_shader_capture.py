@@ -26,6 +26,15 @@ with tempfile.TemporaryDirectory(prefix='pvr-shader-capture-') as temp:
     program.write_text('''
 #include <assert.h>
 #include <string.h>
+#include <time.h>
+#include <errno.h>
+static unsigned sleeps;
+static int fake_sleep(const struct timespec *request, struct timespec *remain) {
+    ++sleeps;
+    if (sleeps == 1) { errno = EINTR; *remain = *request; return -1; }
+    return 0;
+}
+#define nanosleep fake_sleep
 static void (*capture_output)(const char *);
 static unsigned lines;
 void metal2vulkan_shader_capture_set_output(void (*output)(const char *)) { capture_output = output; }
@@ -39,6 +48,7 @@ int main(void) {
     assert(capture_output);
     capture_output("0123456789012345678901234567890123456789012345678901234567890123456789");
     assert(lines == 3);
+    assert(sleeps == 4);
 }
 ''')
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall', '-Wextra', '-Werror', str(program), '-o', str(executable)], check=True)
