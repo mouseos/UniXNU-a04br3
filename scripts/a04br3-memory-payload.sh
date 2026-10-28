@@ -3,14 +3,7 @@
 # Inputs are produced by a04br3-pre-build.sh, never supplied as user file paths.
 set -euo pipefail
 : "${DEVICE_DIR:?}" "${RUNNER_TEMP:?}"
-python3 - "$RUNNER_TEMP" <<'PY'
-import hashlib, json, pathlib, sys
-root = pathlib.Path(sys.argv[1])
-marker = json.loads((root / 'a04br3-memory-inputs.json').read_text())
-for key, name in [('data_sha256', 'data.dbr'), ('trust_sha256', 'trustcache')]:
-    if hashlib.sha256((root / name).read_bytes()).hexdigest() != marker[key]:
-        raise SystemExit('memory payload input changed since opt-in pre-build: ' + name)
-PY
+python3 "$DEVICE_DIR/scripts/a04br3-memory-manifest.py" verify
 ./unixnu build payload -D "$DEVICE_DIR" \
   --owner-trust-cache "$RUNNER_TEMP/trustcache" --data-ramdisk "$RUNNER_TEMP/data.dbr" \
   --kernel-arg a04br3-membench=1 --kernel-arg sheng-fb-gpu=1 \
