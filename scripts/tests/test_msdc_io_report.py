@@ -48,19 +48,19 @@ int main(){msdcIoReport(0);msdcIoReport(2);assert(lines==0);msdcIoReport(1);
 #elif defined(DISABLED)
  assert(lines==1&&strstr(output,"io: disabled"));
 #elif defined(STATS_ABSENT)
- assert(lines==5&&strstr(output,"seq=1 begin_ns=100 end_ns=200 non_atomic=1")&&strstr(output,"transfer: unavailable")&&strstr(output,"offered: unavailable")&&strstr(output,"queue: unavailable"));
+ assert(lines==5&&strstr(output,"seq=1 begin_ns=100 end_ns=200 non_atomic=1")&&strstr(output,"transfer seq=1 unavailable")&&strstr(output,"offered seq=1 unavailable")&&strstr(output,"queue seq=1 unavailable"));
 #else
  assert(lines==18&&strstr(output,"seq=1 begin_ns=100 end_ns=200 non_atomic=1"));
  assert(strstr(output,"mode=dma_read size=le4k calls=1 ok_bytes=2 errors=3 elapsed_ns=4"));
  assert(strstr(output,"mode=pio_read size=4k_16k calls=17 ok_bytes=18 errors=19 elapsed_ns=20"));
  assert(strstr(output,"mode=write size=gt16k calls=33 ok_bytes=34 errors=35 elapsed_ns=36"));
- assert(strstr(output,"offered mode=read size=le4k calls=11 bytes=12"));
- assert(strstr(output,"offered mode=write size=gt16k calls=21 bytes=22"));
- assert(strstr(output,"queue started=21 wait_ns=22 max_wait_ns=23"));
- assert(strstr(output,"io end seq=1 rows=9"));
+ assert(strstr(output,"offered seq=1 mode=read size=le4k calls=11 bytes=12"));
+ assert(strstr(output,"offered seq=1 mode=write size=gt16k calls=21 bytes=22"));
+ assert(strstr(output,"queue seq=1 started=21 wait_ns=22 max_wait_ns=23"));
+ assert(strstr(output,"io end seq=1 rows=16"));
  used=lines=0;output[0]=0;msdcIoReport(1);
  assert(lines==18 && strstr(output,"seq=2 begin_ns=300 end_ns=400 non_atomic=1"));
- assert(strstr(output,"transfer seq=2 mode=dma_read size=le4k") && strstr(output,"io end seq=2 rows=9"));
+ assert(strstr(output,"transfer seq=2 mode=dma_read size=le4k") && strstr(output,"io end seq=2 rows=16"));
 #endif
 }
 '''

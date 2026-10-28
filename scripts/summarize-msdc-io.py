@@ -6,10 +6,15 @@ import json
 import re
 import sys
 
-header = re.compile(r'a04br3 msdc io sample seq=(\d+) begin_ns=(\d+) end_ns=(\d+) non_atomic=1')
-row = re.compile(r'a04br3 msdc transfer seq=(\d+) mode=(dma_read|pio_read|write) size=(le4k|4k_16k|gt16k) calls=(\d+) ok_bytes=(\d+) errors=(\d+) elapsed_ns=(\d+)')
-end_marker = re.compile(r'a04br3 msdc io end seq=(\d+) rows=(\d+)')
-expected = [(m, b) for m in ('dma_read','pio_read','write') for b in ('le4k','4k_16k','gt16k')]
+header = re.compile(r'a04br3 msdc io sample seq=(\d+) begin_ns=(\d+) end_ns=(\d+) non_atomic=1\Z')
+transfer = re.compile(r'a04br3 msdc transfer seq=(\d+) mode=(dma_read|pio_read|write) size=(le4k|4k_16k|gt16k) calls=(\d+) ok_bytes=(\d+) errors=(\d+) elapsed_ns=(\d+)\Z')
+offer = re.compile(r'a04br3 msdc offered seq=(\d+) mode=(read|write) size=(le4k|4k_16k|gt16k) calls=(\d+) bytes=(\d+)\Z')
+queue = re.compile(r'a04br3 msdc queue seq=(\d+) started=(\d+) wait_ns=(\d+) max_wait_ns=(\d+)\Z')
+end_marker = re.compile(r'a04br3 msdc io end seq=(\d+) rows=(\d+)\Z')
+transport_keys = [('transfer',m,b) for m in ('dma_read','pio_read','write') for b in ('le4k','4k_16k','gt16k')]
+offer_keys = [('offered',m,b) for m in ('read','write') for b in ('le4k','4k_16k','gt16k')]
+expected = transport_keys + offer_keys + [('queue','','')]
+
 anchor = b'[pmic6392_init] Preloader Start'
 bldr = b'[BLDR] Build Time:'
 reason = re.compile(rb'(?i)\bBOOT_REASON\s*:')
@@ -51,17 +56,25 @@ def samples(lines):
             continue
         if 'a04br3 msdc io sample' in line:
             raise ValueError('malformed sample header')
-        r = row.search(line)
-        if r:
-            if current is None or int(r[1]) != current['seq']:
-                raise ValueError('orphan or mixed transfer row')
-            key = (r[2], r[3])
+        entry = None
+        for label, pattern in (('transfer',transfer), ('offered',offer), ('queue',queue)):
+            match = pattern.search(line)
+            if match:
+                if label == 'queue':
+                    entry = (int(match[1]), (label,'',''), tuple(int(match[i]) for i in range(2,5)))
+                else:
+                    entry = (int(match[1]), (label,match[2],match[3]), tuple(int(x) for x in match.groups()[3:]))
+                break
+            if 'a04br3 msdc ' + label + ' ' in line:
+                raise ValueError('malformed or unavailable ' + label + ' row')
+        if entry:
+            seq, key, values = entry
+            if current is None or seq != current['seq']:
+                raise ValueError('orphan or mixed sample row')
             position = len(current['rows'])
             if position >= len(expected) or key != expected[position]:
-                raise ValueError('missing, duplicate or out-of-order transfer row')
-            current['rows'][key] = tuple(int(r[i]) for i in range(4, 8))
-        elif 'a04br3 msdc transfer ' in line:
-            raise ValueError('malformed transfer row')
+                raise ValueError('missing, duplicate or out-of-order sample row')
+            current['rows'][key] = values
         e = end_marker.search(line)
         if e:
             if current is None or int(e[1]) != current['seq'] or int(e[2]) != len(expected) or len(current['rows']) != len(expected):
@@ -69,7 +82,7 @@ def samples(lines):
             yield current
             last_seq = current['seq']
             current = None
-        elif 'a04br3 msdc io end seq=' in line:
+        elif 'a04br3 msdc io end ' in line:
             raise ValueError('malformed sample end')
     if current is not None:
         raise ValueError('missing sample end at EOF')
@@ -88,19 +101,26 @@ def summarize(segment, source_hash, boot_id, offset):
             deltas = {key: tuple(a-b for a,b in zip(rows[key], previous['rows'][key])) for key in expected}
             if any(v < 0 for values in deltas.values() for v in values):
                 raise ValueError('counter decreased: reboot, reset or mixed source')
-            if not any(values[0] for values in deltas.values()):
-                raise ValueError('no transfer call delta in interval')
-            for mode, size in expected:
-                calls, byte_count, errors, elapsed = deltas[(mode,size)]
-                output.append({'source_sha256':source_hash, 'boot_segment_sha256':boot_id,
-                    'boot_start_offset':offset, 'from_seq':previous['seq'], 'to_seq':sample['seq'],
-                    'begin_ns':previous['begin'], 'end_ns':begin,
-                    'mode':mode, 'size':size, 'calls':calls, 'ok_bytes':byte_count,
+            common = {'source_sha256':source_hash, 'boot_segment_sha256':boot_id,
+                      'boot_start_offset':offset, 'from_seq':previous['seq'], 'to_seq':sample['seq'],
+                      'begin_ns':previous['begin'], 'end_ns':begin}
+            for key in transport_keys:
+                calls, byte_count, errors, elapsed = deltas[key]
+                output.append({**common, 'kind':'transfer', 'mode':key[1], 'size':key[2],
+                    'activity_observed':any((calls,byte_count,errors,elapsed)), 'calls':calls, 'ok_bytes':byte_count,
                     'errors':errors, 'transport_ns':elapsed,
                     'observed_bytes_per_second':byte_count * 1_000_000_000 / dt})
+            for key in offer_keys:
+                calls, byte_count = deltas[key]
+                output.append({**common, 'kind':'offered', 'mode':key[1], 'size':key[2],
+                    'activity_observed':any((calls,byte_count)), 'calls':calls, 'bytes':byte_count})
+            key = ('queue','','')
+            started, wait_ns, max_delta = deltas[key]
+            output.append({**common, 'kind':'queue', 'activity_observed':any((started,wait_ns,max_delta)),
+                'started':started, 'wait_ns':wait_ns, 'max_wait_ns_cumulative':rows[key][2]})
         previous = sample
     if not output:
-        raise ValueError('at least two complete samples with nonzero transfer delta are required')
+        raise ValueError('at least two complete samples are required')
     return output
 
 def main():

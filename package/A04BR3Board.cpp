@@ -261,18 +261,21 @@ void msdcIoReport(unsigned enabled)
             (unsigned long long)sampleSeq, modes[mode], bins[bin], (unsigned long long)transfer[index], (unsigned long long)transfer[index+1],
             (unsigned long long)transfer[index+2], (unsigned long long)transfer[index+3]);
     }
-  } else IOLog("a04br3 msdc transfer: unavailable\n");
+  } else IOLog("a04br3 msdc transfer seq=%llu unavailable\n", (unsigned long long)sampleSeq);
   if (haveOffer) {
     for (unsigned mode = 0; mode < 2; ++mode) for (unsigned bin = 0; bin < 3; ++bin) {
       unsigned index = (mode * 3 + bin) * 2;
-      IOLog("a04br3 msdc offered mode=%s size=%s calls=%llu bytes=%llu\n", mode ? "write" : "read", bins[bin],
+      IOLog("a04br3 msdc offered seq=%llu mode=%s size=%s calls=%llu bytes=%llu\n",
+            (unsigned long long)sampleSeq, mode ? "write" : "read", bins[bin],
             (unsigned long long)offer[index], (unsigned long long)offer[index+1]);
     }
-  } else IOLog("a04br3 msdc offered: unavailable\n");
-  if (haveQueue) IOLog("a04br3 msdc queue started=%llu wait_ns=%llu max_wait_ns=%llu\n",
-                       (unsigned long long)queue[0], (unsigned long long)queue[1], (unsigned long long)queue[2]);
-  else IOLog("a04br3 msdc queue: unavailable\n");
-  IOLog("a04br3 msdc io end seq=%llu rows=%u\n", (unsigned long long)sampleSeq, haveTransport ? 9u : 0u);
+  } else IOLog("a04br3 msdc offered seq=%llu unavailable\n", (unsigned long long)sampleSeq);
+  if (haveQueue) IOLog("a04br3 msdc queue seq=%llu started=%llu wait_ns=%llu max_wait_ns=%llu\n",
+                       (unsigned long long)sampleSeq, (unsigned long long)queue[0],
+                       (unsigned long long)queue[1], (unsigned long long)queue[2]);
+  else IOLog("a04br3 msdc queue seq=%llu unavailable\n", (unsigned long long)sampleSeq);
+  IOLog("a04br3 msdc io end seq=%llu rows=%u\n", (unsigned long long)sampleSeq,
+        (haveTransport ? 9u : 0u) + (haveOffer ? 6u : 0u) + (haveQueue ? 1u : 0u));
 }
 
 // Diagnostic sampling only. Registers and per-core counters are independently read,

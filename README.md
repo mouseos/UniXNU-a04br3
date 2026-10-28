@@ -685,10 +685,15 @@ is a hash of the captured segment, not an authenticated hardware boot UUID.
 The analyzer requires these exact identities and checks the unique preloader
 and BLDR boundaries, boot reason position, counter monotonicity and sample
 ordering before writing any JSON. Each sample must have a consecutive sequence,
-all nine ordered rows carrying that sequence, and a matching explicit end.
-Missing headers, rows, end markers, overlapping snapshot windows and zero
-transfer-call deltas are errors; no JSON is emitted for the file. Older reporter
-logs without this framing are rejected. The tool rejects observed reboot
+nine transfer rows, six offered rows and one queue row in that order, all
+carrying that sequence, followed by a matching end with 16 rows. Missing or
+mixed rows, malformed suffixes, missing ends and overlapping snapshot windows
+are errors; no JSON is emitted for the file. A complete interval with zero
+counter deltas is valid and reports `activity_observed=false`; it does not prove
+that no work occurred between the non-atomic loads. Queue output includes the
+delta of started jobs and cumulative wait; its maximum is the cumulative maximum
+at the end of the interval, not an interval-only maximum. Older reporter logs
+without this framing are rejected. The tool rejects observed reboot
 markers even if time and counters increased. Capture continuity
 still must be established externally: missing UART output or deliberate
 concatenation without a recognizable boundary cannot be disproved from hashes
