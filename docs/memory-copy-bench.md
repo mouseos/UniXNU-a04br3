@@ -97,7 +97,11 @@ stderr and `console_stdout_ready` after opening console stdout. It reports a
 stderr console-open failure on stdout. Inherited stderr can be closed or
 invisible, so absent markers do not establish the failure stage. Spawn success
 does not prove main entry or successful exit; the board hook does not collect
-child exit status.
+child exit status. After opening the console, `phase=exit` reports the program's
+intended return code and sample count; a missing line cannot prove exit or
+success. `incomplete_sizes` includes sizes with only some samples completed.
+Each successful sample is independently verified; invalid timing and failed
+verification produce an error instead of a result row.
 
 The normal standalone `--run size_mib` accepts 1–64 MiB per buffer: this is an
 input limit, not a safe allocation limit. Output includes monotonic start/end,
