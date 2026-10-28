@@ -19,11 +19,31 @@ source commits and submodule state, pinned XNU reference and patched-source
 diff, effective configuration and build flags.
 Payload construction refuses a missing or changed manifest. String presence in
 the binary is an integrity check, not proof of the runtime UUID selection.
-Source checkouts must be clean and submodules initialized.
+Source checkouts must be clean and submodules initialized. Untracked files in
+the selected output root and `RUNNER_TEMP` are treated as generated, while
+tracked files are never exempted. Output roots containing tracked source files
+or the repository root itself are rejected; untracked files elsewhere are also
+rejected.
 `RUNNER_TEMP` defaults to `out/a04br3-memory-inputs`; no existing seed or trust
 file is requested. `UNIXNU_OUT` selects the UniXNU output root for both the
 pre-build tree and the completed-kernel manifest, with the same path expansion
-as UniXNU. The build enables the PowerVR probe build and Metal publish
+as UniXNU.
+
+A fresh run refuses to overwrite any existing `owner-data`, `data-32.dbr`,
+`data.dbr`, or `data-probe.dbr` in `RUNNER_TEMP`; it leaves the previous
+manifest and seed files intact. To repeat using a complete compatible prior
+seed, retain the nonempty `data.dbr` and baseline `data-32.dbr` plus valid
+`owner-data/seed.json`, then run:
+
+```sh
+A04BR3_REUSE_DATA_SEED=1 /path/to/UniXNU-a04br3/scripts/a04br3-memory-build.sh --enable-memory-bench
+```
+
+Reuse rebuilds from the retained policy-seeded baseline, verifies the mounted
+Data UUID against the metadata, and creates fresh staged Data and owner trust.
+It is not a promise to preserve an existing persistent store's contents. For a
+new seed, choose an empty `RUNNER_TEMP`; incomplete or UUID-mismatched reuse
+inputs are rejected. The build enables the PowerVR probe build and Metal publish
 mode, preserving GPU composition (`sheng-fb-gpu=1`); it adds the diagnostic
 boot argument and diagnostic heartbeat. The generated owner trust bundle
 includes the signed benchmark CDHash. `--skip-setup` can optionally be passed
@@ -71,5 +91,6 @@ Host checks:
 python3 scripts/tests/test_memory_copy_bench.py
 python3 scripts/tests/test_memory_bench_launch.py
 python3 scripts/tests/test_memory_payload.py
+python3 scripts/tests/test_memory_real_git.py
 python3 scripts/tests/test_a04br3_pre_build_seed_reuse.py
 ```
