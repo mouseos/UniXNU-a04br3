@@ -175,7 +175,7 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
       METAL_DIAGNOSTICS+=(--pipeline-timing)
     fi
     if [ "${A04BR3_POWERVR_METAL_PIPELINE_DIAG:-0}" = 1 ]; then
-      METAL_DIAGNOSTICS=(--pipeline-failure-diag)
+      METAL_DIAGNOSTICS+=(--pipeline-failure-diag)
     fi
     if [ "${A04BR3_POWERVR_METAL_ROA_COLOR:-0}" = 1 ]; then
       METAL_DIAGNOSTICS+=(--roa-color)

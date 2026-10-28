@@ -192,6 +192,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
                     assert json.loads((default_tree / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit'] == 'WRONG-TREE-PIN'
                 assert 'unixnu build kernel uuid=' + UUID in calls, calls
                 if timing == '1': assert '--pipeline-timing' in calls
+                if timing == '1' and pipeline_diag == '1': assert '--pipeline-failure-diag' in calls
                 for required in ('build-a04br3-trust-cache.py', 'build-pvr-darwin.py',
                                  'build-a04br3-powervr-probe.py', 'a04br3-seed-powervr-probe.py'):
                     assert required in calls, calls
@@ -354,3 +355,6 @@ run_case(True, timing="1")
 run_case(True, timing="bad")
 run_case(True, timing="1", metal=False)
 print("PASS: pipeline timing is strict opt-in and requires probe and Metal")
+
+run_case(True, timing="1", pipeline_diag="1")
+print("PASS: simultaneous pipeline timing and failure diagnostics both reach plugin builder")
