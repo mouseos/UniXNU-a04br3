@@ -654,3 +654,21 @@ time. Individual counters use relaxed atomic loads; the collection is not an
 atomic snapshot and counters may change between loads. The reporter neither
 enables IRQ nor verifies data or IRQ delivery. Test the actual formatter and
 weak-symbol handling with `python3 scripts/tests/test_msdc_irq_report.py`.
+
+With NativeMsdc `c67fccbb4ee4f20db6f02129057a8409cd817185`, add
+`native-msdc-iostat=1` to the three heartbeat arguments above. The same heartbeat
+then emits a monotonic begin/end bracket and cumulative size-binned transport,
+block-offer, and worker queue counters. Use deltas between sample timestamps:
+successful transport byte deltas divided by elapsed sample time describe
+observed throughput, not peak bus speed. The transport duration includes
+failed operations and excludes host-lock wait; offered block requests include
+rejected requests, and queue time excludes direct reads and cancellations.
+Fields are individually atomic but not captured at one instant. Diagnostics add
+clock reads and atomic updates in the driver, plus up to 17 UART lines per
+heartbeat; reduce sampling frequency for less perturbation. The existing VM
+rows show page usage, and home-perf samples selected tasks; neither measures
+memory bandwidth nor provides complete CPU, GPU, or network utilization.
+IRQ counters, cache reports, VM rows and I/O samples have different collection
+windows even within one heartbeat. These counters do not establish the cause of
+a slowdown without same-boot measurements and a comparison. Run
+`python3 scripts/tests/test_msdc_io_report.py` for reporter coverage.

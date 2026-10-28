@@ -53,6 +53,10 @@ extern volatile uint64_t native_msdc_verified_cache_stats[3] __attribute__((weak
 extern volatile uint64_t native_msdc_irq_stats[4] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_worker_stats[4] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_irq_mask_failures __attribute__((weak_import));
+extern volatile uint32_t native_msdc_iostat_enabled __attribute__((weak_import));
+extern volatile uint64_t native_msdc_transport_stats[36] __attribute__((weak_import));
+extern volatile uint64_t native_msdc_block_offer_stats[12] __attribute__((weak_import));
+extern volatile uint64_t native_msdc_block_queue_stats[3] __attribute__((weak_import));
 void native_root_timing_snapshot(uint64_t out[6]) __attribute__((weak_import));
 extern volatile uint32_t native_keyevents_stage;
 extern volatile int native_keyevents_status;
@@ -228,6 +232,45 @@ void msdcIrqReport(unsigned enabled)
   } else IOLog("a04br3 msdc irq mask_failures=unavailable\n");
 }
 
+// Read all counters before emitting lines. The timestamps bracket the loads,
+// not the entire heartbeat, and the independently atomic fields can race.
+void msdcIoReport(unsigned enabled)
+{
+  if (enabled != 1) return;
+  if (!&native_msdc_iostat_enabled) { IOLog("a04br3 msdc io: unavailable\n"); return; }
+  if (!__atomic_load_n(&native_msdc_iostat_enabled, __ATOMIC_ACQUIRE)) { IOLog("a04br3 msdc io: disabled\n"); return; }
+  bool haveTransport = native_msdc_transport_stats != nullptr;
+  bool haveOffer = native_msdc_block_offer_stats != nullptr;
+  bool haveQueue = native_msdc_block_queue_stats != nullptr;
+  uint64_t transfer[36] = {}, offer[12] = {}, queue[3] = {}, begin = 0, end = 0;
+  absolutetime_to_nanoseconds(mach_absolute_time(), &begin);
+  if (haveTransport) for (unsigned i = 0; i < 36; ++i) transfer[i] = __atomic_load_n(&native_msdc_transport_stats[i], __ATOMIC_RELAXED);
+  if (haveOffer) for (unsigned i = 0; i < 12; ++i) offer[i] = __atomic_load_n(&native_msdc_block_offer_stats[i], __ATOMIC_RELAXED);
+  if (haveQueue) for (unsigned i = 0; i < 3; ++i) queue[i] = __atomic_load_n(&native_msdc_block_queue_stats[i], __ATOMIC_RELAXED);
+  absolutetime_to_nanoseconds(mach_absolute_time(), &end);
+  IOLog("a04br3 msdc io sample begin_ns=%llu end_ns=%llu non_atomic=1\n", (unsigned long long)begin, (unsigned long long)end);
+  static const char * const modes[] = {"dma_read", "pio_read", "write"};
+  static const char * const bins[] = {"le4k", "4k_16k", "gt16k"};
+  if (haveTransport) {
+    for (unsigned mode = 0; mode < 3; ++mode) for (unsigned bin = 0; bin < 3; ++bin) {
+      unsigned index = (mode * 3 + bin) * 4;
+      IOLog("a04br3 msdc transfer mode=%s size=%s calls=%llu ok_bytes=%llu errors=%llu elapsed_ns=%llu\n",
+            modes[mode], bins[bin], (unsigned long long)transfer[index], (unsigned long long)transfer[index+1],
+            (unsigned long long)transfer[index+2], (unsigned long long)transfer[index+3]);
+    }
+  } else IOLog("a04br3 msdc transfer: unavailable\n");
+  if (haveOffer) {
+    for (unsigned mode = 0; mode < 2; ++mode) for (unsigned bin = 0; bin < 3; ++bin) {
+      unsigned index = (mode * 3 + bin) * 2;
+      IOLog("a04br3 msdc offered mode=%s size=%s calls=%llu bytes=%llu\n", mode ? "write" : "read", bins[bin],
+            (unsigned long long)offer[index], (unsigned long long)offer[index+1]);
+    }
+  } else IOLog("a04br3 msdc offered: unavailable\n");
+  if (haveQueue) IOLog("a04br3 msdc queue started=%llu wait_ns=%llu max_wait_ns=%llu\n",
+                       (unsigned long long)queue[0], (unsigned long long)queue[1], (unsigned long long)queue[2]);
+  else IOLog("a04br3 msdc queue: unavailable\n");
+}
+
 // Diagnostic sampling only. Registers and per-core counters are independently read,
 // not an atomic snapshot. CNTFRQ is the architectural timer, not CPU frequency.
 void cpuDiagnosticReport()
@@ -289,6 +332,7 @@ void procLogThread(void *, wait_result_t)
             m[0],m[1],m[2],m[3],m[4],m[5],m[6],q.throttled,q.pageable_internal,q.pageable_external,q.compressor_mode,q.compressor_active,q.swap_active);
       boot_home_perf_sample();
       msdcIrqReport(msdcPerf);
+      msdcIoReport(msdcPerf);
       cpuDiagnosticReport();
     }
     boot_home_irq_report();

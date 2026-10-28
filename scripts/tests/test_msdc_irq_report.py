@@ -7,7 +7,7 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 s = (root / 'package/A04BR3Board.cpp').read_text()
 start = s.index('void msdcIrqReport(unsigned enabled)')
-end = s.index('\n// Diagnostic sampling only.', start)
+end = s.index('\n// Read all counters', start)
 body = s[start:end]
 worker = s[s.index('void procLogThread('):s.index('\nstatic void a04br3_proclog_init')]
 assert 'unsigned perf = 0, rootTiming = 0, msdcPerf = 0;' in worker
