@@ -27,3 +27,11 @@ ROA enabled, and authorize `powervrprobed` as a Metal client. This image runs
 the XR probe in place of the ordinary PowerVR probe. Build and trust the normal
 GPU plugin and Vulkan driver as well. Inspect serial output for the two PASS
 lines; spawn, build or feature advertising alone are not success.
+
+Alternatively, the existing `make-a04br3-gpu-addon.py` accepts
+`--xr550-probe /path/to/output`, verifies the signed XR binary's CDHash,
+adds it and its metallib plus the publish/client markers, and emits an owner
+trust bundle including that CDHash. Its normal probe and plugin inputs must
+carry identical signed Vulkan libraries; use a Metal plugin built with
+`--roa-color`. Generate the payload with that addon and owner trust bundle,
+plus the existing prepared Data seed and `a04br3-powervrprobed=1`.

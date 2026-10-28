@@ -66,6 +66,7 @@ def verified_hashes(probe, metal):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--probe-dir', type=Path, required=True)
+    parser.add_argument('--xr550-probe', type=Path, help='signed opt-in XR550 probe directory, replacing the ordinary boot probe')
     parser.add_argument('--metal-plugin', type=Path, required=True)
     parser.add_argument('--trust-base', type=Path, required=True)
     parser.add_argument('--trust-out', type=Path, required=True)
@@ -81,6 +82,26 @@ def main():
     spec.loader.exec_module(helper)
     hashes = verified_hashes(args.probe_dir, args.metal_plugin)
     files = collect(args.probe_dir, args.metal_plugin)
+    if args.xr550_probe:
+        xr = args.xr550_probe
+        binary = xr / 'xr550-probe'
+        metallib = xr / 'xr550.metallib'
+        metadata = json.loads((xr / 'trust.json').read_text())
+        expected = metadata.get('daemon_cdhash')
+        if not isinstance(expected, str) or not re.fullmatch('[0-9a-fA-F]{40}', expected):
+            raise SystemExit('Invalid XR550 CDHash')
+        subprocess.run(['codesign', '--verify', '--strict', str(binary)], check=True)
+        detail = subprocess.run(['codesign', '--display', '--verbose=4', str(binary)], capture_output=True, text=True, check=True).stderr
+        actual = re.findall(r'^CDHash=([0-9a-fA-F]{40})$', detail, re.M)
+        if len(actual) != 1 or actual[0].lower() != expected.lower():
+            raise SystemExit('XR550 CDHash does not match signed binary')
+        if not metallib.is_file() or not metallib.stat().st_size:
+            raise SystemExit('Missing XR550 metallib')
+        hashes = sorted(set(hashes) | {expected.lower()})
+        files[0] = ('bin/powervrprobed', 0o755, binary.read_bytes())
+        files.append(('bin/xr550.metallib', 0o644, metallib.read_bytes()))
+        files.append(('addons/NativePowerVRMetal.clients', 0o644, b'powervrprobed\n'))
+        files.append(('addons/NativePowerVRMetal.publish', 0o644, b'1\n'))
     blob = helper.pack_addon(files)
     helper.unpack_addon(blob)
     helper.write_trust(args, sorted(hashes))
