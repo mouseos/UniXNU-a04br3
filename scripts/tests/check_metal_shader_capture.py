@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the owner capture constructor without a GPU or Apple SDK."""
 import os
+import json
+import shutil
+import sys
 from pathlib import Path
 import runpy
 import subprocess
@@ -43,4 +46,29 @@ int main(void) {
     env.pop('METAL2VULKAN_CAPTURE_SPIRV', None)
     env.pop('METAL2VULKAN_CAPTURE_SPIRV_START', None)
     subprocess.run([str(executable)], env=env, check=True)
-print('PASS diagnostic constructor and ordinal bounds; no GPU')
+with tempfile.TemporaryDirectory(prefix='pvr-shader-builder-') as temp:
+    root = Path(temp)
+    (root / 'scripts').mkdir()
+    shutil.copyfile(Path(source['__file__']), root / 'scripts/build-a04br3-metal-plugin.py')
+    fake = root / 'scripts/build-vulkan-metal-plugin.py'
+    fake.write_text('import json,os,sys\nopen(os.environ["CAPTURE_TEST_ARGS"],"w").write(json.dumps(sys.argv[1:]))\n')
+    board = root / 'package/powervr/user/NativePowerVRMetalBoard.mm'
+    board.parent.mkdir(parents=True)
+    board.write_text('// synthetic fixture\n')
+    driver = root / 'driver.dylib'
+    driver.write_bytes(b'fixture')
+    output = root / 'output'
+    record = root / 'args.json'
+    env = dict(os.environ, CAPTURE_TEST_ARGS=str(record))
+    command = [sys.executable, str(root / 'scripts/build-a04br3-metal-plugin.py'), '--vulkan', str(driver), '--out', str(output)]
+    subprocess.run(command, env=env, check=True)
+    assert '--runtime-shader-capture' not in json.loads(record.read_text())
+    assert not (root / 'output.spirv-capture-enable.mm').exists()
+    subprocess.run(command + ['--shader-capture-start', '42'], env=env, check=True)
+    args = json.loads(record.read_text())
+    assert '--runtime-shader-capture' in args
+    assert str(root / 'output.spirv-capture-enable.mm') in args
+    assert '"42"' in (root / 'output.spirv-capture-enable.mm').read_text()
+    bad = subprocess.run(command + ['--shader-capture-start', '-1'], env=env, capture_output=True)
+    assert bad.returncode != 0
+print('PASS diagnostic constructor, CLI propagation, defaults and ordinal bounds; no GPU')
