@@ -10,6 +10,16 @@ IPSW/network and platform-seed prerequisites, from a clean UniXNU checkout run:
 
 This calls the ordinary `unixnu defconfig`, `tree`, `build kernel` and `build
 payload` commands, the device pre-build, and the standard seed/trust tooling.
+After the pre-build it parses the seed UUID from JSON and exports it for the
+final kernel build; it does not source the generated shell file. Seed metadata,
+mounted volume identity, the generated environment record and the kernel UUID
+string must agree. A completion manifest is written only after the final
+kernel build succeeds; it binds kernel hash, Data and trust hashes, UUID, clean
+source commits and submodule state, pinned XNU reference and patched-source
+diff, effective configuration and build flags.
+Payload construction refuses a missing or changed manifest. String presence in
+the binary is an integrity check, not proof of the runtime UUID selection.
+Source checkouts must be clean and submodules initialized.
 `RUNNER_TEMP` defaults to `out/a04br3-memory-inputs`; no existing seed or trust
 file is requested. The build enables the PowerVR probe build and Metal publish
 mode, preserving GPU composition (`sheng-fb-gpu=1`); it adds the diagnostic

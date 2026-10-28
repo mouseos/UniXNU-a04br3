@@ -124,6 +124,8 @@ if [ "${A04BR3_REUSE_DATA_SEED:-0}" != 1 ]; then
   python3 "$TREE/scripts/seed-data-grow.py" --gib 4 "$RUNNER_TEMP/data-32.dbr" "$RUNNER_TEMP/data.dbr"
 fi
 if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
+  DATA_UUID=$(read_seed_uuid)
+  SEED_IDENTITY=(--expected-volume-uuid "$DATA_UUID")
   if [ "${A04BR3_POWERVR_METAL:-0}" = 1 ]; then A04BR3_POWERVR_VULKAN=1; fi
   PROBE_VULKAN=()
   if [ "${A04BR3_POWERVR_VULKAN:-0}" = 1 ]; then
@@ -168,16 +170,6 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
     ${METAL_SEED[@]+"${METAL_SEED[@]}"} ${MEMORY_SEED[@]+"${MEMORY_SEED[@]}"} ${SEED_IDENTITY[@]+"${SEED_IDENTITY[@]}"} "$SEED_INPUT" "$SEED_OUTPUT"
   mv "$SEED_OUTPUT" "$RUNNER_TEMP/data.dbr"
   mv "$RUNNER_TEMP/trustcache-owner" "$RUNNER_TEMP/trustcache"
-  if [ "${A04BR3_MEMORY_BENCH:-0}" = 1 ]; then
-    python3 - "$RUNNER_TEMP" <<'PY_MEMORY_MARKER'
-import hashlib, json, pathlib, sys
-root = pathlib.Path(sys.argv[1])
-def digest(name):
-    return hashlib.sha256((root / name).read_bytes()).hexdigest()
-record = {'data_sha256': digest('data.dbr'), 'trust_sha256': digest('trustcache')}
-(root / 'a04br3-memory-inputs.json').write_text(json.dumps(record, sort_keys=True) + '\n')
-PY_MEMORY_MARKER
-  fi
   echo "PowerVR probe staged; the payload step needs owner_trust_cache = true (--owner-trust-cache)"
 fi
 # The kernel's owner Data mount (CONFIG_XNU_OWNER_DATA_MOUNT) selects this seed's volume by UUID.
