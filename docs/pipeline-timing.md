@@ -2,7 +2,7 @@
 
 診断用Mesaは `scripts/data/pvr-mesa-inputs.json` のcommitとtreeで固定する。通常は無効で、対象Metal bundleのビルド時に `A04BR3_POWERVR_PIPELINE_TIMING=1` を指定した場合のみ、bundleのconstructorが `PVR_PIPELINE_TIMING=1` を設定する。probeとMetalが必要。shader captureやSIPF1 dumpは有効化しない。
 
-ユーザー空間の `CLOCK_MONOTONIC` ナノ秒を使用し、graphicsとcompute pipeline作成を合算で64回ごとに最大4件、各pipelineの同一スレッドで呼ばれたPCO IR処理を最大4件記録する。pipeline IDはprocess内で共有し、同じpipeline内のPCOには子番号を付ける。制限超過や計測失敗は `drop` / `err` に出す。各passの回数とinclusive時間を記録し、入れ子の値は重複するので加算しない。計測用時計と集計のオーバーヘッドは残る。
+ユーザー空間の `CLOCK_MONOTONIC` ナノ秒を使用し、graphicsとcomputeをそれぞれ64回ごとに最大2件ずつ、合計最大4件、各pipelineの同一スレッドで呼ばれたPCO IR処理を最大4件記録する。pipeline IDはprocess内で一意とし（computeは0・64、graphicsは256・320）、同じpipeline内のPCOには子番号を付ける。制限超過や計測失敗は `drop` / `err` に出す。各passの回数とinclusive時間を記録し、入れ子の値は重複するので加算しない。計測用時計と集計のオーバーヘッドは残る。
 
 pipeline開始前に `PL ... pre` として通知し、送信が終わった後の時刻からpipelineを計測する。終了後に実測start/endとPCOの集計を送信する。再入したpipelineの通知と集計は、最外側の計測後に `dpre` として遅延出力する。これら自スレッドの送信は該当区間の外だが、別スレッドの同期UART出力、スケジューリングやclock・集計処理の影響は除去できない。`TIM` にpidと `kern.boottime` を出し、取得できない場合は `boot=unknown` とする。`PL ... pre` はpid・pipeline ID・OS thread IDを含み、そのIDで `PL`、`PCS`、`PCO` の行を対応付ける。`TIM` のPID・boot秒は10進数、それ以外のID、PID、thread ID、時刻、回数は16進数、時間はns。長いpass行は同一の親ID・子番号・pass番号で `PCN` / `PCV` に分ける。開始・終了の時計取得失敗やscope確保失敗は明示する。再入時に記録容量を超えたものは `nested_drop` に出す。
 
