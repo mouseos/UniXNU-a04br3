@@ -20,7 +20,7 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None, memory=None, out_mode=None, fresh_existing=False):
+def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None, memory=None, out_mode=None, fresh_existing=False, timing=None):
     with tempfile.TemporaryDirectory(prefix='pre-build-reuse-') as directory:
         root = Path(directory)
         work, temporary, device, tools = [root / p for p in ('work', 'temp', 'device', 'bin')]
@@ -125,6 +125,8 @@ elif name == 'a04br3-seed-powervr-probe.py':
         if out_mode == 'expanded':
             env['BENCH_OUT_PARENT'] = str(work)
             env['UNIXNU_OUT'] = '$BENCH_OUT_PARENT/custom output'
+        env.pop('A04BR3_POWERVR_PIPELINE_TIMING', None)
+        if timing is not None: env['A04BR3_POWERVR_PIPELINE_TIMING'] = timing
         env.pop('A04BR3_MEMORY_BENCH', None)
         if memory is not None: env['A04BR3_MEMORY_BENCH'] = memory
         if memory == '1': env['A04BR3_MEMORY_STAGED'] = '1'
@@ -156,7 +158,8 @@ elif name == 'a04br3-seed-powervr-probe.py':
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
             calls = log.read_text()
             assert not list(temporary.glob('a04br3-seed-rebuild.*')), 'temporary seed leaked'
-            diagnostic_failure = memory not in (None, '0', '1') or (memory == '1' and not (probe and metal))
+            diagnostic_failure = timing not in (None, '0', '1') or (timing == '1' and not (probe and metal))
+            diagnostic_failure |= memory not in (None, '0', '1') or (memory == '1' and not (probe and metal))
             diagnostic_failure |= pipeline_diag not in (None, '0', '1') or (pipeline_diag == '1' and not (metal and probe))
             diagnostic_failure |= roa_color not in (None, '0', '1') or (roa_color == '1' and not (metal and probe))
             failure = diagnostic_failure or fresh_existing or reuse and (metadata != 'valid' or not data or data == 'empty' or not baseline) or fail_seed or generation == fail_round or fail_grow or mismatch or (reuse and not probe)
@@ -188,6 +191,7 @@ elif name == 'a04br3-seed-powervr-probe.py':
                     assert 'test-pin' in calls
                     assert json.loads((default_tree / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit'] == 'WRONG-TREE-PIN'
                 assert 'unixnu build kernel uuid=' + UUID in calls, calls
+                if timing == '1': assert '--pipeline-timing' in calls
                 for required in ('build-a04br3-trust-cache.py', 'build-pvr-darwin.py',
                                  'build-a04br3-powervr-probe.py', 'a04br3-seed-powervr-probe.py'):
                     assert required in calls, calls
@@ -345,3 +349,8 @@ print('PASS: default and alternate UNIXNU_OUT select one tree despite conflictin
 
 run_case(False, fresh_existing=True)
 print('PASS: fresh seed creation refuses existing inputs before modifying them')
+
+run_case(True, timing="1")
+run_case(True, timing="bad")
+run_case(True, timing="1", metal=False)
+print("PASS: pipeline timing is strict opt-in and requires probe and Metal")

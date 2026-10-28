@@ -24,6 +24,13 @@
 #   with the probe: pre_build = A04BR3_POWERVR_PROBE=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh", owner_trust_cache = true
 set -euo pipefail
 : "${DEVICE_DIR:?}" "${RUNNER_TEMP:?}"
+case "${A04BR3_POWERVR_PIPELINE_TIMING:-0}" in
+  0) ;;
+  1) if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL:-0}" != 1 ]; then
+       echo "Pipeline timing requires A04BR3_POWERVR_PROBE=1 and A04BR3_POWERVR_METAL=1" >&2; exit 1
+     fi ;;
+  *) echo "A04BR3_POWERVR_PIPELINE_TIMING must be 0 or 1" >&2; exit 1 ;;
+esac
 case "${A04BR3_POWERVR_METAL_PIPELINE_DIAG:-0}" in
   0) ;;
   1)
@@ -164,6 +171,9 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
     export PATH="$HOME/.cargo/bin:$PATH"
     rustup toolchain install 1.98.0 --profile minimal --target aarch64-apple-ios
     METAL_DIAGNOSTICS=()
+    if [ "${A04BR3_POWERVR_PIPELINE_TIMING:-0}" = 1 ]; then
+      METAL_DIAGNOSTICS+=(--pipeline-timing)
+    fi
     if [ "${A04BR3_POWERVR_METAL_PIPELINE_DIAG:-0}" = 1 ]; then
       METAL_DIAGNOSTICS=(--pipeline-failure-diag)
     fi
