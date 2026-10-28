@@ -29,6 +29,7 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 extern "C" {
 void a04br3_autoreset_init(void);
+void a04br3_cpu_load_report(void);
 void a04br3_charger_init(void);
 void a04br3_registers_init(void);
 void a04br3_gpu_init(void);
@@ -314,8 +315,24 @@ static void a04br3_proclog_init(void)
   if (kernel_thread_start(procLogThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 
+static void a04br3_cpu_load_thread(void *, wait_result_t)
+{
+  for (;;) { IOSleep(10000); a04br3_cpu_load_report(); }
+}
+
+static void a04br3_cpu_load_init(void)
+{
+  unsigned enabled = 0;
+  if (!PE_parse_boot_argn("a04br3-cpu-load", &enabled, sizeof(enabled)) || enabled != 1) return;
+  thread_t thread;
+  kern_return_t status = kernel_thread_start(a04br3_cpu_load_thread, nullptr, &thread);
+  if (status == KERN_SUCCESS) thread_deallocate(thread);
+  else IOLog("a04br3 cpu-load thread_error=%d\n", status);
+}
+
 extern "C" void unixnu_board_init(void)
 {
+  a04br3_cpu_load_init();
   a04br3_autoreset_init();
   a04br3_registers_init(); // shared I2C0/I2C2 mux lock before either thread
   a04br3_charger_init(); // explicit opt-in; separate I2C2 owner, no PWRAP
