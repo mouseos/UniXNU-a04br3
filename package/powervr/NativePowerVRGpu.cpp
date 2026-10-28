@@ -85,8 +85,8 @@
 #include "native_powervr_jobs.h"
 extern "C" unsigned native_powervr_io_trace_enabled(void);
 extern "C" unsigned native_powervr_wait_series_enabled(void);
-extern "C" void native_powervr_wait_series_begin(unsigned, uint64_t, uint64_t);
-extern "C" void native_powervr_io_trace_record(uint64_t, uint64_t, uint64_t, uint64_t, unsigned, unsigned, int);
+extern "C" void native_powervr_wait_series_begin(unsigned, uint64_t, uint64_t, uint64_t);
+extern "C" void native_powervr_io_trace_record(uint64_t, uint64_t, uint64_t, uint64_t, unsigned, unsigned, int, uint64_t);
 extern "C" uint64_t mach_absolute_time(void);
 extern "C" uint64_t native_powervr_submit_perf_ioctl_begin(unsigned);
 extern "C" void native_powervr_submit_perf_ioctl_end(unsigned, uint64_t);
@@ -1637,11 +1637,11 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
       if (!strcmp(name,"backboardd")) { ioPid=static_cast<unsigned>(proc_selfpid()); ioTid=thread_tid(current_thread()); ioStart=mach_absolute_time(); }
     }
     if (ioStart && native_powervr_wait_series_enabled()) {
-      native_powervr_wait_series_begin(ioPid,ioTid,wait.fence);
+      native_powervr_wait_series_begin(ioPid,ioTid,wait.fence,reinterpret_cast<uintptr_t>(jobs));
       ioStart=mach_absolute_time(); // exclude diagnostic begin IOLog from wait duration
     }
     const int err = native_powervr_fence_wait(jobs, wait.fence, wait.timeout_ns);
-    if (ioStart) native_powervr_io_trace_record(ioStart,mach_absolute_time(),ioTid,wait.fence,ioPid,1,err);
+    if (ioStart) native_powervr_io_trace_record(ioStart,mach_absolute_time(),ioTid,wait.fence,ioPid,1,err,reinterpret_cast<uintptr_t>(jobs));
     if (waitPerf) native_powervr_wait_perf_end(backboard, waitPerf, err);
     if (!err) return kIOReturnSuccess;
     if (err == -ETIMEDOUT) return kIOReturnTimeout;
@@ -1670,8 +1670,8 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
   uint64_t ioEnd = ioStart ? mach_absolute_time() : 0;
   IOLockUnlock(lock_);
   if (ioStart) {
-    native_powervr_io_trace_record(ioStart,ioLocked,ioTid,0,ioPid,2,0);
-    native_powervr_io_trace_record(ioLocked,ioEnd,ioTid,0,ioPid,3,err);
+    native_powervr_io_trace_record(ioStart,ioLocked,ioTid,0,ioPid,2,0,0);
+    native_powervr_io_trace_record(ioLocked,ioEnd,ioTid,0,ioPid,3,err,0);
   }
   if (closing_) return kIOReturnNotReady;
   if (err) return ioReturnOf(err);

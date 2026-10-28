@@ -508,28 +508,29 @@ extern "C" unsigned native_powervr_wait_series_enabled(void)
 {
   return __atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE);
 }
-extern "C" void native_powervr_wait_series_begin(unsigned pid,uint64_t tid,uint64_t fence)
+extern "C" void native_powervr_wait_series_begin(unsigned pid,uint64_t tid,uint64_t fence,uint64_t owner)
 {
   uint64_t at=mach_absolute_time();
-  if (native_wait_begin(&gNativeWaitSeries,pid,tid,fence,at)) {
+  uint64_t serial=0;
+  if (native_wait_begin(&gNativeWaitSeries,pid,tid,fence,owner,at,&serial)) {
     uint64_t ns=0;absolutetime_to_nanoseconds(at,&ns);
-    IOLog("a04br3 gpu wait begin: clock=mach_absolute_ns pid=%u tid=%llu fence=%llu at_ns=%llu\n",
-          pid,(unsigned long long)tid,(unsigned long long)fence,(unsigned long long)ns);
+    IOLog("a04br3 gpu wait begin: clock=mach_absolute_ns pid=%u tid=%llu fence=%llu series=%llu at_ns=%llu\n",
+          pid,(unsigned long long)tid,(unsigned long long)fence,(unsigned long long)serial,(unsigned long long)ns);
   }
 }
 extern "C" void native_powervr_io_trace_record(uint64_t start, uint64_t end, uint64_t tid,
-                                               uint64_t fence, unsigned pid, unsigned kind, int result)
+                                               uint64_t fence, unsigned pid, unsigned kind, int result,uint64_t owner)
 {
   if (!start || end < start) return;
   NativeIoRecord record = {start, end, tid, fence, pid, kind, result};
   native_io_record(&gNativeIoTrace, record);
   NativeWaitResult series={};
-  if (kind==1 && native_wait_end(&gNativeWaitSeries,pid,tid,fence,start,end,result,result!=-ETIMEDOUT,&series)) {
+  if (kind==1 && native_wait_end(&gNativeWaitSeries,pid,tid,fence,owner,start,end,result,result!=-ETIMEDOUT,&series)) {
     uint64_t firstNs=0,lastNs=0,sumNs=0;
     absolutetime_to_nanoseconds(series.first,&firstNs);absolutetime_to_nanoseconds(series.last,&lastNs);
     absolutetime_to_nanoseconds(series.sum,&sumNs);
-    IOLog("a04br3 gpu wait series: clock=mach_absolute_ns pid=%u tid=%llu fence=%llu start_ns=%llu end_ns=%llu sum_ns=%llu count=%u errors=%u result=%d\n",
-          series.pid,(unsigned long long)series.tid,(unsigned long long)series.fence,
+    IOLog("a04br3 gpu wait series: clock=mach_absolute_ns pid=%u tid=%llu fence=%llu series=%llu start_ns=%llu end_ns=%llu sum_ns=%llu count=%u errors=%u result=%d\n",
+          series.pid,(unsigned long long)series.tid,(unsigned long long)series.fence,(unsigned long long)series.serial,
           (unsigned long long)firstNs,(unsigned long long)lastNs,(unsigned long long)sumNs,series.count,series.errors,series.result);
   }
   if (native_io_immediate_claim(&gNativeIoTrace, record)) {

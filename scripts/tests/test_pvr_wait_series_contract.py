@@ -2,7 +2,7 @@
 from pathlib import Path
 p=Path(__file__).resolve().parents[2]/'package/powervr'
 gpu=(p/'NativePowerVRGpu.cpp').read_text();jobs=(p/'NativePowerVRJobs.cpp').read_text()
-a=gpu.index('native_powervr_wait_series_begin(ioPid,ioTid,wait.fence)')
+a=gpu.index('native_powervr_wait_series_begin(ioPid,ioTid,wait.fence,reinterpret_cast<uintptr_t>(jobs))')
 b=gpu.index('const int err = native_powervr_fence_wait(jobs, wait.fence',a)
 c=gpu.index('native_powervr_io_trace_record(ioStart,mach_absolute_time()',b)
 assert a<b<c and 'ioStart=mach_absolute_time()' in gpu[a:b]
