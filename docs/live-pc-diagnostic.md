@@ -1,8 +1,9 @@
 # Opt-in launchd timer samples
 
 For automatic backboardd diagnosis, build with the same timer hook and set
-`a04br3-live-pc-backboard=1`. It takes precedence over both numeric options;
-any other explicit value disables sampling. If `a04br3-proclog` is absent or
+`a04br3-live-pc-backboard=1` or its short spelling `a04br3-bbpc=1`. These
+take precedence over both numeric options; any explicit value other than 1,
+including either invalid or conflicting spelling, disables sampling. If `a04br3-proclog` is absent or
 zero, this mode starts the reporting worker with a 10-second interval. The
 worker searches `proc_best_name` for `backboardd` on each report and enables
 sampling only when exactly one eligible match is seen. The process list scan

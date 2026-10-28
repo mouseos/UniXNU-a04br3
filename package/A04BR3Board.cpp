@@ -419,8 +419,12 @@ extern "C" void unixnu_board_init(void)
   if (!live_pc_pid_arg(PE_boot_args(), &livePcPid))
     livePcPid = livePc == 1 ? 1 : 0;
   uint32_t livePcAuto = 0;
-  const bool autoPresent = live_pc_uint_arg(PE_boot_args(), "a04br3-live-pc-backboard", &livePcAuto);
-  gLivePcAuto = autoPresent && livePcAuto == 1;
+  uint32_t livePcShort = 0;
+  const bool autoLong = live_pc_uint_arg(PE_boot_args(), "a04br3-live-pc-backboard", &livePcAuto);
+  const bool autoShort = live_pc_uint_arg(PE_boot_args(), "a04br3-bbpc", &livePcShort);
+  const bool autoPresent = autoLong || autoShort;
+  // Conflicting or invalid spellings fail closed, including against PID mode.
+  gLivePcAuto = autoPresent && (!autoLong || livePcAuto == 1) && (!autoShort || livePcShort == 1);
   if (autoPresent) {
     if (gLivePcAuto) boot_live_pc_auto_init();
     else boot_live_pc_init(0);

@@ -95,6 +95,11 @@ int main() {
  arguments="a04br3-live-pc-pid-extra=56";select_pid();assert(result==1);
  arguments="a04br3-live-pc-pid=56 a04br3-live-pc-pid=57";select_pid();assert(result==56);
  arguments="a04br3-live-pc-backboard=1";select_pid();assert(result==999 && gLivePcAuto);
+ arguments="a04br3-bbpc=1";select_pid();assert(result==999 && gLivePcAuto);
+ arguments="a04br3-bbpc=1 a04br3-live-pc-backboard=1";select_pid();assert(result==999 && gLivePcAuto);
+ arguments="a04br3-bbpc=1 a04br3-live-pc-backboard=0";select_pid();assert(result==0 && !gLivePcAuto);
+ arguments="a04br3-bbpc=bad a04br3-live-pc-backboard=1";select_pid();assert(result==0 && !gLivePcAuto);
+ arguments="a04br3-bbpc=4294967297 a04br3-live-pc-pid=56";select_pid();assert(result==0 && !gLivePcAuto);
  arguments="a04br3-live-pc-backboard=4294967297 a04br3-live-pc-pid=56";select_pid();assert(result==0 && !gLivePcAuto);
  arguments="a04br3-live-pc-backboard=0 a04br3-live-pc-pid=56";select_pid();assert(result==0 && !gLivePcAuto);
 }
