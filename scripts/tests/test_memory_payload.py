@@ -100,6 +100,9 @@ esac
         assert result.returncode == 0, result.stdout + result.stderr
         assert f'build kernel -D {device} uuid={UUID}' in calls
         assert f'build payload -D {device}' in calls
+        payload_call = next(line for line in calls.splitlines() if line.startswith('build payload '))
+        assert 'native-msdc-iostat=1' in payload_call and 'a04br3-membench=1' in payload_call
+        assert 'sheng-fb-gpu=1' in payload_call
         active = (runner/'current').resolve()
         assert active.is_dir()
         record = json.loads((active/'a04br3-memory-inputs.json').read_text())

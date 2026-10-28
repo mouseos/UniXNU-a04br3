@@ -57,7 +57,13 @@ It is not a promise to preserve an existing persistent store's contents. For a
 new seed, choose an empty `RUNNER_TEMP`; incomplete or UUID-mismatched reuse
 inputs are rejected. The build enables the PowerVR probe build and Metal publish
 mode, preserving GPU composition (`sheng-fb-gpu=1`); it adds the diagnostic
-boot argument and diagnostic heartbeat. The generated owner trust bundle
+boot argument and diagnostic heartbeat. The profile enables
+`native-msdc-iostat=1`, which also starts the per-CPU load reporter in this
+device revision. MSDC timing still requires a matching NativeMsdc source;
+missing counters are not zero. The integration was prepared against UniXNU
+`b9824adabfa7206dc07978f183474960856085fc` with NativeMsdc
+`965ecd384a9fbd33b21674380edddd2bd57a4acc`; the source and submodule must be
+pinned and checked for the target build. The generated owner trust bundle
 includes the signed benchmark CDHash. `--skip-setup` can optionally be passed
 after the explicit flag. The usual UniXNU configuration of a platform seed is
 still required. Build prerequisites and the signed GPU components remain those
@@ -105,5 +111,6 @@ python3 scripts/tests/test_memory_bench_launch.py
 python3 scripts/tests/test_memory_payload.py
 python3 scripts/tests/test_memory_real_git.py
 UNIXNU_ROOT=/path/to/UniXNU python3 scripts/tests/test_memory_tree_scripts.py
+UNIXNU_ROOT=/path/to/UniXNU python3 scripts/tests/test_memory_iostat_profile.py
 python3 scripts/tests/test_a04br3_pre_build_seed_reuse.py
 ```
