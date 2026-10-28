@@ -1,5 +1,25 @@
 # Opt-in launchd timer samples
 
+For automatic backboardd diagnosis, build with the same timer hook and set
+`a04br3-live-pc-backboard=1`. It takes precedence over both numeric options;
+any other explicit value disables sampling. If `a04br3-proclog` is absent or
+zero, this mode starts the reporting worker with a 10-second interval. The
+worker searches `proc_best_name` for `backboardd` on each report and enables
+sampling only when exactly one eligible match is seen. The process list scan
+waits for process transitions and may block; the first selection may be delayed
+until the next report. The target line records match
+count, PID, unique ID and exec version. Duplicate matches disable collection.
+
+The IRQ hook never scans or locks. A bounded sequence check rejects a target
+snapshot if publication overlaps it. It checks the interrupted process against
+the selected PID, unique ID and exec version, so PID reuse or an exec prevents
+new samples until the worker observes the new identity. Each sample has its
+own PID, unique ID and exec version: ring entries from the preceding target
+can be drained after a selection change, and the report header alone must not
+be used to attribute them. Image reports also reject a target whose identity
+changed before lookup. A scan can miss a short-lived process or overlapping
+transitions; sampling and process/image observations remain non-atomic.
+
 Build with the companion UniXNU timer patch and `XNU_IRQ_PC_STATS=1`; the default
 is zero. Set `a04br3-live-pc=1 a04br3-proclog=10` at boot to observe PID 1.
 The separate runtime gate defaults to zero. Existing `native-irq-pid` / home

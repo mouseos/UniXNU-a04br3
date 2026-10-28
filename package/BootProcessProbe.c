@@ -494,23 +494,64 @@ void boot_ast_caller_report(void) {
 #define LIVE_PC_CPUS 4u
 #define LIVE_PC_SLOTS 64u
 #define LIVE_PC_RATE 16u
-struct live_pc_row { uint64_t stamp,pc,lr,tid,uid; unsigned user,exec_version; };
+struct live_pc_row { uint64_t stamp,pc,lr,tid,uid; unsigned user,exec_version,pid; };
 struct live_pc_cpu { uint64_t ticks,written; struct live_pc_row rows[LIVE_PC_SLOTS]; } __attribute__((aligned(64)));
 int proc_pidversion(proc_t);
 proc_t proc_find(int);
 int proc_rele(proc_t);
 static struct live_pc_cpu live_pc_cpus[LIVE_PC_CPUS];
 static unsigned live_pc_pid,live_pc_bad_cpu;
+static unsigned live_pc_auto,live_pc_target_version;
+static uint64_t live_pc_target_uid,live_pc_target_seq;
 static uint64_t live_pc_previous[LIVE_PC_CPUS],live_pc_epoch,live_pc_start;
 extern char bootsessionuuid_string[37] __attribute__((weak_import));
 void boot_live_pc_init(unsigned pid) { __atomic_store_n(&live_pc_pid,pid,__ATOMIC_RELEASE); }
+void boot_live_pc_auto_init(void) { __atomic_store_n(&live_pc_auto,1,__ATOMIC_RELEASE); }
+struct live_pc_selection { unsigned count,pid,version; uint64_t uid; };
+// Only the process-log worker performs discovery. proc_iterate supplies a
+// referenced process and can block; it must never run in the timer hook.
+static int live_pc_select(proc_t p,void *arg) {
+ struct live_pc_selection *s=arg;
+ if(strcmp(proc_best_name(p),"backboardd"))return PROC_RETURNED;
+ ++s->count;
+ int pid=proc_pid(p);uint64_t uid=proc_uniqueid(p);
+ if(pid>0 && uid){s->pid=(unsigned)pid;s->uid=uid;s->version=(unsigned)proc_pidversion(p);}
+ return PROC_RETURNED;
+}
+static void live_pc_refresh_target(void) {
+ struct live_pc_selection s={0};
+ proc_iterate(PROC_ALLPROCLIST,live_pc_select,&s,NULL,NULL);
+ // A sequence protects the entire identity. The hook makes one bounded
+ // attempt and drops the sample if publication overlaps it.
+ uint64_t seq=__atomic_load_n(&live_pc_target_seq,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_seq,seq+1,__ATOMIC_SEQ_CST);
+ __atomic_thread_fence(__ATOMIC_SEQ_CST);
+ __atomic_store_n(&live_pc_pid,s.count==1 && s.uid ? s.pid : 0,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_version,s.version,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_uid,s.count==1 ? s.uid : 0,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_seq,seq+2,__ATOMIC_RELEASE);
+ printf("a04br3 livepc target name=backboardd matches=%u pid=%u uid=%llu exec_version=%u\n",s.count,s.count==1 && s.uid?s.pid:0,(unsigned long long)(s.count==1?s.uid:0),s.version);
+}
 // IRQs masked: the current CPU is the sole writer of its ring. Only bounded
 // loads/stores are used: no retrying RMW, lock, allocation, scan, or logging.
 void native_live_pc_sample(uint64_t pc,uint64_t lr,unsigned user) {
+ unsigned auto_mode=__atomic_load_n(&live_pc_auto,__ATOMIC_ACQUIRE);
+ uint64_t selection_seq=auto_mode?__atomic_load_n(&live_pc_target_seq,__ATOMIC_ACQUIRE):0;
+ if(auto_mode && (selection_seq&1))return;
  unsigned pid=__atomic_load_n(&live_pc_pid,__ATOMIC_ACQUIRE);
+ uint64_t expected=auto_mode?__atomic_load_n(&live_pc_target_uid,__ATOMIC_RELAXED):0;
+ unsigned target_version=auto_mode?__atomic_load_n(&live_pc_target_version,__ATOMIC_RELAXED):0;
+ if(auto_mode) {
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  if(__atomic_load_n(&live_pc_target_seq,__ATOMIC_ACQUIRE)!=selection_seq)return;
+ }
  if(!pid || !pc)return;
  proc_t p=(proc_t)get_bsdtask_info(current_task());
  if(!p || proc_getpid(p)!=(int)pid)return;
+ uint64_t uid=proc_uniqueid(p);unsigned version=(unsigned)proc_pidversion(p);
+ if(auto_mode) {
+  if(!expected || uid!=expected || version!=target_version)return;
+ }
  unsigned cpu=(unsigned)cpu_number();
  if(cpu>=LIVE_PC_CPUS){__atomic_store_n(&live_pc_bad_cpu,1,__ATOMIC_RELAXED);return;}
  struct live_pc_cpu *c=&live_pc_cpus[cpu];
@@ -524,16 +565,21 @@ void native_live_pc_sample(uint64_t pc,uint64_t lr,unsigned user) {
  __atomic_store_n(&r->pc,pc,__ATOMIC_RELAXED);
  __atomic_store_n(&r->lr,lr,__ATOMIC_RELAXED);
  __atomic_store_n(&r->tid,current_thread()->thread_id,__ATOMIC_RELAXED);
- __atomic_store_n(&r->uid,proc_uniqueid(p),__ATOMIC_RELAXED);
- __atomic_store_n(&r->exec_version,(unsigned)proc_pidversion(p),__ATOMIC_RELAXED);
+ __atomic_store_n(&r->uid,uid,__ATOMIC_RELAXED);
+ __atomic_store_n(&r->exec_version,version,__ATOMIC_RELAXED);
+ __atomic_store_n(&r->pid,pid,__ATOMIC_RELAXED);
  __atomic_store_n(&r->user,user,__ATOMIC_RELAXED);
  __atomic_store_n(&r->stamp,2*seq+2,__ATOMIC_RELEASE);
  __atomic_store_n(&c->written,seq+1,__ATOMIC_RELEASE);
 }
-static void live_pc_image_report(unsigned pid,uint64_t epoch);
+static void live_pc_image_report(unsigned pid,uint64_t epoch,uint64_t expected_uid,unsigned expected_version);
 void boot_live_pc_report(void) {
+ unsigned auto_mode=__atomic_load_n(&live_pc_auto,__ATOMIC_ACQUIRE);
+ if(auto_mode)live_pc_refresh_target();
  unsigned pid=__atomic_load_n(&live_pc_pid,__ATOMIC_ACQUIRE);
- if(!pid)return;
+ if(!pid && !auto_mode)return;
+ uint64_t target_uid=auto_mode?__atomic_load_n(&live_pc_target_uid,__ATOMIC_ACQUIRE):0;
+ unsigned target_version=auto_mode?__atomic_load_n(&live_pc_target_version,__ATOMIC_RELAXED):0;
  uint64_t now=mach_absolute_time(),start=live_pc_start;live_pc_start=now;
  uint64_t epoch=++live_pc_epoch,ns=0,start_ns=0;
  absolutetime_to_nanoseconds(now,&ns);if(start)absolutetime_to_nanoseconds(start,&start_ns);
@@ -549,14 +595,14 @@ void boot_live_pc_report(void) {
    uint64_t stamp=__atomic_load_n(&r->stamp,__ATOMIC_ACQUIRE);
    uint64_t pc=__atomic_load_n(&r->pc,__ATOMIC_RELAXED),lr=__atomic_load_n(&r->lr,__ATOMIC_RELAXED);
    uint64_t tid=__atomic_load_n(&r->tid,__ATOMIC_RELAXED),uid=__atomic_load_n(&r->uid,__ATOMIC_RELAXED);
-   unsigned user=__atomic_load_n(&r->user,__ATOMIC_RELAXED),version=__atomic_load_n(&r->exec_version,__ATOMIC_RELAXED);
+   unsigned user=__atomic_load_n(&r->user,__ATOMIC_RELAXED),version=__atomic_load_n(&r->exec_version,__ATOMIC_RELAXED),sample_pid=__atomic_load_n(&r->pid,__ATOMIC_RELAXED);
    __atomic_thread_fence(__ATOMIC_ACQUIRE);
    if(stamp!=2*seq+2 || __atomic_load_n(&r->stamp,__ATOMIC_ACQUIRE)!=stamp){torn++;continue;}
-   printf("a04br3 livepc sample epoch=%llu cpu=%u seq=%llu uid=%llu exec_version=%u tid=%llu mode=%s pc=%llx lr=%llx\n",(unsigned long long)epoch,cpu,(unsigned long long)seq,(unsigned long long)uid,version,(unsigned long long)tid,user?"user":"kernel-unslid",(unsigned long long)pc,(unsigned long long)lr);
+   printf("a04br3 livepc sample epoch=%llu cpu=%u seq=%llu pid=%u uid=%llu exec_version=%u tid=%llu mode=%s pc=%llx lr=%llx\n",(unsigned long long)epoch,cpu,(unsigned long long)seq,sample_pid,(unsigned long long)uid,version,(unsigned long long)tid,user?"user":"kernel-unslid",(unsigned long long)pc,(unsigned long long)lr);
   }
   printf("a04br3 livepc cpu=%u epoch=%llu ticks=%llu end=%llu lost=%llu torn=%llu\n",cpu,(unsigned long long)epoch,(unsigned long long)__atomic_load_n(&c->ticks,__ATOMIC_RELAXED),(unsigned long long)end,(unsigned long long)lost,(unsigned long long)torn);
  }
- live_pc_image_report(pid,epoch);
+ if(pid)live_pc_image_report(pid,epoch,target_uid,target_version);
 }
 
 // dyld_all_image_infos prefix and dyld_image_info are the 64-bit ABI. Only
@@ -601,11 +647,12 @@ static void live_image_decode(vm_map_t map,uint64_t addr,struct live_image_row *
 // Follow XNU's task_for_pid pattern: proc_find supplies an exec-stable proc
 // reference; obtain a task reference while it is held, then release the proc
 // before user memory reads. Re-find and compare identity afterwards.
-static void live_pc_image_report(unsigned pid,uint64_t epoch) {
+static void live_pc_image_report(unsigned pid,uint64_t epoch,uint64_t expected_uid,unsigned expected_version) {
  uint64_t start=mach_absolute_time(),start_ns=0,end_ns=0;
  proc_t p=proc_find((int)pid);
  if(!p){printf("a04br3 livepc images epoch=%llu status=failed reason=proc_unavailable\n",(unsigned long long)epoch);return;}
  uint64_t uid=proc_uniqueid(p);unsigned exec_version=(unsigned)proc_pidversion(p);
+ if(expected_uid && (expected_uid!=uid || expected_version!=exec_version)){proc_rele(p);printf("a04br3 livepc images epoch=%llu status=changed reason=target_reused_or_exec\n",(unsigned long long)epoch);return;}
  task_t task=proc_task(p);
  if(!uid || !task){proc_rele(p);printf("a04br3 livepc images epoch=%llu status=failed reason=task_unavailable\n",(unsigned long long)epoch);return;}
  task_reference(task);

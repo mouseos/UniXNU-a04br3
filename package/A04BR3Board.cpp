@@ -38,6 +38,7 @@ void boot_memory_snapshot(uint64_t out[7]);
 void boot_home_perf_sample(void);
 void boot_home_irq_init(unsigned);
 void boot_live_pc_init(unsigned);
+void boot_live_pc_auto_init(void);
 void boot_live_pc_report(void);
 unsigned boot_home_irq_hook_available(void);
 void boot_home_irq_report(void);
@@ -160,6 +161,7 @@ constexpr unsigned kProcAll = 0x1;       // PROC_ALLPROCLIST
 constexpr int kProcReturned = 0;         // PROC_RETURNED
 struct ProcLine { char text[480]; unsigned used; unsigned count; };
 unsigned gProcLogSeconds;
+bool gLivePcAuto;
 
 void procFlush(ProcLine &line)
 {
@@ -370,7 +372,10 @@ void procLogThread(void *, wait_result_t)
 
 static void a04br3_proclog_init(void)
 {
-  if (!PE_parse_boot_argn("a04br3-proclog", &gProcLogSeconds, sizeof(gProcLogSeconds)) || !gProcLogSeconds) return;
+  if (!PE_parse_boot_argn("a04br3-proclog", &gProcLogSeconds, sizeof(gProcLogSeconds)) || !gProcLogSeconds) {
+    if (!gLivePcAuto) return;
+    gProcLogSeconds = 10;
+  }
   thread_t thread;
   if (kernel_thread_start(procLogThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
@@ -413,7 +418,13 @@ extern "C" void unixnu_board_init(void)
   // retains its original PID 1-only semantics.
   if (!live_pc_pid_arg(PE_boot_args(), &livePcPid))
     livePcPid = livePc == 1 ? 1 : 0;
-  boot_live_pc_init(livePcPid);
+  uint32_t livePcAuto = 0;
+  const bool autoPresent = live_pc_uint_arg(PE_boot_args(), "a04br3-live-pc-backboard", &livePcAuto);
+  gLivePcAuto = autoPresent && livePcAuto == 1;
+  if (autoPresent) {
+    if (gLivePcAuto) boot_live_pc_auto_init();
+    else boot_live_pc_init(0);
+  } else boot_live_pc_init(livePcPid);
   unsigned ipiReasonPerf = 0;
   PE_parse_boot_argn("a04br3-home-perf", &ipiReasonPerf, sizeof(ipiReasonPerf));
   boot_ipi_reason_enable(ipiReasonPerf);

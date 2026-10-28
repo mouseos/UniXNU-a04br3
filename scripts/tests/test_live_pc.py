@@ -67,7 +67,7 @@ int main() {
 #include <cassert>
 #include "LivePcPid.h"
 static unsigned old_value, result;
-static bool old_present;
+static bool old_present, gLivePcAuto;
 static const char *arguments;
 static const char *PE_boot_args() { return arguments; }
 static bool PE_parse_boot_argn(const char *name, void *out, unsigned size) {
@@ -77,6 +77,7 @@ static bool PE_parse_boot_argn(const char *name, void *out, unsigned size) {
  *(unsigned *)out=old_value; return true;
 }
 static void boot_live_pc_init(unsigned pid) { result=pid; }
+static void boot_live_pc_auto_init() { result=999; }
 static void select_pid() {
 '''
   suffix=r'''
@@ -93,6 +94,9 @@ int main() {
  for(auto arg:invalid){arguments=arg;select_pid();assert(result==0);}
  arguments="a04br3-live-pc-pid-extra=56";select_pid();assert(result==1);
  arguments="a04br3-live-pc-pid=56 a04br3-live-pc-pid=57";select_pid();assert(result==56);
+ arguments="a04br3-live-pc-backboard=1";select_pid();assert(result==999 && gLivePcAuto);
+ arguments="a04br3-live-pc-backboard=4294967297 a04br3-live-pc-pid=56";select_pid();assert(result==0 && !gLivePcAuto);
+ arguments="a04br3-live-pc-backboard=0 a04br3-live-pc-pid=56";select_pid();assert(result==0 && !gLivePcAuto);
 }
 '''
   with tempfile.TemporaryDirectory() as tmp:
@@ -105,8 +109,9 @@ int main() {
   source=(ROOT/'package/BootProcessProbe.c').read_text()
   code=source[source.index('// Separate opt-in timer-interrupted samples;'):]
   code=code.replace('__atomic_thread_fence(__ATOMIC_ACQUIRE);\n   if(stamp', '__atomic_thread_fence(__ATOMIC_ACQUIRE);\n   test_interference();\n   if(stamp')
+  code=code.replace('unsigned target_version=auto_mode?', 'test_selection_interference();\n unsigned target_version=auto_mode?')
   irq=code[code.index('void native_live_pc_sample'):code.index('static void live_pc_image_report')]
-  for forbidden in ('for(', 'while(', '__atomic_fetch_', '__atomic_exchange_', '__atomic_compare_exchange_', 'printf(', 'task_lock'):
+  for forbidden in ('for(', 'while(', '__atomic_fetch_', '__atomic_exchange_', '__atomic_compare_exchange_', 'printf(', 'task_lock', 'proc_iterate', 'proc_best_name', 'proc_find'):
    self.assertNotIn(forbidden,irq)
   prefix=r'''
 #include <stdint.h>
@@ -115,6 +120,9 @@ int main() {
 #include <assert.h>
 #include <pthread.h>
 #define KERN_SUCCESS 0
+#define PROC_RETURNED 0
+#define PROC_ALLPROCLIST 1
+#define PROC_NOWAITTRANS 4
 typedef struct process *proc_t;
 typedef struct task *task_t;
 typedef void *vm_map_t;
@@ -122,12 +130,19 @@ struct task {vm_map_t map; uint32_t task_shared_region_slide;};
 struct process {int pid,version; uint64_t uid; struct task task;};
 struct thread {uint64_t thread_id;};
 static struct process process={1,7,42,{(void *)1,0x1000}};
+static const char *test_name="backboardd";
+static int process_count=1;
 static _Thread_local unsigned test_cpu;
 static _Thread_local struct thread thread={99};
 static uint64_t image_info_address, mutate_address, fail_address;
 static int mutate_on_read,mutate_reads, refs, proc_refs, change_version_on_read, inject_torn;
+static int inject_selection;
 static void test_interference(void);
+static void test_selection_interference(void);
 static int proc_getpid(proc_t p){return p->pid;}
+static int proc_pid(proc_t p){return p->pid;}
+static const char *proc_best_name(proc_t p){(void)p;return test_name;}
+static void proc_iterate(unsigned flags,int (*cb)(proc_t,void *),void *arg,int (*filter)(proc_t,void *),void *farg){assert(flags==PROC_ALLPROCLIST);(void)filter;(void)farg;for(int i=0;i<process_count;i++)cb(&process,arg);}
 static uint64_t proc_uniqueid(proc_t p){return p->uid;}
 int proc_pidversion(proc_t p){return p->version;}
 static task_t proc_task(proc_t p){assert(proc_refs>0);return &p->task;}
@@ -152,13 +167,40 @@ static int vm_map_read_user(vm_map_t m,uint64_t a,void *p,unsigned n){(void)m;if
   suffix=r'''
 char bootsessionuuid_string[37]="test-boot";
 static void test_interference(void){if(inject_torn){inject_torn=0;for(unsigned i=0;i<1100;i++)native_live_pc_sample(0x7000+i,(0x7000+i)^0x55aa,1);}}
+static void test_selection_interference(void){if(inject_selection){inject_selection=0;
+ uint64_t s=__atomic_load_n(&live_pc_target_seq,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_seq,s+1,__ATOMIC_SEQ_CST);__atomic_thread_fence(__ATOMIC_SEQ_CST);
+ __atomic_store_n(&live_pc_pid,2,__ATOMIC_RELAXED);__atomic_store_n(&live_pc_target_uid,43,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_version,8,__ATOMIC_RELAXED);__atomic_store_n(&live_pc_target_seq,s+2,__ATOMIC_RELEASE);
+ }}
 static void *writer(void *arg){test_cpu=(unsigned)(uintptr_t)arg;thread.thread_id=100+test_cpu;for(unsigned i=0;i<100000;i++){uint64_t pc=0x10000000ULL+((uint64_t)test_cpu<<24)+i;native_live_pc_sample(pc,pc^0x55aa,1);}return 0;}
+static void *selection_writer(void *arg){(void)arg;for(unsigned i=0;i<100000;i++){
+ uint64_t s=__atomic_load_n(&live_pc_target_seq,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_seq,s+1,__ATOMIC_SEQ_CST);__atomic_thread_fence(__ATOMIC_SEQ_CST);
+ __atomic_store_n(&live_pc_pid,1,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_version,(i&1)?7:8,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_uid,(i&1)?43:42,__ATOMIC_RELAXED);
+ __atomic_store_n(&live_pc_target_seq,s+2,__ATOMIC_RELEASE);
+ }return 0;}
 int main(void){
  boot_live_pc_init(0);native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==0);
  boot_live_pc_init(56);native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==0);
  process.pid=56;native_live_pc_sample(0x2222,0x3333,1);assert(live_pc_cpus[0].written==1);
  process.pid=1;native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].written==1);
  memset(live_pc_cpus,0,sizeof(live_pc_cpus));
+ boot_live_pc_auto_init();process_count=0;live_pc_refresh_target();native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==0);
+ process_count=1;process.pid=56;live_pc_refresh_target();native_live_pc_sample(0x2222,0x7777,1);assert(live_pc_cpus[0].written==1);
+ assert(live_pc_cpus[0].rows[0].pid==56 && live_pc_cpus[0].rows[0].uid==42 && live_pc_cpus[0].rows[0].exec_version==7);
+ process.uid=43;native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].written==1 && live_pc_cpus[0].ticks==1); /* same PID, new process */
+ live_pc_refresh_target();native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==2);
+ process.version=8;native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==2); /* exec before refresh */
+ live_pc_refresh_target();native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==3);
+ process_count=2;live_pc_refresh_target();native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==3);
+ process_count=1;test_name="other";live_pc_refresh_target();native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==3);
+ /* Force an old PID/UID with a new exec version across publication. */
+ test_name="backboardd";process.pid=1;process.uid=42;process.version=7;live_pc_refresh_target();
+ process.version=8;inject_selection=1;native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==3);
+ live_pc_auto=0;process.pid=1;process.uid=42;process.version=7;memset(live_pc_cpus,0,sizeof(live_pc_cpus));
  boot_live_pc_init(1);native_live_pc_sample(0x1234,0x1234^0x55aa,1);assert(live_pc_cpus[0].written==1);
  test_cpu=9;native_live_pc_sample(1,2,1);assert(live_pc_bad_cpu==1);test_cpu=0;
  uint8_t macho[160]={0};struct live_macho_head *h=(void *)macho;h->magic=0xfeedfacf;h->ncmds=2;h->sizeofcmds=96;
@@ -167,16 +209,24 @@ int main(void){
  uint64_t checked=0;assert(live_image_entry_address(UINT64_MAX-10,1,&checked)!=0);assert(live_image_entry_address(UINT64_MAX-24,1,&checked)==0 && checked==UINT64_MAX);
  struct live_image_row row={0};live_image_decode((void *)1,(uintptr_t)macho,&row);assert(row.complete && row.uuid_valid && row.text_valid && row.text_vm==vm);
  struct live_image_info entry={(uintptr_t)macho,0,0};struct live_info_head info={15,1,(uintptr_t)&entry,0,0,1,{0},0};image_info_address=(uintptr_t)&info;
- live_pc_image_report(1,1011);assert(!refs && !proc_refs);
- mutate_address=(uintptr_t)&entry;mutate_on_read=2;mutate_reads=0;live_pc_image_report(1,1012);assert(!refs && !proc_refs);
- mutate_address=0;fail_address=(uintptr_t)(macho+56);live_pc_image_report(1,1013);fail_address=0;
- change_version_on_read=1;live_pc_image_report(1,1014);assert(!refs && !proc_refs);process.version=7;
- fail_address=(uintptr_t)&info;live_pc_image_report(1,1015);fail_address=0;
+ live_pc_image_report(1,1011,0,0);assert(!refs && !proc_refs);
+ mutate_address=(uintptr_t)&entry;mutate_on_read=2;mutate_reads=0;live_pc_image_report(1,1012,0,0);assert(!refs && !proc_refs);
+ mutate_address=0;fail_address=(uintptr_t)(macho+56);live_pc_image_report(1,1013,0,0);fail_address=0;
+ change_version_on_read=1;live_pc_image_report(1,1014,0,0);assert(!refs && !proc_refs);process.version=7;
+ fail_address=(uintptr_t)&info;live_pc_image_report(1,1015,0,0);fail_address=0;
+ live_pc_image_report(1,1016,999,7);live_pc_image_report(1,1017,42,8);assert(!refs && !proc_refs);
  h->ncmds=3;memset(&row,0,sizeof(row));live_image_decode((void *)1,(uintptr_t)macho,&row);assert(row.valid && !row.complete);h->ncmds=2;
  for(unsigned i=0;i<2000;i++)native_live_pc_sample(0x9000+i,(0x9000+i)^0x55aa,1);inject_torn=1;boot_live_pc_report();
  pthread_t a,b;pthread_create(&a,0,writer,(void *)0);pthread_create(&b,0,writer,(void *)1);
  for(unsigned i=0;i<15;i++)boot_live_pc_report();
  pthread_join(a,0);pthread_join(b,0);boot_live_pc_report();
+ /* Neither published identity matches (1,42,7); only a torn mixture would. */
+ memset(live_pc_cpus,0,sizeof(live_pc_cpus));memset(live_pc_previous,0,sizeof(live_pc_previous));
+ __atomic_store_n(&live_pc_target_version,8,__ATOMIC_RELAXED);__atomic_store_n(&live_pc_target_uid,42,__ATOMIC_RELEASE);
+ boot_live_pc_auto_init();pthread_create(&a,0,writer,(void *)0);pthread_create(&b,0,selection_writer,0);
+ pthread_join(a,0);pthread_join(b,0);
+ assert(live_pc_cpus[0].ticks==0 && live_pc_cpus[0].written==0);
+ __atomic_store_n(&live_pc_auto,0,__ATOMIC_RELEASE);
  assert(!refs && !proc_refs);return 0;
 }
 '''
@@ -191,6 +241,9 @@ int main(void){
    self.assertIn('exec_version=',row);self.assertIn('dyld_version=',row)
    self.assertIn('snapshot=nonatomic',row)
   self.assertFalse(any('livepc image epoch=1012 ' in x or 'livepc image epoch=1014 ' in x for x in lines))
+  for epoch in (1016,1017):
+   self.assertTrue(any(f'images epoch={epoch} status=changed reason=target_reused_or_exec' in x for x in lines))
+   self.assertFalse(any(f'livepc image epoch={epoch} ' in x for x in lines))
   partial=next(x for x in lines if 'livepc image epoch=1013 ' in x)
   self.assertIn('detail_complete=0',partial)
   self.assertIn('text_valid=0',partial)
