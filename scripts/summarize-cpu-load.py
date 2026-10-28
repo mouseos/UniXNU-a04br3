@@ -47,7 +47,7 @@ def verify_inputs(capture, flash, source):
     reasons=list(REASON.finditer(data))
     if not reasons or any(x.start()<anchor or x.start()>=first for x in reasons):
         raise ValueError('boot reason absent or appears after CPU sampling')
-    identity={'source_prefix_sha256':h.hexdigest(),'source_prefix_end_offset':start+len(data),
+    identity={'parser_sha256':sha(open(__file__,'rb').read()),'source_prefix_sha256':h.hexdigest(),'source_prefix_end_offset':start+len(data),
               'capture_sha256':sha(data),'boot_segment_sha256':sha(data[anchor:]),
               'boot_start_offset_in_capture':anchor,'uart_reboot_offset':start,
               'flash_manifest_sha256':sha(flash_data),'boot_image_sha256':boot_hash,

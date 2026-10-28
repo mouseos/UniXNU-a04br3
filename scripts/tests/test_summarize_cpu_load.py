@@ -29,6 +29,7 @@ with tempfile.TemporaryDirectory(prefix='cpu-load-') as d:
  rows=[json.loads(x) for x in p.stdout.splitlines()];assert len(rows)==1
  r=rows[0];assert len(r['cores'])==4 and all(c['non_idle_percent']==10 and c['duration_ns']==10_000_000_000 for c in r['cores'])
  assert r['combined_non_idle_percent']==10 and r['capture_sha256']==hashlib.sha256(good).hexdigest()
+ assert r['parser_sha256']==hashlib.sha256(script.read_bytes()).hexdigest()
  assert r['uart_reboot_offset']==offset and r['source_prefix_end_offset']==offset+len(good)
  assert r['source_prefix_sha256']==hashlib.sha256(b'x'*offset+good).hexdigest()
  # A true 32-bit wrap yields a small, bounded delta; a reset producing a huge delta is refused.

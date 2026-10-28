@@ -718,7 +718,7 @@ python3 device/scripts/summarize-cpu-load.py \
 
 flash 記録の `uart_offset_before_reboot` から UART 原本を読み、解析時点の
 capture 全体とバイト単位で一致することを必須とします。JSON 各行には flash
-記録、boot image、capture、boot 区間、捕捉終端までの UART 原本 prefix の
+記録、解析 script、boot image、capture、boot 区間、捕捉終端までの UART 原本 prefix の
 SHA-256 と各 offset・長さを記録します。ログが後から伸びても、その時点の
 snapshot を識別できます。flash 記録のハッシュとバイト一致は、実機が実際に
 どの image で起動したかを独立に証明するものではありません。preloader と
