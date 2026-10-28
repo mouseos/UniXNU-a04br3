@@ -6,13 +6,14 @@ import json
 import re
 import sys
 
-header = re.compile(r'a04br3 msdc io sample begin_ns=(\d+) end_ns=(\d+) non_atomic=1')
-row = re.compile(r'a04br3 msdc transfer mode=(dma_read|pio_read|write) size=(le4k|4k_16k|gt16k) calls=(\d+) ok_bytes=(\d+) errors=(\d+) elapsed_ns=(\d+)')
-expected = {(m, b) for m in ('dma_read','pio_read','write') for b in ('le4k','4k_16k','gt16k')}
+header = re.compile(r'a04br3 msdc io sample seq=(\d+) begin_ns=(\d+) end_ns=(\d+) non_atomic=1')
+row = re.compile(r'a04br3 msdc transfer seq=(\d+) mode=(dma_read|pio_read|write) size=(le4k|4k_16k|gt16k) calls=(\d+) ok_bytes=(\d+) errors=(\d+) elapsed_ns=(\d+)')
+end_marker = re.compile(r'a04br3 msdc io end seq=(\d+) rows=(\d+)')
+expected = [(m, b) for m in ('dma_read','pio_read','write') for b in ('le4k','4k_16k','gt16k')]
 anchor = b'[pmic6392_init] Preloader Start'
 bldr = b'[BLDR] Build Time:'
 reason = re.compile(rb'(?i)\bBOOT_REASON\s*:')
-sample_marker = b'a04br3 msdc io sample begin_ns='
+sample_marker = b'a04br3 msdc io sample seq='
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
@@ -37,54 +38,70 @@ def verify_source(data, source_hash, offset, boot_id):
 
 def samples(lines):
     current = None
+    last_seq = 0
     for line in lines:
         h = header.search(line)
         if h:
             if current is not None:
-                yield current
-            current = {'begin':int(h[1]), 'end':int(h[2]), 'rows':{}, 'invalid':False}
+                raise ValueError('missing sample end before next header')
+            seq = int(h[1])
+            if seq != last_seq + 1:
+                raise ValueError('missing, duplicate or out-of-order sample sequence')
+            current = {'seq':seq, 'begin':int(h[2]), 'end':int(h[3]), 'rows':{}}
             continue
-        if 'a04br3 msdc io sample begin_ns=' in line:
+        if 'a04br3 msdc io sample' in line:
             raise ValueError('malformed sample header')
         r = row.search(line)
-        if 'a04br3 msdc transfer mode=' in line and not r:
+        if r:
+            if current is None or int(r[1]) != current['seq']:
+                raise ValueError('orphan or mixed transfer row')
+            key = (r[2], r[3])
+            position = len(current['rows'])
+            if position >= len(expected) or key != expected[position]:
+                raise ValueError('missing, duplicate or out-of-order transfer row')
+            current['rows'][key] = tuple(int(r[i]) for i in range(4, 8))
+        elif 'a04br3 msdc transfer ' in line:
             raise ValueError('malformed transfer row')
-        if r and current is not None:
-            key = (r[1], r[2])
-            if key in current['rows']:
-                current['invalid'] = True
-            current['rows'][key] = tuple(int(r[i]) for i in range(3, 7))
+        e = end_marker.search(line)
+        if e:
+            if current is None or int(e[1]) != current['seq'] or int(e[2]) != len(expected) or len(current['rows']) != len(expected):
+                raise ValueError('invalid or incomplete sample end')
+            yield current
+            last_seq = current['seq']
+            current = None
+        elif 'a04br3 msdc io end seq=' in line:
+            raise ValueError('malformed sample end')
     if current is not None:
-        yield current
+        raise ValueError('missing sample end at EOF')
 
 def summarize(segment, source_hash, boot_id, offset):
     previous = None
-    last_time = None
+    last_end = None
     output = []
-    warnings = []
     for sample in samples(segment.decode('utf-8', errors='replace').splitlines()):
         begin, end, rows = sample['begin'], sample['end'], sample['rows']
-        if end < begin or (last_time is not None and begin <= last_time):
-            raise ValueError('non-monotonic sample timestamps')
-        last_time = begin
-        if sample['invalid'] or set(rows) != expected:
-            warnings.append('incomplete or duplicate sample; interval discarded')
-            previous = None
-            continue
+        if end < begin or (last_end is not None and begin < last_end) or (previous is not None and begin <= previous['begin']):
+            raise ValueError('overlapping or non-monotonic sample timestamps')
+        last_end = end
         if previous is not None:
             dt = begin - previous['begin']
             deltas = {key: tuple(a-b for a,b in zip(rows[key], previous['rows'][key])) for key in expected}
             if any(v < 0 for values in deltas.values() for v in values):
                 raise ValueError('counter decreased: reboot, reset or mixed source')
-            for mode, size in sorted(expected):
+            if not any(values[0] for values in deltas.values()):
+                raise ValueError('no transfer call delta in interval')
+            for mode, size in expected:
                 calls, byte_count, errors, elapsed = deltas[(mode,size)]
                 output.append({'source_sha256':source_hash, 'boot_segment_sha256':boot_id,
-                    'boot_start_offset':offset, 'begin_ns':previous['begin'], 'end_ns':begin,
+                    'boot_start_offset':offset, 'from_seq':previous['seq'], 'to_seq':sample['seq'],
+                    'begin_ns':previous['begin'], 'end_ns':begin,
                     'mode':mode, 'size':size, 'calls':calls, 'ok_bytes':byte_count,
                     'errors':errors, 'transport_ns':elapsed,
                     'observed_bytes_per_second':byte_count * 1_000_000_000 / dt})
         previous = sample
-    return output, warnings
+    if not output:
+        raise ValueError('at least two complete samples with nonzero transfer delta are required')
+    return output
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -96,11 +113,9 @@ def main():
     with open(args.uart_log, 'rb') as stream:
         data = stream.read()
     segment = verify_source(data, args.source_sha256, args.boot_start_offset, args.boot_id)
-    output, warnings = summarize(segment, args.source_sha256, args.boot_id, args.boot_start_offset)
+    output = summarize(segment, args.source_sha256, args.boot_id, args.boot_start_offset)
     # All source, boundary, timestamp and counter checks precede any JSON output.
     rendered = [json.dumps(x, separators=(',',':'), allow_nan=False) for x in output]
-    for warning in warnings:
-        print(warning, file=sys.stderr)
     if rendered:
         sys.stdout.write('\n'.join(rendered) + '\n')
 

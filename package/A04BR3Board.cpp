@@ -242,20 +242,23 @@ void msdcIoReport(unsigned enabled)
   bool haveTransport = native_msdc_transport_stats != nullptr;
   bool haveOffer = native_msdc_block_offer_stats != nullptr;
   bool haveQueue = native_msdc_block_queue_stats != nullptr;
+  static uint64_t sequence = 0; // only the process-report thread calls this helper
+  const uint64_t sampleSeq = ++sequence;
   uint64_t transfer[36] = {}, offer[12] = {}, queue[3] = {}, begin = 0, end = 0;
   absolutetime_to_nanoseconds(mach_absolute_time(), &begin);
   if (haveTransport) for (unsigned i = 0; i < 36; ++i) transfer[i] = __atomic_load_n(&native_msdc_transport_stats[i], __ATOMIC_RELAXED);
   if (haveOffer) for (unsigned i = 0; i < 12; ++i) offer[i] = __atomic_load_n(&native_msdc_block_offer_stats[i], __ATOMIC_RELAXED);
   if (haveQueue) for (unsigned i = 0; i < 3; ++i) queue[i] = __atomic_load_n(&native_msdc_block_queue_stats[i], __ATOMIC_RELAXED);
   absolutetime_to_nanoseconds(mach_absolute_time(), &end);
-  IOLog("a04br3 msdc io sample begin_ns=%llu end_ns=%llu non_atomic=1\n", (unsigned long long)begin, (unsigned long long)end);
+  IOLog("a04br3 msdc io sample seq=%llu begin_ns=%llu end_ns=%llu non_atomic=1\n",
+        (unsigned long long)sampleSeq, (unsigned long long)begin, (unsigned long long)end);
   static const char * const modes[] = {"dma_read", "pio_read", "write"};
   static const char * const bins[] = {"le4k", "4k_16k", "gt16k"};
   if (haveTransport) {
     for (unsigned mode = 0; mode < 3; ++mode) for (unsigned bin = 0; bin < 3; ++bin) {
       unsigned index = (mode * 3 + bin) * 4;
-      IOLog("a04br3 msdc transfer mode=%s size=%s calls=%llu ok_bytes=%llu errors=%llu elapsed_ns=%llu\n",
-            modes[mode], bins[bin], (unsigned long long)transfer[index], (unsigned long long)transfer[index+1],
+      IOLog("a04br3 msdc transfer seq=%llu mode=%s size=%s calls=%llu ok_bytes=%llu errors=%llu elapsed_ns=%llu\n",
+            (unsigned long long)sampleSeq, modes[mode], bins[bin], (unsigned long long)transfer[index], (unsigned long long)transfer[index+1],
             (unsigned long long)transfer[index+2], (unsigned long long)transfer[index+3]);
     }
   } else IOLog("a04br3 msdc transfer: unavailable\n");
@@ -269,6 +272,7 @@ void msdcIoReport(unsigned enabled)
   if (haveQueue) IOLog("a04br3 msdc queue started=%llu wait_ns=%llu max_wait_ns=%llu\n",
                        (unsigned long long)queue[0], (unsigned long long)queue[1], (unsigned long long)queue[2]);
   else IOLog("a04br3 msdc queue: unavailable\n");
+  IOLog("a04br3 msdc io end seq=%llu rows=%u\n", (unsigned long long)sampleSeq, haveTransport ? 9u : 0u);
 }
 
 // Diagnostic sampling only. Registers and per-core counters are independently read,

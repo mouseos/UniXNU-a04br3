@@ -667,7 +667,7 @@ observed throughput, not peak bus speed. The transport duration includes
 failed operations and excludes host-lock wait; offered block requests include
 rejected requests, and queue time excludes direct reads and cancellations.
 Fields are individually atomic but not captured at one instant. Diagnostics add
-clock reads and atomic updates in the driver, plus up to 17 UART lines per
+clock reads and atomic updates in the driver, plus up to 18 UART lines per
 heartbeat; reduce sampling frequency for less perturbation. The existing VM
 rows show page usage, and home-perf samples selected tasks; neither measures
 memory bandwidth nor provides complete CPU, GPU, or network utilization.
@@ -684,8 +684,12 @@ anchor through EOF; pass them as `--source-sha256`, `--boot-start-offset`, and
 is a hash of the captured segment, not an authenticated hardware boot UUID.
 The analyzer requires these exact identities and checks the unique preloader
 and BLDR boundaries, boot reason position, counter monotonicity and sample
-ordering before writing any JSON. It discards incomplete intervals and rejects
-observed reboot markers even if time and counters increased. Capture continuity
+ordering before writing any JSON. Each sample must have a consecutive sequence,
+all nine ordered rows carrying that sequence, and a matching explicit end.
+Missing headers, rows, end markers, overlapping snapshot windows and zero
+transfer-call deltas are errors; no JSON is emitted for the file. Older reporter
+logs without this framing are rejected. The tool rejects observed reboot
+markers even if time and counters increased. Capture continuity
 still must be established externally: missing UART output or deliberate
 concatenation without a recognizable boundary cannot be disproved from hashes
 or counters. These rates inherit the non-atomic snapshots and logging overhead
