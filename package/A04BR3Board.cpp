@@ -307,12 +307,21 @@ void cpuDiagnosticReport()
         armcpu_ipi_sent, armcpu_ipi_dropped, armcpu_gic_boot[3]);
 }
 
-void procLogThread(void *, wait_result_t)
+void procLogOptions(unsigned &perf, unsigned &rootTiming, unsigned &msdcPerf)
 {
-  unsigned perf = 0, rootTiming = 0, msdcPerf = 0;
+  unsigned ioStats = 0;
+  perf = rootTiming = msdcPerf = 0;
   PE_parse_boot_argn("a04br3-home-perf", &perf, sizeof(perf));
   PE_parse_boot_argn("a04br3-msdc-perf", &msdcPerf, sizeof(msdcPerf));
+  PE_parse_boot_argn("native-msdc-iostat", &ioStats, sizeof(ioStats));
   PE_parse_boot_argn("native-root-timing", &rootTiming, sizeof(rootTiming));
+  if (ioStats == 1) msdcPerf = 1;
+}
+
+void procLogThread(void *, wait_result_t)
+{
+  unsigned perf, rootTiming, msdcPerf;
+  procLogOptions(perf, rootTiming, msdcPerf);
   uint64_t cacheReportSeconds = 0;
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);

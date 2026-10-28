@@ -641,8 +641,11 @@ thread and grows completion threads on demand to at most 64. Physical testing,
 peak resource impact and full kernel link remain unverified.
 
 The opt-in UART reporter for MSDC IRQ and read-worker counters uses the existing
-process heartbeat: set `a04br3-proclog=10 a04br3-home-perf=1 a04br3-msdc-perf=1` in the kernel arguments. All three
-are required; `a04br3-msdc-perf` defaults to off and must equal exactly 1.
+process heartbeat. Both `a04br3-proclog=10` and `a04br3-home-perf=1` are
+required, together with either `a04br3-msdc-perf=1` or
+`native-msdc-iostat=1`. The latter automatically enables this reporter;
+`a04br3-msdc-perf=1` remains available independently. Both flags default to
+off and only the value 1 enables them.
 Each heartbeat prints cumulative IRQ captures, wait attempts, undelivered wait
 timeouts and wait nanoseconds; worker jobs queued and completed, direct-path
 fallbacks and the reserved counter; and GIC mask failures. `unavailable` means
@@ -655,8 +658,8 @@ atomic snapshot and counters may change between loads. The reporter neither
 enables IRQ nor verifies data or IRQ delivery. Test the actual formatter and
 weak-symbol handling with `python3 scripts/tests/test_msdc_irq_report.py`.
 
-With NativeMsdc `965ecd384a9fbd33b21674380edddd2bd57a4acc`, add
-`native-msdc-iostat=1` to the three heartbeat arguments above. The same heartbeat
+With NativeMsdc `965ecd384a9fbd33b21674380edddd2bd57a4acc`, use
+`a04br3-proclog=10 a04br3-home-perf=1 native-msdc-iostat=1`. The same heartbeat
 then emits a monotonic begin/end bracket and cumulative size-binned transport,
 block-offer, and worker queue counters. Use deltas between sample timestamps:
 successful transport byte deltas divided by elapsed sample time describe

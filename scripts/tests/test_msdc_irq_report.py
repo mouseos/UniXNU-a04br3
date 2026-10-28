@@ -10,8 +10,10 @@ start = s.index('void msdcIrqReport(unsigned enabled)')
 end = s.index('\n// Read all counters', start)
 body = s[start:end]
 worker = s[s.index('void procLogThread('):s.index('\nstatic void a04br3_proclog_init')]
-assert 'unsigned perf = 0, rootTiming = 0, msdcPerf = 0;' in worker
-assert 'PE_parse_boot_argn("a04br3-msdc-perf", &msdcPerf, sizeof(msdcPerf))' in worker
+assert 'procLogOptions(perf, rootTiming, msdcPerf)' in worker
+options = s[s.index('void procLogOptions('):s.index('void procLogThread(')]
+assert 'PE_parse_boot_argn("a04br3-msdc-perf", &msdcPerf, sizeof(msdcPerf))' in options
+assert 'PE_parse_boot_argn("native-msdc-iostat", &ioStats, sizeof(ioStats))' in options
 assert worker.index('if (perf == 1)') < worker.index('msdcIrqReport(msdcPerf)') < worker.index('cpuDiagnosticReport()')
 for name in ('native_msdc_irq_stats[4]', 'native_msdc_worker_stats[4]', 'native_msdc_irq_mask_failures'):
     assert name + ' __attribute__((weak_import))' in s
