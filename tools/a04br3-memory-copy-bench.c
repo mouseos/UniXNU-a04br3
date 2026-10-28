@@ -12,22 +12,40 @@
 #include <mach/mach.h>
 #endif
 
+static uint64_t now_ns(void);
+
 #ifdef __APPLE__
 static int enough_free_memory(size_t size) {
     mach_port_t host = mach_host_self();
-    vm_statistics64_data_t stats;
+    vm_statistics64_data_t stats = {0};
     mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
     vm_size_t page_size = 0;
     kern_return_t r1 = host_page_size(host, &page_size);
     kern_return_t r2 = host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&stats, &count);
     mach_port_deallocate(mach_task_self(), host);
-    if (r1 != KERN_SUCCESS || r2 != KERN_SUCCESS) {
+    if (r1 != KERN_SUCCESS || r2 != KERN_SUCCESS || count < HOST_VM_INFO64_REV0_COUNT) {
         fprintf(stderr, "a04br3_mem_copy phase=skip reason=vm_statistics_unavailable\n"); return -1;
     }
     // XNU host_statistics64 includes speculative pages in free_count. They
     // are cached pages, not unoccupied pages; exclude them from the reserve.
     if (stats.speculative_count > stats.free_count || !page_size) {
         fprintf(stderr, "a04br3_mem_copy phase=skip reason=vm_statistics_inconsistent\n"); return -1;
+    }
+    // Reuse this same VM snapshot: counters are cumulative and non-atomic.
+    printf("a04br3_mem_copy phase=vm_activity monotonic_ns=%" PRIu64
+           " page_size=%lu pageins=%" PRIu64 " pageouts=%" PRIu64
+           " reactivations=%" PRIu64 " faults=%" PRIu64
+           " purgeable_pages=%" PRIu64 " purges=%" PRIu64 " non_atomic=1\n",
+           now_ns(), (unsigned long)page_size, (uint64_t)stats.pageins,
+           (uint64_t)stats.pageouts, (uint64_t)stats.reactivations,
+           (uint64_t)stats.faults, (uint64_t)stats.purgeable_count, (uint64_t)stats.purges);
+    if (count >= HOST_VM_INFO64_REV1_COUNT) {
+        printf("a04br3_mem_copy phase=vm_activity_extended compressions=%" PRIu64
+               " decompressions=%" PRIu64 " swapins=%" PRIu64 " swapouts=%" PRIu64 " non_atomic=1\n",
+               (uint64_t)stats.compressions, (uint64_t)stats.decompressions,
+               (uint64_t)stats.swapins, (uint64_t)stats.swapouts);
+    } else {
+        printf("a04br3_mem_copy phase=vm_activity_extended status=unavailable\n");
     }
     uint64_t reported_free = (uint64_t)stats.free_count * page_size;
     uint64_t speculative = (uint64_t)stats.speculative_count * page_size;

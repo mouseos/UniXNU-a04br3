@@ -31,9 +31,13 @@ class MemoryCopyBenchTest(unittest.TestCase):
 #include <stdint.h>
 typedef int mach_port_t; typedef unsigned long vm_size_t;
 typedef unsigned mach_msg_type_number_t; typedef int kern_return_t;
-typedef struct { unsigned free_count, speculative_count; } vm_statistics64_data_t;
+typedef struct { unsigned free_count, speculative_count, purgeable_count;
+ uint64_t pageins,pageouts,reactivations,faults,purges,compressions,decompressions,swapins,swapouts;
+} vm_statistics64_data_t;
 typedef void *host_info64_t;
-#define HOST_VM_INFO64_COUNT 1
+#define HOST_VM_INFO64_REV0_COUNT 1
+#define HOST_VM_INFO64_REV1_COUNT 2
+#define HOST_VM_INFO64_COUNT 2
 #define HOST_VM_INFO64 1
 #define KERN_SUCCESS 0
 mach_port_t mach_host_self(void); mach_port_t mach_task_self(void);
@@ -59,12 +63,18 @@ mach_port_t mach_task_self(void) {return 2;}
 kern_return_t mach_port_deallocate(mach_port_t p,mach_port_t q) {(void)p;(void)q;return 0;}
 kern_return_t host_page_size(mach_port_t p,vm_size_t *n) {(void)p;*n=4096;return 0;}
 kern_return_t host_statistics64(mach_port_t p,int f,host_info64_t out,mach_msg_type_number_t *n) {
- (void)p;(void)f;(void)n; ++calls;
+ (void)p;(void)f; ++calls;
  if (scenario==3) return 1;
  unsigned pages = scenario==1 ? 8703 : scenario==2 && calls<=2 ? 10239 : scenario>=4 ? 11264 : 10240;
  unsigned spec = scenario==4 ? 1024 : scenario==5 ? 1025 : scenario==6 ? 11265 : 0;
  ((vm_statistics64_data_t *)out)->free_count=pages;
- ((vm_statistics64_data_t *)out)->speculative_count=spec; return 0;
+ ((vm_statistics64_data_t *)out)->speculative_count=spec;
+ vm_statistics64_data_t *st=(vm_statistics64_data_t *)out;
+ st->pageins=11;st->pageouts=12;st->reactivations=13;st->faults=14;st->purgeable_count=15;st->purges=16;
+ st->compressions=17;st->decompressions=18;st->swapins=19;st->swapouts=20;
+ if(scenario==7)*n=HOST_VM_INFO64_REV0_COUNT;
+ if(scenario==8)*n=0;
+ return 0;
 }
 int main(int argc,char **argv) {
  scenario=argc>1 ? atoi(argv[1]) : 0;
@@ -77,7 +87,8 @@ int main(int argc,char **argv) {
             subprocess.run(['cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                             '-D_POSIX_C_SOURCE=200809L', '-D__APPLE__', '-I', str(root), str(harness), '-o', str(binary)], check=True)
             expected = [(0, 0, 6, 6), (1, 1, 6, 0), (2, 0, 8, 6),
-                        (3, 1, 1, 0), (4, 0, 6, 6), (5, 0, 6, 3), (6, 1, 1, 0)]
+                        (3, 1, 1, 0), (4, 0, 6, 6), (5, 0, 6, 3), (6, 1, 1, 0),
+                        (7, 0, 6, 6), (8, 1, 1, 0)]
             for scenario, rc, calls, results in expected:
                 result = subprocess.run([str(binary), str(scenario)], text=True, capture_output=True)
                 self.assertEqual(result.returncode, rc, result.stderr)
@@ -85,6 +96,14 @@ int main(int argc,char **argv) {
                 self.assertEqual(len(rows), results, result.stdout)
                 self.assertIn(f'calls={calls} result={rc}', result.stderr)
                 self.assertIn('first=180', result.stderr)
+                if scenario in (0, 7):
+                    self.assertIn('page_size=4096 pageins=11 pageouts=12 reactivations=13 faults=14 purgeable_pages=15 purges=16 non_atomic=1', result.stdout)
+                if scenario == 0:
+                    self.assertIn('phase=vm_activity_extended compressions=17 decompressions=18 swapins=19 swapouts=20 non_atomic=1', result.stdout)
+                if scenario == 7:
+                    self.assertIn('phase=vm_activity_extended status=unavailable', result.stdout)
+                if scenario == 8:
+                    self.assertIn('reason=vm_statistics_unavailable', result.stderr)
                 if scenario == 0:
                     self.assertEqual(result.stdout.count('phase=recovery delay_seconds=10'), 5)
                     self.assertEqual(result.stdout.count('phase=sample size_mib=4'), 3)

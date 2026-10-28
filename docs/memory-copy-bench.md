@@ -163,3 +163,16 @@ its overhead before treating measurements as representative. `inactive` and
 all their pages can be freed immediately or without I/O. The VM, task and
 benchmark records have different capture times and must not be summed as if
 they were an atomic snapshot.
+
+Each boot benchmark memory check also prints `phase=vm_activity` from the same
+`host_statistics64` response already used by the safety guard. `pageins`,
+`pageouts`, `reactivations`, `faults`, `purges`, `compressions`,
+`decompressions`, `swapins` and `swapouts` are cumulative counters, while
+`purgeable_pages` is a snapshot. They are not an instantaneous reclaimable
+byte count and do not distinguish clean from dirty inactive pages. Use deltas
+within one boot, retain `page_size`, and do not combine overlapping categories.
+Extended counters are reported as unavailable if the returned structure is too
+short. The user-space timestamp marks reporting after the syscall; it must not
+be treated as interchangeable with the kernel heartbeat clock without checking
+the relationship. These readings add no extra VM statistics call and do not
+force reclaim, though console output itself has a cost.
