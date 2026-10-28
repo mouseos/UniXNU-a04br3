@@ -402,10 +402,13 @@ static void a04br3_cpu_load_init(void)
   else IOLog("a04br3 cpu-load thread_error=%d\n", status);
 }
 
+#include "A04BR3EarlyCopy.h"
+
 extern "C" void unixnu_board_init(void)
 {
   a04br3_cpu_load_init();
   a04br3_autoreset_init();
+  a04br3_early_copy_probe(); // opt-in, bounded; before root mount and launchd
   a04br3_registers_init(); // shared I2C0/I2C2 mux lock before either thread
   a04br3_charger_init(); // explicit opt-in; separate I2C2 owner, no PWRAP
   unsigned irqPid = 0;

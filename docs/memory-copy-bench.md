@@ -139,3 +139,21 @@ UNIXNU_ROOT=/path/to/UniXNU python3 scripts/tests/test_memory_tree_scripts.py
 UNIXNU_ROOT=/path/to/UniXNU python3 scripts/tests/test_memory_iostat_profile.py
 python3 scripts/tests/test_a04br3_pre_build_seed_reuse.py
 ```
+
+## Early kernel copy diagnostic
+
+The opt-in `ecb=1` boot argument runs one 256 KiB copy in the board's
+`bsd_init` hook, before root mount and user-space launch. It is disabled by
+default. This diagnostic uses two temporary allocations and captures independent
+VM counter samples before and after. It logs inactive and speculative pages for
+context, but does not count them toward its 32 MiB plus buffer reserve. Invalid
+or insufficient counters and allocation failures skip the test. The reserve is
+a non-atomic observation, not a guarantee against concurrent memory pressure.
+
+`phase=result` requires a positive elapsed time and matching buffers. Calculate
+logical MiB/s from `bytes` and `elapsed_ns`. This is one synthetic kernel CPU
+copy during boot; it includes interrupt and scheduling effects, can be cached,
+and neither measures controller traffic nor represents idle memory bandwidth.
+`phase=skip`, `phase=error`, or missing output is not a measurement. The boot
+argument does not enable the user-space benchmark. The probe has host fixture
+coverage but is not verified by an integrated kernel link or real hardware.
