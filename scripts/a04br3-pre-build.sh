@@ -92,7 +92,9 @@ esac
 rm -f "$RUNNER_TEMP/a04br3-memory-inputs.json"
 python3 "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$PWD" --out "$RUNNER_TEMP/trustcache"
 ./unixnu tree -D "$DEVICE_DIR"
-TREE=$PWD/out/a04br3/tree
+# Match UniXNU Context's expanduser/expandvars/resolve semantics for UNIXNU_OUT.
+OUT_ROOT=$(python3 -c 'import os; from pathlib import Path; print(Path(os.path.expandvars(os.path.expanduser(os.environ.get("UNIXNU_OUT") or "out"))).resolve())')
+TREE=$OUT_ROOT/a04br3/tree
 MOUNT=
 SEED_SCRATCH=
 SEED_INPUT="$RUNNER_TEMP/data.dbr"

@@ -21,7 +21,9 @@ Payload construction refuses a missing or changed manifest. String presence in
 the binary is an integrity check, not proof of the runtime UUID selection.
 Source checkouts must be clean and submodules initialized.
 `RUNNER_TEMP` defaults to `out/a04br3-memory-inputs`; no existing seed or trust
-file is requested. The build enables the PowerVR probe build and Metal publish
+file is requested. `UNIXNU_OUT` selects the UniXNU output root for both the
+pre-build tree and the completed-kernel manifest, with the same path expansion
+as UniXNU. The build enables the PowerVR probe build and Metal publish
 mode, preserving GPU composition (`sheng-fb-gpu=1`); it adds the diagnostic
 boot argument and diagnostic heartbeat. The generated owner trust bundle
 includes the signed benchmark CDHash. `--skip-setup` can optionally be passed

@@ -12,16 +12,20 @@ UUID = '12345678-1234-5678-9ABC-123456789ABC'
 OLD = '87654321-1234-5678-9ABC-123456789ABC'
 
 
-def run_case(initial_uuid, fault=None):
+def run_case(initial_uuid, fault=None, out_mode=None):
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
         runner, device, source, bindir = [base / n for n in ('runner', 'device', 'source', 'bin')]
         for p in (runner, device/'scripts', source, bindir): p.mkdir(parents=True)
         (device/'unixnu.lock').write_text('[source.xnu]\ncommit = "0123456789abcdef0123456789abcdef01234567"\n')
-        (source/'out/a04br3/tree/refer/xnu').mkdir(parents=True)
-        (source/'out/a04br3/tree/.cache/xnu-work').mkdir(parents=True)
-        (source/'out/a04br3/kernel').mkdir(parents=True)
-        (source/'out/a04br3/kernel/kernel.macho').write_text('old kernel ' + OLD)
+        out = source / ('custom output' if out_mode else 'out')
+        (out/'a04br3/tree/refer/xnu').mkdir(parents=True)
+        (out/'a04br3/tree/.cache/xnu-work').mkdir(parents=True)
+        (out/'a04br3/kernel').mkdir(parents=True)
+        (out/'a04br3/kernel/kernel.macho').write_text('old kernel ' + OLD)
+        if out_mode:
+            (source/'out/a04br3/kernel').mkdir(parents=True)
+            (source/'out/a04br3/kernel/kernel.macho').write_text('conflicting default kernel')
         for name in ('a04br3-memory-build.sh', 'a04br3-memory-payload.sh', 'a04br3-memory-manifest.py'):
             shutil.copy(ROOT/'scripts'/name, device/'scripts'/name)
         (device/'scripts/a04br3-pre-build.sh').write_text(r'''#!/bin/bash
@@ -35,15 +39,15 @@ printf trust > "$RUNNER_TEMP/trustcache"
         (source/'unixnu').write_text(r'''#!/bin/bash
 set -eu
 printf '%s uuid=%s\n' "$*" "${XNU_OWNER_DATA_VOLUME_UUID:-unset}" >> "$TEST_LOG"
-mkdir -p out/a04br3/kernel
-if [ "$1" = defconfig ]; then echo 'CONFIG_TEST=y' > out/a04br3/.config; fi
+mkdir -p "$TEST_OUT_DIR/a04br3/kernel"
+if [ "$1" = defconfig ]; then echo 'CONFIG_TEST=y' > "$TEST_OUT_DIR/a04br3/.config"; fi
 if [ "$1 $2" = 'build kernel' ]; then
   [ "$TEST_FAULT" != kernel_failure ] || exit 1
-  if [ "$TEST_FAULT" = wrong_kernel_uuid ]; then printf '%s' OLD > out/a04br3/kernel/kernel.macho
-  else printf 'kernel uuid=%s' "$XNU_OWNER_DATA_VOLUME_UUID" > out/a04br3/kernel/kernel.macho; fi
+  if [ "$TEST_FAULT" = wrong_kernel_uuid ]; then printf '%s' OLD > "$TEST_OUT_DIR/a04br3/kernel/kernel.macho"
+  else printf 'kernel uuid=%s' "$XNU_OWNER_DATA_VOLUME_UUID" > "$TEST_OUT_DIR/a04br3/kernel/kernel.macho"; fi
   if [ "$TEST_FAULT" = alter_seed ]; then printf altered > "$RUNNER_TEMP/data.dbr"; fi
   if [ "$TEST_FAULT" = alter_trust ]; then printf altered > "$RUNNER_TEMP/trustcache"; fi
-  if [ "$TEST_FAULT" = alter_config ]; then printf altered > out/a04br3/.config; fi
+  if [ "$TEST_FAULT" = alter_config ]; then printf altered > "$TEST_OUT_DIR/a04br3/.config"; fi
   if [ "$TEST_FAULT" = alter_source ]; then touch "$TEST_GIT_DIRTY"; fi
   if [ "$TEST_FAULT" = alter_lock ]; then printf altered >> "$DEVICE_DIR/unixnu.lock"; fi
 fi
@@ -59,7 +63,14 @@ esac
 ''')
         (bindir/'git').chmod(0o755)
         env = dict(os.environ, PATH=str(bindir)+os.pathsep+os.environ['PATH'], RUNNER_TEMP=str(runner),
-                   TEST_LOG=str(base/'calls'), TEST_GIT_DIRTY=str(base/'dirty'), TEST_FAULT=fault or '', XNU_OWNER_DATA_VOLUME_UUID=initial_uuid)
+                   TEST_LOG=str(base/'calls'), TEST_GIT_DIRTY=str(base/'dirty'), TEST_FAULT=fault or '',
+                   TEST_OUT_DIR=str(out), XNU_OWNER_DATA_VOLUME_UUID=initial_uuid)
+        env.pop('UNIXNU_OUT', None)
+        if out_mode == 'absolute': env['UNIXNU_OUT'] = str(out)
+        if out_mode == 'relative': env['UNIXNU_OUT'] = 'custom output'
+        if out_mode == 'expanded':
+            env['TEST_OUT_PARENT'] = str(source)
+            env['UNIXNU_OUT'] = '$TEST_OUT_PARENT/custom output'
         # Simulate a stale marker from an earlier successful run.
         (runner/'a04br3-memory-inputs.json').write_text('{}')
         command = ['bash', str(device/'scripts/a04br3-memory-build.sh'), '--enable-memory-bench']
@@ -75,6 +86,8 @@ esac
         assert f'build payload -D {device}' in calls
         record = json.loads((runner/'a04br3-memory-inputs.json').read_text())
         assert record['seed_uuid'] == UUID and len(record['kernel_sha256']) == 64
+        assert record['kernel_path'] == str(out/'a04br3/kernel/kernel.macho')
+        if out_mode: assert (source/'out/a04br3/kernel/kernel.macho').read_text() == 'conflicting default kernel'
         assert len(record['flags_sha256']) == 64 and record['source']['commit']
         # A separate invocation must use the same kernel-affecting environment.
         verify_env = dict(env, DEVICE_DIR=str(device), XNU_OWNER_DATA_VOLUME_UUID=UUID,
@@ -82,7 +95,7 @@ esac
                           A04BR3_POWERVR_METAL='1', A04BR3_POWERVR_METAL_MODE='publish')
         verify = ['python3', str(device/'scripts/a04br3-memory-manifest.py'), 'verify']
         assert subprocess.run(verify, cwd=source, env=verify_env, capture_output=True).returncode == 0
-        for path in (runner/'data.dbr', runner/'trustcache', source/'out/a04br3/.config', source/'out/a04br3/kernel/kernel.macho'):
+        for path in (runner/'data.dbr', runner/'trustcache', out/'a04br3/.config', out/'a04br3/kernel/kernel.macho'):
             old = path.read_bytes(); path.write_bytes(old+b'x')
             assert subprocess.run(verify, cwd=source, env=verify_env, capture_output=True).returncode != 0, path
             path.write_bytes(old)
@@ -93,6 +106,8 @@ esac
 
 for initial in ('', OLD):
     run_case(initial)
+for mode in ('absolute', 'relative', 'expanded'):
+    run_case(OLD, out_mode=mode)
 for fault in ('kernel_failure', 'wrong_kernel_uuid', 'alter_seed', 'alter_trust', 'alter_config', 'alter_source', 'alter_lock'):
     run_case(OLD, fault)
 print('PASS: clean/stale parent UUID, kernel and input integrity, flags and failure injection')
