@@ -80,7 +80,8 @@ static void wait_seconds(unsigned seconds) {
     while (seconds) seconds = sleep(seconds);
 }
 int main(int argc, char **argv) {
-    if (argc == 2 && !strcmp(argv[1], "--boot-run")) {
+    if (argc == 2 && (!strcmp(argv[1], "--boot-run") || !strcmp(argv[1], "--boot-run-early"))) {
+        unsigned delay = !strcmp(argv[1], "--boot-run-early") ? 30 : 180;
         /* The inherited descriptors may be closed; this is best effort only. */
         fprintf(stderr, "a04br3_mem_copy phase=main_entered\n");
         fflush(stderr);
@@ -96,8 +97,8 @@ int main(int argc, char **argv) {
             printf("a04br3_mem_copy phase=console_error stream=stderr errno=%d\n", saved);
             return 1;
         }
-        printf("a04br3_mem_copy synthetic=1 phase=waiting delay_seconds=180\n");
-        wait_seconds(180);
+        printf("a04br3_mem_copy synthetic=1 phase=waiting delay_seconds=%u workload=boot\n", delay);
+        wait_seconds(delay);
         // One bounded observation per size and sample. Retry insufficient
         // unoccupied pages without allocating; no retry on statistics errors.
         static const unsigned long sizes[] = {4, 1};
