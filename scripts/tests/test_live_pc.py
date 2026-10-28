@@ -1,7 +1,63 @@
 #!/usr/bin/env python3
-import pathlib, subprocess, tempfile, unittest
+import hashlib, os, pathlib, subprocess, tempfile, unittest
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 class LivePcTest(unittest.TestCase):
+ def test_pinned_xnu_parser_boundaries(self):
+  path=os.environ.get('XNU_BOOTARGS_SOURCE')
+  if not path: self.skipTest('set XNU_BOOTARGS_SOURCE to the pinned XNU bootargs.c')
+  raw=pathlib.Path(path).read_bytes()
+  self.assertEqual(hashlib.sha256(raw).hexdigest(),'814d2f779300bfbf7ef13c8c830ae0f98ada271586518b808d43a019a7e7db3a')
+  source=raw.decode()
+  core=source[source.index('static boolean_t\nPE_parse_boot_argn_internal('):source.index('\nboolean_t\nPE_parse_boot_argn(',source.index('static boolean_t\nPE_parse_boot_argn_internal('))]
+  start=source.index('static boolean_t\nisargsep(char c)\n{')
+  helpers=source[start:source.index('\nboolean_t\nPE_imgsrc_mount_supported()',start)]
+  prefix=r'''
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <assert.h>
+#include "LivePcPid.h"
+typedef int boolean_t;
+typedef boolean_t (*argsep_func_t)(char);
+#define TRUE 1
+#define FALSE 0
+#define NUM 0
+#define STR 1
+struct i24 { int32_t i24:24; int32_t pad:8; };
+static boolean_t isargsep(char);
+static int argstrcpy(char *,char *);
+static int argstrcpy2(char *,char *,unsigned);
+static int argnumcpy(long long,void *,unsigned);
+static int getval(char *,long long *,argsep_func_t,boolean_t);
+'''
+  suffix=r'''
+int main() {
+ const char *key="a04br3-live-pc-pid"; uint32_t old=0,pid=0;
+ char overflow[]="a04br3-live-pc-pid=4294967352";
+ assert(PE_parse_boot_argn_internal(overflow,key,&old,4,FALSE) && old==56);
+ assert(live_pc_pid_arg(overflow,&pid) && pid==0);
+ char text[]="a04br3-live-pc-pid=abcd"; old=0;
+ assert(PE_parse_boot_argn_internal(text,key,&old,4,FALSE) && old!=0);
+ assert(live_pc_pid_arg(text,&pid) && pid==0);
+ char hex[]="a04br3-live-pc-pid=0x38"; old=0;
+ assert(PE_parse_boot_argn_internal(hex,key,&old,4,FALSE) && old==56);
+ assert(live_pc_pid_arg(hex,&pid) && pid==0);
+ char octal[]="a04br3-live-pc-pid=070"; old=0;
+ assert(PE_parse_boot_argn_internal(octal,key,&old,4,FALSE) && old==56);
+ assert(live_pc_pid_arg(octal,&pid) && pid==70);
+ char bare[]="a04br3-live-pc-pid"; old=0;
+ assert(PE_parse_boot_argn_internal(bare,key,&old,4,FALSE) && old==1);
+ assert(live_pc_pid_arg(bare,&pid) && pid==0);
+ char max[]="a04br3-live-pc-pid=2147483647";
+ assert(live_pc_pid_arg(max,&pid) && pid==2147483647u);
+}
+'''
+  with tempfile.TemporaryDirectory() as tmp:
+   src=pathlib.Path(tmp)/'xnu.c';exe=pathlib.Path(tmp)/'xnu'
+   src.write_text(prefix+core+'\n'+helpers+'\n'+suffix)
+   subprocess.run(['cc','-std=c11','-I',str(ROOT/'package'),str(src),'-o',str(exe)],check=True)
+   subprocess.run([str(exe)],check=True)
+
  def test_runtime_pid_selection(self):
   source=(ROOT/'package/A04BR3Board.cpp').read_text()
   selection=source[source.index('  unsigned livePc = 0;'):source.index('  unsigned ipiReasonPerf = 0;')]
@@ -9,13 +65,16 @@ class LivePcTest(unittest.TestCase):
 #include <cstdint>
 #include <cstring>
 #include <cassert>
-static unsigned old_value, pid_value, result;
-static bool old_present, pid_present;
+#include "LivePcPid.h"
+static unsigned old_value, result;
+static bool old_present;
+static const char *arguments;
+static const char *PE_boot_args() { return arguments; }
 static bool PE_parse_boot_argn(const char *name, void *out, unsigned size) {
  assert(size==sizeof(unsigned));
- bool pid=!strcmp(name,"a04br3-live-pc-pid");
- if (pid ? !pid_present : !old_present) return false;
- *(unsigned *)out=pid ? pid_value : old_value; return true;
+ assert(!strcmp(name,"a04br3-live-pc"));
+ if (!old_present) return false;
+ *(unsigned *)out=old_value; return true;
 }
 static void boot_live_pc_init(unsigned pid) { result=pid; }
 static void select_pid() {
@@ -23,18 +82,23 @@ static void select_pid() {
   suffix=r'''
 }
 int main() {
- old_present=pid_present=false;select_pid();assert(result==0);
+ arguments="";old_present=false;select_pid();assert(result==0);
  old_present=true;old_value=1;select_pid();assert(result==1);
  old_value=56;select_pid();assert(result==0);
- pid_present=true;pid_value=56;select_pid();assert(result==56);
- old_value=1;pid_value=0;select_pid();assert(result==0);
- pid_value=0xffffffffu;select_pid();assert(result==0);
+ old_value=1;
+ const char *valid[]={"a04br3-live-pc-pid=56", "\tother=7 a04br3-live-pc-pid=00056\tend=1"};
+ for(auto arg:valid){arguments=arg;select_pid();assert(result==56);}
+ arguments="a04br3-live-pc-pid=2147483647";select_pid();assert(result==2147483647u);
+ const char *invalid[]={"a04br3-live-pc-pid=0", "a04br3-live-pc-pid=2147483648", "a04br3-live-pc-pid=4294967352", "a04br3-live-pc-pid=999999999999999999999999999999", "a04br3-live-pc-pid=56x", "a04br3-live-pc-pid=0x38", "a04br3-live-pc-pid=+56", "a04br3-live-pc-pid=-56", "a04br3-live-pc-pid=", "a04br3-live-pc-pid", "a04br3-live-pc-pid =56", "a04br3-live-pc-pid=bad a04br3-live-pc-pid=56"};
+ for(auto arg:invalid){arguments=arg;select_pid();assert(result==0);}
+ arguments="a04br3-live-pc-pid-extra=56";select_pid();assert(result==1);
+ arguments="a04br3-live-pc-pid=56 a04br3-live-pc-pid=57";select_pid();assert(result==56);
 }
 '''
   with tempfile.TemporaryDirectory() as tmp:
    src=pathlib.Path(tmp)/'select.cpp'; exe=pathlib.Path(tmp)/'select'
    src.write_text(prefix+selection+suffix)
-   subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror',str(src),'-o',str(exe)],check=True)
+   subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror','-I',str(ROOT/'package'),str(src),'-o',str(exe)],check=True)
    subprocess.run([str(exe)],check=True)
 
  def test_ring_and_image_races(self):

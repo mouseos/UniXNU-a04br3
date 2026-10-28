@@ -10,7 +10,11 @@ compile gate was explicitly enabled.
 
 For another process, set `a04br3-live-pc-pid=<pid>` instead. The explicit PID
 option takes precedence over `a04br3-live-pc`, including zero to disable; values
-above INT32_MAX are disabled. PID allocation varies between boots: verify the
+above INT32_MAX, non-decimal, malformed, or empty values disable sampling.
+When the entire PID option is absent, the legacy flag retains its old behavior.
+The first exact argument is authoritative; duplicates cannot override an invalid
+first value. Tokens use the XNU space/tab separators and require `=` immediately
+after the name. PID allocation varies between boots: verify the
 target against this boot's process report and use each sample's unique ID and
 exec version, not the PID alone, before attributing it. If the PID is absent or
 belongs to a different process during the interval, the intended process was
@@ -61,3 +65,8 @@ Host check: `python3 scripts/tests/test_live_pc.py`. It tests bounded capture,
 mode/PC/LR, overrun and concurrent ring reads, generation changes and partial
 Mach-O reads with mocked memory;
 it does not validate actual XNU ABI, IRQ safety, sampling bias, or hardware.
+To also run the actual parser boundary test, set `XNU_BOOTARGS_SOURCE` to
+`pexpert/gen/bootargs.c` from Apple XNU commit
+`d8b80295118ef25ac3a784134bcf95cd8e88109f`; the test verifies its SHA-256
+before compiling the relevant functions. Without that source the parser test
+is explicitly skipped.
