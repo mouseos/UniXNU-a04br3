@@ -50,17 +50,34 @@ with tempfile.TemporaryDirectory() as tmp:
     (runner/'a04br3-iostat4-baseline').symlink_to(base.resolve(), target_is_directory=True)
     bench=work/'bench'; bench.write_bytes(b'test benchmark')
     matched=mod['build'](base,bench,'12'*20,runner/'a04br3-memory-matched',helper)
-    kernel=out/'a04br3/kernel/kernel.macho'; kernel.write_bytes(b'kernel CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36')
+    kernel=out/'a04br3/kernel/kernel.macho'; kernel.write_bytes(b'kernel CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36 8846FE78-2910-4297-AF97-D59BB6F8FC16')
     image=p/'payload.img'; image.write_bytes(b'payload')
     sha=lambda x:hashlib.sha256(x.read_bytes()).hexdigest()
     report={'kernel_args':line,'data_ramdisk_sha256':mod['EXPECTED']['scratch-data.img'],
             'gpu_addon_sha256':matched['gpuaddon_sha256'],'trust_cache_sha256':matched['trust_sha256'],
             'kernel_sha256':sha(kernel),'payload_sha256':sha(image),'skip_setup':False}
     (p/'payload.json').write_text(json.dumps(report))
-    env=dict(os.environ,RUNNER_TEMP=str(runner),UNIXNU_OUT=str(out))
+    env=dict(os.environ,RUNNER_TEMP=str(runner),UNIXNU_OUT=str(out), XNU_OWNER_DATA_VOLUME_UUID='CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36', XNU_OWNER_CACHE_VOLUME_UUID='8846FE78-2910-4297-AF97-D59BB6F8FC16')
     cmd=[sys.executable,str(root/'scripts/a04br3-memory-matched-verify.py')]
     subprocess.run(cmd,env=env,check=True,capture_output=True)
+    for key in ('XNU_OWNER_DATA_VOLUME_UUID', 'XNU_OWNER_CACHE_VOLUME_UUID'):
+        wrong = dict(env); wrong[key] = '00000000-0000-0000-0000-000000000000'
+        assert subprocess.run(cmd,env=wrong,capture_output=True).returncode != 0, key
+    original = kernel.read_bytes()
+    for marker in (b'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36', b'8846FE78-2910-4297-AF97-D59BB6F8FC16'):
+        for data in (original.replace(marker,b''), original + marker):
+            kernel.write_bytes(data); altered=dict(report); altered['kernel_sha256']=sha(kernel)
+            (p/'payload.json').write_text(json.dumps(altered))
+            assert subprocess.run(cmd,env=env,capture_output=True).returncode != 0, marker
+    kernel.write_bytes(original)
     for key,bad in [('data_ramdisk_sha256','0'*64),('gpu_addon_sha256',None),('skip_setup',True),('kernel_args',line.replace('vm_compressor=2','vm_compressor=1'))]:
         altered=dict(report); altered[key]=bad; (p/'payload.json').write_text(json.dumps(altered))
         assert subprocess.run(cmd,env=env,capture_output=True).returncode != 0, key
-print('PASS: exact baseline assets, GPU entries, trust, payload rejection and 1023-byte profile')
+with tempfile.TemporaryDirectory() as tmp:
+    env=dict(os.environ, DEVICE_DIR=str(root), RUNNER_TEMP=tmp,
+             XNU_OWNER_DATA_VOLUME_UUID='CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36',
+             XNU_OWNER_CACHE_VOLUME_UUID='00000000-0000-0000-0000-000000000000')
+    for name in ('a04br3-memory-matched-prepare.sh', 'a04br3-memory-matched-payload.sh'):
+        result=subprocess.run(['bash',str(root/'scripts'/name)],env=env,capture_output=True,text=True)
+        assert result.returncode != 0 and 'Cache UUID mismatch' in result.stderr, name
+print('PASS: exact baseline assets, UUID rejection, GPU entries, trust and 1023-byte profile')

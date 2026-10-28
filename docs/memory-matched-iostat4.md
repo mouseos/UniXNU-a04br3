@@ -19,7 +19,10 @@ benchmark entry is added; the addon hash necessarily changes. The original
 trust modules remain byte-for-byte and one benchmark trust module is added.
 Neither operation edits the Data seed. The payload builder does not use
 `--skip-setup` and verifies seed, kernel UUID string, addon, trust, payload,
-VM compressor and the exact original arguments followed only by `mb=1`.
+VM compressor, Data and Cache UUID build settings and the exact original
+arguments followed only by `mb=1`. The generated kernel must contain each
+expected UUID string exactly once; this is a static integrity check, not proof
+of the runtime mount selection.
 
 `mb=1` is a compact device-specific opt-in because the reference command line
 has only five bytes of headroom. The resulting 1023-byte line reaches the

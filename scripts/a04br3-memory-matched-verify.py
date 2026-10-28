@@ -9,6 +9,7 @@ import sys
 BASE_ARGS = 'f7a62ab6e768d33141681fed399508a49cf0924780370282c57d73c40fad85d0'
 SEED = '1013af9803111b6898e47090c483e5b5a84bf5f451827c21fc257d7a2cbd258f'
 UUID = b'CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36'
+CACHE_UUID = b'8846FE78-2910-4297-AF97-D59BB6F8FC16'
 
 def sha(path):
     h=hashlib.sha256()
@@ -29,12 +30,14 @@ checks = {
     'seed_unchanged': report['data_ramdisk_sha256'] == SEED and sha(runner/'a04br3-iostat4-baseline/scratch-data.img') == SEED,
     'gpu_addon': report['gpu_addon_sha256'] == matched['gpuaddon_sha256'] == sha(work/'gpuaddon'),
     'owner_trust': report['trust_cache_sha256'] == matched['trust_sha256'] == sha(work/'trustcache'),
-    'kernel': report['kernel_sha256'] == sha(kernel) and UUID in kernel.read_bytes(),
+    'kernel': report['kernel_sha256'] == sha(kernel),
+    'data_uuid': os.environ.get('XNU_OWNER_DATA_VOLUME_UUID') == UUID.decode() and kernel.read_bytes().count(UUID) == 1,
+    'cache_uuid': os.environ.get('XNU_OWNER_CACHE_VOLUME_UUID') == CACHE_UUID.decode() and kernel.read_bytes().count(CACHE_UUID) == 1,
     'payload': report['payload_sha256'] == sha(out/'a04br3/payload/payload.img'),
     'setup_unchanged': report['skip_setup'] is False,
 }
 if not all(checks.values()):
     sys.exit('matched payload verification failed: '+', '.join(k for k,v in checks.items() if not v))
 (work/'payload-verification.json').write_text(json.dumps({'checks':checks, 'payload_sha256':report['payload_sha256'],
-    'kernel_sha256':report['kernel_sha256'], 'data_uuid':UUID.decode(), 'hardware_tested':False},indent=2)+'\n')
+    'kernel_sha256':report['kernel_sha256'], 'data_uuid':UUID.decode(), 'cache_uuid':CACHE_UUID.decode(), 'hardware_tested':False},indent=2)+'\n')
 print('PASS: matched payload inputs, UUID, GPU addon, trust, args and hashes')
