@@ -10,6 +10,8 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 [ "$(shasum -a 256 "$driver" | cut -d ' ' -f 1)" = 8098ef68747a7f351215cb93ec5082bfade0043454f24db1a6bf96abb89d7bc1 ] || { echo 'Vulkan driver differs from matched build' >&2; exit 2; }
 mkdir -p "$output/tree/scripts" "$output/tree/drivers/NativeMetal" "$output/tree/package" "$output/tree/build/native-metal-bridge/ios"
 cp -R "$tree/drivers/NativeMetal/." "$output/tree/drivers/NativeMetal/"
+mkdir -p "$output/tree/drivers/NativeMobileDisplay"
+cp "$tree/drivers/NativeMobileDisplay/NativeGOPWire.h" "$output/tree/drivers/NativeMobileDisplay/"
 cp -R "$here/package/powervr" "$output/tree/package/powervr"
 cp "$tree/scripts/build-vulkan-metal-plugin.py" "$output/tree/scripts/"
 cp "$here/scripts/build-a04br3-metal-plugin.py" "$output/tree/scripts/"
@@ -27,6 +29,7 @@ def digest(p):
  return h.hexdigest()
 paths={'driver_input':driver,'bridge':out/'tree/build/native-metal-bridge/ios/libnative_metal_bridge.a',
        'frontend':out/'tree/drivers/NativeMetal/NativeBridgeMetalFrontend.mm',
+       'display_wire':out/'tree/drivers/NativeMobileDisplay/NativeGOPWire.h',
        'board':out/'tree/package/powervr/user/NativePowerVRMetalBoard.mm',
        'plugin_builder':out/'tree/scripts/build-vulkan-metal-plugin.py',
        'device_builder':out/'tree/scripts/build-a04br3-metal-plugin.py',
