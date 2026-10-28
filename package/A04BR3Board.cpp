@@ -286,7 +286,10 @@ void msdcIoReport(unsigned enabled)
 
 // Diagnostic sampling only. Registers and per-core counters are independently read,
 // not an atomic snapshot. CNTFRQ is the architectural timer, not CPU frequency.
+extern "C" bool a04br3_runtime_recovery_recheck(void);
+extern "C" volatile uint32_t a04br3_runtime_probe_active;
 static unsigned gCpuMeterEnabled;
+static bool gCpuMeterQuarantined;
 static uint32_t gCpuMeterLock;
 struct A04BR3CpuMeterIO {
   volatile uint8_t *t, *i, *p;
@@ -327,15 +330,21 @@ void cpuDiagnosticReport()
     IOLog("a04br3 perf cpu-clk unknown map infra=%u apmixed=%u cntfrq=%llu\n",
           infra != nullptr, apmixed != nullptr, timerFrequency);
   }
-  if (gCpuMeterEnabled == 1) {
+  if (gCpuMeterEnabled == 1 && !gCpuMeterQuarantined) {
     static volatile uint8_t *top;
     if (!top) top = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10000000, 0x1000));
     if (!top || !infra || !apmixed) IOLog("a04br3 cpu-fmeter status=map-failed\n");
+    else if (!a04br3_runtime_recovery_recheck()) IOLog("a04br3 cpu-fmeter status=recovery-not-ready\n");
     else {
+      // Stop this board's watchdog feed before touching the meter. A failed
+      // write/readback leaves its state uncertain; do not probe it again.
+      __atomic_store_n(&a04br3_runtime_probe_active, 1U, __ATOMIC_RELEASE);
       A04BR3CpuMeterIO io{top, infra, apmixed};
       auto r = a04br3_cpu_meter(io);
+      if (a04br3_cpu_meter_requires_recovery(r.status)) gCpuMeterQuarantined = true;
+      else __atomic_store_n(&a04br3_runtime_probe_active, 0U, __ATOMIC_RELEASE);
       uint64_t at; absolutetime_to_nanoseconds(mach_absolute_time(), &at);
-      IOLog("a04br3 cpu-fmeter at_ns=%llu status=%u count=%u armpll_khz=%llu ref_khz=26000 window=520 mux=%08x dcm=%08x debug=%08x hop=%08x ctrl=%08x baseline=%08x pll0=%08x pll1=%08x power=%08x core_hz_unverified=1 external_owner_unverified=1\n",
+      IOLog("a04br3 cpu-fmeter at_ns=%llu status=%u count=%u armpll_khz=%llu ref_khz=26000 window=520 mux=%08x dcm=%08x debug=%08x hop=%08x ctrl=%08x baseline=%08x pll0=%08x pll1=%08x power=%08x core_hz_unverified=1 external_owner_unverified=1 completion_unverified=1 recovery_unverified=1\n",
             at, r.status, r.count, r.khz, r.mux, r.dcm, r.debug, r.hopping, r.ctrl, r.baseline, r.pll0, r.pll1, r.power);
     }
   }
@@ -460,6 +469,13 @@ extern "C" void unixnu_board_init(void)
   unsigned gpuIoTrace = a04br3_diag_arg(PE_parse_boot_argn,"a04br3-gpu-io-trace","a04br3-gio");
   native_powervr_io_trace_enable(gpuIoTrace);
   PE_parse_boot_argn("cm", &gCpuMeterEnabled, sizeof(gCpuMeterEnabled));
+  unsigned runtimeCycle = 0;
+  if (!PE_parse_boot_argn("armcpu-runtime-cycle", &runtimeCycle, sizeof(runtimeCycle)))
+    PE_parse_boot_argn("arc", &runtimeCycle, sizeof(runtimeCycle));
+  if (gCpuMeterEnabled == 1 && runtimeCycle == 1) {
+    gCpuMeterEnabled = 0;
+    IOLog("a04br3 cpu-fmeter status=pmu-conflict-use-separate-boot\n");
+  }
   a04br3_proclog_init();
   a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)
   unsigned events = 0;
