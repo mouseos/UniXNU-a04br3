@@ -43,11 +43,22 @@ def powervr_dir():
     sys.exit('package/powervr/user/NativePowerVRMetalBoard.mm not found')
 
 
+def shader_capture_constructor(start):
+    if not isinstance(start, int) or not 0 <= start <= 1000000:
+        raise ValueError('shader capture start must be between 0 and 1000000')
+    return ('#include <stdlib.h>\n'
+            '__attribute__((constructor)) static void a04br3_spirv_capture_enable(void) {\n'
+            '  setenv("METAL2VULKAN_CAPTURE_SPIRV", "1", 1);\n'
+            '  setenv("METAL2VULKAN_CAPTURE_SPIRV_START", "' + str(start) + '", 1);\n'
+            '}\n')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--vulkan', type=Path, help='Mesa PowerVR driver (default: build-pvr-darwin.py --target ios output)')
     parser.add_argument('--out', type=Path, default=ROOT / 'build/a04br3-metal-plugin')
     parser.add_argument('--ui-latency', action='store_true', help='enable bounded input/render/handoff timestamp correlation (default off)')
+    parser.add_argument('--shader-capture-start', type=int, help='enable bounded diagnostic SPIR-V capture at the zero-based stage ordinal')
     parser.add_argument('--runtime-commit-trace', action='store_true', help='compile opt-in runtime commit phase instrumentation')
     parser.add_argument('--skip-bridge', action='store_true')
     parser.add_argument('--sipf1-dump', action='store_true',
@@ -71,6 +82,8 @@ def main():
     parser.add_argument('--pool-block-mib', type=int, choices=(4, 8, 16, 32, 64),
                         help='opt in to a Metal runtime pool block size in MiB (default: upstream 64)')
     args = parser.parse_args()
+    if args.shader_capture_start is not None and not 0 <= args.shader_capture_start <= 1000000:
+        parser.error('--shader-capture-start must be between 0 and 1000000')
     if args.runtime_commit_trace and not args.ui_latency:
         parser.error('--runtime-commit-trace requires --ui-latency')
     if args.ui_latency:
@@ -92,6 +105,11 @@ def main():
                '--board-source', str(board), '--out', str(args.out.resolve()), '--portable-sha2']
     if args.runtime_commit_trace:
         command += ['--runtime-commit-trace']
+    if args.shader_capture_start is not None:
+        args.out.resolve().parent.mkdir(parents=True, exist_ok=True)
+        diagnostic = args.out.resolve().with_name(args.out.name + '.spirv-capture-enable.mm')
+        diagnostic.write_text(shader_capture_constructor(args.shader_capture_start))
+        command += ['--runtime-shader-capture', '--board-source', str(diagnostic)]
     if args.sipf1_dump:
         # The generic builder recreates OUT; generated input must be its sibling.
         args.out.resolve().parent.mkdir(parents=True, exist_ok=True)
