@@ -509,12 +509,14 @@ extern "C" void native_powervr_io_trace_report(void)
           r.pid, (unsigned long long)r.tid, r.kind, (unsigned long long)startNs,
           (unsigned long long)endNs, (unsigned long long)r.fence, r.result);
   }
+  uint64_t thresholdNs=0;
+  absolutetime_to_nanoseconds(gNativeIoTrace.threshold_ticks,&thresholdNs);
   for (unsigned k=0; k<3; ++k) {
     const uint64_t count=__atomic_load_n(&gNativeIoTrace.short_count[k],__ATOMIC_RELAXED);
     const uint64_t ticks=__atomic_load_n(&gNativeIoTrace.short_ticks[k],__ATOMIC_RELAXED);
     uint64_t ns=0; absolutetime_to_nanoseconds(ticks,&ns);
-    IOLog("a04br3 gpu io trace: short kind=%u count=%llu ns=%llu threshold_ns=2000000 cumulative=1 non_atomic=1\n",
-          k+1,(unsigned long long)count,(unsigned long long)ns);
+    IOLog("a04br3 gpu io trace: short kind=%u count=%llu ns=%llu threshold_ns=%llu cumulative=1 non_atomic=1\n",
+          k+1,(unsigned long long)count,(unsigned long long)ns,(unsigned long long)thresholdNs);
   }
   IOLog("a04br3 gpu io trace: dropped=%llu (cumulative)\n",
         (unsigned long long)__atomic_load_n(&gNativeIoTrace.dropped,__ATOMIC_RELAXED));
