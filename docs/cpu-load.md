@@ -1,6 +1,6 @@
 # a04br3 CPU load diagnostic
 
-The default-off `a04br3-cpu-load=1` boot argument starts a separate kernel
+The default-off `a04br3-cpu-load=1` or `native-msdc-iostat=1` boot argument starts a separate kernel
 thread. After each 10-second sleep it snapshots up to four registered CPUs,
 then reports their cumulative user, system, idle and nice ticks and monotonic
 timestamps. `extra` records any processors outside that bound; an empty or

@@ -46,6 +46,8 @@ int main(void) {struct processor p[5];for(int i=0;i<5;i++){p[i].cpu_id=i;p[i].pr
     assert out.count(' ticks32=1 non_atomic=1') == 4
     assert 'cpus=4 extra=1 non_atomic=1' in out and 'cpus=0 extra=0 non_atomic=1' in out
     board = (root/'package/A04BR3Board.cpp').read_text()
-    assert 'PE_parse_boot_argn("a04br3-cpu-load", &enabled, sizeof(enabled)) || enabled != 1' in board
+    assert 'PE_parse_boot_argn("a04br3-cpu-load", &enabled, sizeof(enabled))' in board
+    assert 'PE_parse_boot_argn("native-msdc-iostat", &ioStats, sizeof(ioStats))' in board
+    assert 'if (enabled != 1 && ioStats != 1) return;' in board
     assert 'IOSleep(10000); a04br3_cpu_load_report();' in board
 print('PASS: bounded core list, unlocked sampling, tick fields, empty list and opt-in wiring')

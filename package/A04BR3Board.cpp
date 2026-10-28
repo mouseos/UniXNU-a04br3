@@ -382,7 +382,10 @@ static void a04br3_cpu_load_thread(void *, wait_result_t)
 static void a04br3_cpu_load_init(void)
 {
   unsigned enabled = 0;
-  if (!PE_parse_boot_argn("a04br3-cpu-load", &enabled, sizeof(enabled)) || enabled != 1) return;
+  unsigned ioStats = 0;
+  PE_parse_boot_argn("a04br3-cpu-load", &enabled, sizeof(enabled));
+  PE_parse_boot_argn("native-msdc-iostat", &ioStats, sizeof(ioStats));
+  if (enabled != 1 && ioStats != 1) return;
   thread_t thread;
   kern_return_t status = kernel_thread_start(a04br3_cpu_load_thread, nullptr, &thread);
   if (status == KERN_SUCCESS) thread_deallocate(thread);
