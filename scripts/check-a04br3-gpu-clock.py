@@ -32,7 +32,7 @@ using u32=uint32_t;using u64=uint64_t;using u8=uint8_t;
 #define INTEGER_BITS 7
 #define GENMASK(h,l) ((uint32_t)((~0u << (l)) & (~0u >> (31-(h)))))
 struct linux_data{int pcwbits;};struct mtk_clk_pll{linux_data *data;};
-static bool pwrapAvailable=true;struct A04BR3PwrapGuard{explicit operator bool()const{return pwrapAvailable;}};
+static bool pwrapAvailable=true;struct A04BR3PwrapGuard{explicit A04BR3PwrapGuard(unsigned=0){} explicit operator bool()const{return pwrapAvailable;}};
 '''
 # Independent arithmetic oracle for MT8167's 21-bit MMPLL PCW / 7 integer bits.
 # Formula documented by MediaTek Linux clk-pll.c __mtk_pll_recalc_rate:

@@ -67,7 +67,7 @@ bool clockDiagnosticWait(volatile uint8_t *pwrap, unsigned fsm)
 }
 const char *clockDiagnosticPmicRead(volatile uint8_t *pwrap, unsigned address, uint16_t *value)
 {
-  A04BR3PwrapGuard guard;
+  A04BR3PwrapGuard guard(10000);
   if (!guard) return "WACS2 busy";
   if ((address & 1) || address > 0xfffe) return "invalid PMIC address";
   if (!clockDiagnosticWait(pwrap, 0)) return "idle timeout or INIT_DONE lost";
@@ -110,7 +110,7 @@ void clockDiagnosticSnapshot(volatile uint8_t *top)
   const uint32_t wacs_enable = clockDiagnosticRead(pwrap, 0x98);
   const uint32_t init = clockDiagnosticRead(pwrap, 0x9c);
   const uint32_t status = clockDiagnosticRead(pwrap, 0xa4);
-  IOLog("a04br3 gpu clock diagnostic: WACS2 EN %08x INIT %08x RDATA %08x\n", wacs_enable, init, status);
+  IOLog("a04br3 gpu clock diagnostic: WACS2 EN %08x INIT %08x RDATA %08x (unlocked, non-atomic)\n", wacs_enable, init, status);
   if (!(wacs_enable & 1) || !(init & 1) || !(status & (1U << 21))) {
     IOLog("a04br3 gpu clock diagnostic: VCORE unknown (WACS2 not initialized/enabled)\n");
     return;
@@ -120,7 +120,7 @@ void clockDiagnosticSnapshot(volatile uint8_t *top)
     uint16_t value = 0;
     const char *error = clockDiagnosticPmicRead(pwrap, addresses[i], &value);
     if (error) {
-      IOLog("a04br3 gpu clock diagnostic: VCORE %04x and remaining registers unknown (%s; RDATA %08x); continuing boot\n",
+      IOLog("a04br3 gpu clock diagnostic: VCORE %04x and remaining registers unknown (%s; unlocked RDATA %08x); continuing boot\n",
             addresses[i], error, clockDiagnosticRead(pwrap, 0xa4));
       return;
     }

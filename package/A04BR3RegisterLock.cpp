@@ -28,3 +28,14 @@ extern "C" bool a04br3_pwrap_try_lock(void) {
   return __atomic_compare_exchange_n(&pwrapBusy, &expected, 1, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 }
 extern "C" void a04br3_pwrap_unlock(void) { __atomic_store_n(&pwrapBusy, 0, __ATOMIC_RELEASE); }
+
+// Startup users tolerate brief RTC reads; runtime recovery itself uses zero
+// retries and refuses immediately on contention. Never wait indefinitely.
+extern "C" bool a04br3_pwrap_lock_bounded(unsigned retries) {
+  if (retries > 10000) retries = 10000;
+  for (unsigned n = 0; ; ++n) {
+    if (a04br3_pwrap_try_lock()) return true;
+    if (n >= retries) return false;
+    IODelay(10);
+  }
+}

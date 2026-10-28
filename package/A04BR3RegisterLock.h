@@ -7,10 +7,11 @@ extern "C" bool a04br3_infra_update(volatile uint8_t *, unsigned mask, unsigned 
 // Nonblocking serialization for every known board WACS2 user.
 extern "C" bool a04br3_pwrap_try_lock(void);
 extern "C" void a04br3_pwrap_unlock(void);
+extern "C" bool a04br3_pwrap_lock_bounded(unsigned retries);
 class A04BR3PwrapGuard {
   bool held;
 public:
-  A04BR3PwrapGuard() : held(a04br3_pwrap_try_lock()) {}
+  explicit A04BR3PwrapGuard(unsigned retries = 0) : held(a04br3_pwrap_lock_bounded(retries)) {}
   ~A04BR3PwrapGuard() { if (held) a04br3_pwrap_unlock(); }
   explicit operator bool() const { return held; }
   A04BR3PwrapGuard(const A04BR3PwrapGuard &) = delete;

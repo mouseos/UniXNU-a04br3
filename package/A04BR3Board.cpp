@@ -374,7 +374,12 @@ void procLogThread(void *, wait_result_t)
 
 static void a04br3_proclog_init(void)
 {
-  if (!PE_parse_boot_argn("a04br3-proclog", &gProcLogSeconds, sizeof(gProcLogSeconds)) || !gProcLogSeconds) return;
+  if (!PE_parse_boot_argn("a04br3-proclog", &gProcLogSeconds, sizeof(gProcLogSeconds))) {
+    // Short form frees boot-argument space for simultaneous diagnostics.
+    if (!PE_parse_boot_argn("pl", &gProcLogSeconds, sizeof(gProcLogSeconds))) return;
+    if (gProcLogSeconds == 1) gProcLogSeconds = 10;
+  }
+  if (!gProcLogSeconds) return;
   thread_t thread;
   if (kernel_thread_start(procLogThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
