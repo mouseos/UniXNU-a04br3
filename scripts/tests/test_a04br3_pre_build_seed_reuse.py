@@ -20,7 +20,7 @@ def executable(path, text):
     path.chmod(0o755)
 
 
-def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None):
+def run_case(reuse, rounds=1, mismatch=False, probe=True, baseline=True, fail_grow=False, fail_round=None, metadata='valid', data=True, fail_seed=False, metal=True, pipeline_diag=None, roa_color=None, memory=None):
     with tempfile.TemporaryDirectory(prefix='pre-build-reuse-') as directory:
         root = Path(directory)
         work, temporary, device, tools = [root / p for p in ('work', 'temp', 'device', 'bin')]
@@ -89,6 +89,9 @@ elif name == 'seed-data-grow.py':
 elif name == 'build-a04br3-trust-cache.py': write(option('--out'), b'base-trust')
 elif name == 'build-a04br3-powervr-probe.py': write(option('--trust-out'), ('new-owner-trust-' + os.environ['MOCK_GENERATION']).encode())
 elif name == 'build-a04br3-metal-plugin.py': write(option('--out') / 'trust.json', ('plugin-' + os.environ['MOCK_GENERATION']).encode())
+elif name == 'build-a04br3-memory-bench.py':
+    write(option('--out') / 'trust.json', b'memory trust')
+    write(option('--out') / 'a04br3-memory-copy-bench', b'signed memory bench')
 elif name == 'a04br3-seed-powervr-probe.py':
     if os.environ.get('MOCK_FAIL_SEED') == '1': raise SystemExit('mock reseed failure')
     source, destination = map(Path, args[-2:])
@@ -105,6 +108,9 @@ elif name == 'a04br3-seed-powervr-probe.py':
                    GITHUB_ENV=str(root / 'github-env'), A04BR3_POWERVR_PROBE='1' if probe else '0',
                    A04BR3_POWERVR_VULKAN='1', A04BR3_POWERVR_METAL='1' if metal else '0',
                    MOCK_FAIL_SEED='1' if fail_seed else '0', MOCK_FAIL_GROW='1' if fail_grow else '0', XNU_OWNER_DATA_VOLUME_UUID='stale')
+        env.pop('A04BR3_MEMORY_BENCH', None)
+        if memory is not None: env['A04BR3_MEMORY_BENCH'] = memory
+        if memory == '1': env['A04BR3_POWERVR_METAL_MODE'] = 'publish'
         env.pop('A04BR3_POWERVR_METAL_ROA_COLOR', None)
         if roa_color is not None:
             env['A04BR3_POWERVR_METAL_ROA_COLOR'] = roa_color
@@ -132,7 +138,8 @@ elif name == 'a04br3-seed-powervr-probe.py':
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
             calls = log.read_text()
             assert not list(temporary.glob('a04br3-seed-rebuild.*')), 'temporary seed leaked'
-            diagnostic_failure = pipeline_diag not in (None, '0', '1') or (pipeline_diag == '1' and not (metal and probe))
+            diagnostic_failure = memory not in (None, '0', '1') or (memory == '1' and not (probe and metal))
+            diagnostic_failure |= pipeline_diag not in (None, '0', '1') or (pipeline_diag == '1' and not (metal and probe))
             diagnostic_failure |= roa_color not in (None, '0', '1') or (roa_color == '1' and not (metal and probe))
             failure = diagnostic_failure or reuse and (metadata != 'valid' or not data or data == 'empty' or not baseline) or fail_seed or generation == fail_round or fail_grow or mismatch or (reuse and not probe)
             assert (result.returncode != 0) == failure, result.stdout
@@ -164,6 +171,11 @@ elif name == 'a04br3-seed-powervr-probe.py':
                     assert '--expected-volume-uuid ' + UUID in calls
                 else:
                     assert '--expected-volume-uuid' not in calls
+                if memory == '1':
+                    assert 'build-a04br3-memory-bench.py' in calls and '--memory-bench ' in calls
+                    assert 'a04br3-memory-bench/trust.json' in calls and '--extra-trust ' in calls
+                else:
+                    assert 'build-a04br3-memory-bench.py' not in calls and '--memory-bench ' not in calls
                 if metal:
                     assert 'build-a04br3-metal-plugin.py' in calls and 'rustup toolchain install' in calls
                     assert (temporary / 'powervr-metal/trust.json').read_text() == 'plugin-' + str(generation)
@@ -294,3 +306,9 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+run_case(True, memory='1')
+run_case(True, memory='bad')
+run_case(True, memory='1', probe=False)
+print('PASS: memory benchmark explicit opt-in, staging, trust and failure conditions')
+run_case(True, memory='1', metal=False)
