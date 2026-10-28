@@ -5,9 +5,21 @@
 #include <stdint.h>
 struct NativeIoRecord { uint64_t start, end, tid, fence; uint32_t pid, kind; int32_t result; };
 struct NativeIoSlot { unsigned state; NativeIoRecord record; };
-struct NativeIoTrace { unsigned enabled, cursor; uint64_t dropped; NativeIoSlot slot[128]; };
+struct NativeIoTrace {
+ unsigned enabled, cursor;
+ uint64_t threshold_ticks, dropped;
+ uint64_t short_count[3], short_ticks[3];
+ NativeIoSlot slot[128];
+};
 static inline void native_io_record(NativeIoTrace *t, const NativeIoRecord &r) {
- if (!__atomic_load_n(&t->enabled,__ATOMIC_RELAXED)) return;
+ if (!__atomic_load_n(&t->enabled,__ATOMIC_ACQUIRE)) return;
+ if (!r.start || r.end < r.start || r.kind < 1 || r.kind > 3) return;
+ const uint64_t elapsed=r.end-r.start;
+ if (r.result==0 && elapsed<t->threshold_ticks) {
+  __atomic_fetch_add(&t->short_count[r.kind-1],1ull,__ATOMIC_RELAXED);
+  __atomic_fetch_add(&t->short_ticks[r.kind-1],elapsed,__ATOMIC_RELAXED);
+  return;
+ }
  unsigned start=__atomic_fetch_add(&t->cursor,1u,__ATOMIC_RELAXED);
  for (unsigned n=0;n<128;n++) {
   NativeIoSlot *slot=&t->slot[(start+n)%128]; unsigned expected=0;
