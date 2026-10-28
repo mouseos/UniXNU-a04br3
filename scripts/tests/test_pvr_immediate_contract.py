@@ -7,7 +7,8 @@ gpu=(p/'NativePowerVRGpu.cpp').read_text()
 enable=jobs[jobs.index('extern "C" void native_powervr_io_trace_enable('):jobs.index('extern "C" unsigned native_powervr_io_trace_enabled(')]
 record=jobs[jobs.index('extern "C" void native_powervr_io_trace_record('):jobs.index('extern "C" void native_powervr_io_trace_report(')]
 assert 'enabled == 2' in enable and '1000000000ull' in enable
-assert record.index('native_io_record(')<record.index('native_io_immediate_claim(')<record.index('IOLog(')
+claim=record.index('native_io_immediate_claim(')
+assert record.index('native_io_record(')<claim<record.index('IOLog(',claim)
 assert 'clock=mach_absolute_ns' in record
 end=gpu.index('native_powervr_io_trace_record(ioStart,ioLocked')
 unlock=gpu.rindex('IOLockUnlock(lock_);',0,end)

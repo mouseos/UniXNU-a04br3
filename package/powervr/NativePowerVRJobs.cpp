@@ -61,6 +61,7 @@ extern "C" {
 #include "native_powervr_pte.h"
 #include "NativePowerVRABI.h"
 #include "NativePowerVRIoTrace.h"
+#include "NativePowerVRWaitSeries.h"
 #undef min
 #undef max
 
@@ -458,6 +459,7 @@ PerfCounter gSubmitPerf[PerfStages];
 unsigned gSubmitPerfEnabled;
 uint64_t gWaitFenceResult[2][3];
 NativeIoTrace gNativeIoTrace;
+NativeWaitSeries gNativeWaitSeries;
 uint64_t nowAbs() { return mach_absolute_time(); }
 uint64_t perfBegin(PerfStage s)
 {
@@ -478,20 +480,40 @@ bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); 
 
 extern "C" void native_powervr_io_trace_enable(unsigned enabled)
 {
-  if (enabled == 1 || enabled == 2) {
+  if (enabled == 1 || enabled == 2 || enabled == 3) {
     uint64_t threshold = 0;
     nanoseconds_to_absolutetime(2000000ull, &threshold);
     gNativeIoTrace.threshold_ticks = threshold ? threshold : 1;
     uint64_t longThreshold = 0;
     nanoseconds_to_absolutetime(1000000000ull, &longThreshold);
     gNativeIoTrace.immediate_threshold_ticks = longThreshold ? longThreshold : 1;
+    uint64_t sumThreshold=0,window=0,stale=0;
+    nanoseconds_to_absolutetime(1000000000ull,&sumThreshold);
+    nanoseconds_to_absolutetime(10000000000ull,&window);
+    nanoseconds_to_absolutetime(5000000000ull,&stale);
+    gNativeWaitSeries.threshold=sumThreshold?sumThreshold:1;gNativeWaitSeries.windowTicks=window?window:1;
+    gNativeWaitSeries.staleTicks=stale?stale:1;
   }
-  __atomic_store_n(&gNativeIoTrace.immediate_enabled, enabled == 2, __ATOMIC_RELEASE);
-  __atomic_store_n(&gNativeIoTrace.enabled, enabled == 1 || enabled == 2, __ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeWaitSeries.enabled,enabled == 3,__ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeIoTrace.immediate_enabled, enabled == 2 || enabled == 3, __ATOMIC_RELEASE);
+  __atomic_store_n(&gNativeIoTrace.enabled, enabled == 1 || enabled == 2 || enabled == 3, __ATOMIC_RELEASE);
 }
 extern "C" unsigned native_powervr_io_trace_enabled(void)
 {
   return __atomic_load_n(&gNativeIoTrace.enabled, __ATOMIC_RELAXED);
+}
+extern "C" unsigned native_powervr_wait_series_enabled(void)
+{
+  return __atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE);
+}
+extern "C" void native_powervr_wait_series_begin(unsigned pid,uint64_t tid,uint64_t fence)
+{
+  uint64_t at=mach_absolute_time();
+  if (native_wait_begin(&gNativeWaitSeries,pid,tid,fence,at)) {
+    uint64_t ns=0;absolutetime_to_nanoseconds(at,&ns);
+    IOLog("a04br3 gpu wait begin: clock=mach_absolute_ns pid=%u tid=%llu fence=%llu at_ns=%llu\n",
+          pid,(unsigned long long)tid,(unsigned long long)fence,(unsigned long long)ns);
+  }
 }
 extern "C" void native_powervr_io_trace_record(uint64_t start, uint64_t end, uint64_t tid,
                                                uint64_t fence, unsigned pid, unsigned kind, int result)
@@ -499,6 +521,15 @@ extern "C" void native_powervr_io_trace_record(uint64_t start, uint64_t end, uin
   if (!start || end < start) return;
   NativeIoRecord record = {start, end, tid, fence, pid, kind, result};
   native_io_record(&gNativeIoTrace, record);
+  NativeWaitResult series={};
+  if (kind==1 && native_wait_end(&gNativeWaitSeries,pid,tid,fence,start,end,result,result!=-ETIMEDOUT,&series)) {
+    uint64_t firstNs=0,lastNs=0,sumNs=0;
+    absolutetime_to_nanoseconds(series.first,&firstNs);absolutetime_to_nanoseconds(series.last,&lastNs);
+    absolutetime_to_nanoseconds(series.sum,&sumNs);
+    IOLog("a04br3 gpu wait series: clock=mach_absolute_ns pid=%u tid=%llu fence=%llu start_ns=%llu end_ns=%llu sum_ns=%llu count=%u errors=%u result=%d\n",
+          series.pid,(unsigned long long)series.tid,(unsigned long long)series.fence,
+          (unsigned long long)firstNs,(unsigned long long)lastNs,(unsigned long long)sumNs,series.count,series.errors,series.result);
+  }
   if (native_io_immediate_claim(&gNativeIoTrace, record)) {
     uint64_t startNs=0, endNs=0;
     absolutetime_to_nanoseconds(start, &startNs);
@@ -536,6 +567,11 @@ extern "C" void native_powervr_io_trace_report(void)
     IOLog("a04br3 gpu io immediate: claims=%u skipped=%u cap=8\n",
           __atomic_load_n(&gNativeIoTrace.immediate_count,__ATOMIC_RELAXED),
           __atomic_load_n(&gNativeIoTrace.immediate_skipped,__ATOMIC_RELAXED));
+  if (__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_RELAXED))
+    IOLog("a04br3 gpu wait series: busy=%u full=%u late=%u evicted=%u suppressed_begin=%u suppressed_series=%u\n",
+      __atomic_load_n(&gNativeWaitSeries.busy,__ATOMIC_RELAXED),__atomic_load_n(&gNativeWaitSeries.full,__ATOMIC_RELAXED),
+      __atomic_load_n(&gNativeWaitSeries.late,__ATOMIC_RELAXED),__atomic_load_n(&gNativeWaitSeries.evicted,__ATOMIC_RELAXED),
+      __atomic_load_n(&gNativeWaitSeries.suppressedBegin,__ATOMIC_RELAXED),__atomic_load_n(&gNativeWaitSeries.suppressedSeries,__ATOMIC_RELAXED));
 }
 
 extern "C" void native_powervr_submit_perf_enable(unsigned enabled)
