@@ -11,3 +11,7 @@ pipeline開始前に `PL ... pre` として通知し、送信が終わった後�
 出力は既存Metal bundleの `native_metal_board_text` を動的に探し、そのUART marker経路を使う。見つからない場合はstderrへフォールバックする。各行の送信は同期であり、診断が性能を乱す可能性がある。対象でsinkの解決、行の完全性、clock基準と実負荷を確認するまで観測成功とは扱わない。
 
 ホストではMesa内 `src/imagination/pco/tests/test_pco_timing.py`、`src/imagination/vulkan/tests/test_pvr_timing.py` とdevice内 `scripts/tests/test_pipeline_timing_switch.py` を実行する。Xcode・iOS SDK・実機でのビルドと動作は別に検証する。
+
+既存iostat4との比較では、過去の固定Data seed、６エントリのGPU addon、既存trustを使用する。`scripts/make-a04br3-pipeline-addon.py` は、macOS runnerで署名・bundle seal・CDHashを確認した診断bundleとその出自記録を受け取り、固定ハッシュを検査する。元の６エントリの順序とmodeを保ち、診断を組み込んだMetal実行ファイル・そのMesaライブラリ・resource sealのみ置き換える。Info.plistが異なる場合は停止する。元のtrustモジュールを維持して新しい署名２件を追加し、Data seedは変更しない。
+
+カーネルは固定Data/Cache UUIDと既存のVM・GPU・MSDC条件を指定して別途増分ビルドする。bundleの署名確認と完成kernelはmacOSで検証する。固定baselineのData・GPU・trustを公式ソースだけで再生成できることや、既存persistent storeと実際に一致することは未確認である。
