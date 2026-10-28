@@ -1,4 +1,4 @@
-/* Explicit, single-threaded synthetic copy measurement; never runs at boot. */
+/* Explicit, single-threaded synthetic copy measurement; boot path is opt-in. */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <inttypes.h>
@@ -38,25 +38,7 @@ static uint64_t now_ns(void) {
     if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) { perror("clock_gettime"); exit(1); }
     return (uint64_t)t.tv_sec * UINT64_C(1000000000) + (uint64_t)t.tv_nsec;
 }
-int main(int argc, char **argv) {
-    if (argc == 2 && !strcmp(argv[1], "--boot-run")) {
-        if (!freopen("/dev/console", "w", stdout) || !freopen("/dev/console", "w", stderr)) return 1;
-        setvbuf(stdout, NULL, _IOLBF, 0);
-        printf("a04br3_mem_copy synthetic=1 phase=waiting delay_seconds=180\n");
-        unsigned remaining = 180;
-        while (remaining) remaining = sleep(remaining);
-        static char *boot_args[] = {"a04br3-memory-copy-bench", "--run", "16", NULL};
-        argc = 3; argv = boot_args;
-    }
-    if (argc != 3 || strcmp(argv[1], "--run")) {
-        fprintf(stderr, "usage: %s --run size_mib (1..64)\n", argv[0]); return 2;
-    }
-    char *end;
-    errno = 0;
-    unsigned long mib = strtoul(argv[2], &end, 10);
-    if (errno || !*argv[2] || *argv[2] == '-' || *end || mib < 1 || mib > 64) {
-        fprintf(stderr, "invalid size_mib (1..64)\n"); return 2;
-    }
+static int run_copy(unsigned long mib) {
     size_t size = (size_t)mib * 1024 * 1024;
     printf("a04br3_mem_copy synthetic=1 phase=prepare size_bytes=%zu monotonic_ns=%" PRIu64 "\n", size, now_ns());
 #ifdef __APPLE__
@@ -79,4 +61,35 @@ int main(int argc, char **argv) {
            size, start, end_ns, end_ns - start, size, ok);
     free(dst); free(src);
     return ok && end_ns > start ? 0 : 1;
+}
+
+static void wait_seconds(unsigned seconds) {
+    while (seconds) seconds = sleep(seconds);
+}
+int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "--boot-run")) {
+        if (!freopen("/dev/console", "w", stdout) || !freopen("/dev/console", "w", stderr)) return 1;
+        setvbuf(stdout, NULL, _IOLBF, 0);
+        printf("a04br3_mem_copy synthetic=1 phase=waiting delay_seconds=180\n");
+        wait_seconds(180);
+        static const unsigned long sizes[] = {1, 4};
+        for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) {
+            if (i) {
+                printf("a04br3_mem_copy synthetic=1 phase=recovery delay_seconds=10\n");
+                wait_seconds(10);
+            }
+            if (run_copy(sizes[i])) return 1;
+        }
+        return 0;
+    }
+    if (argc != 3 || strcmp(argv[1], "--run")) {
+        fprintf(stderr, "usage: %s --run size_mib (1..64)\n", argv[0]); return 2;
+    }
+    char *end;
+    errno = 0;
+    unsigned long mib = strtoul(argv[2], &end, 10);
+    if (errno || !*argv[2] || *argv[2] == '-' || *end || mib < 1 || mib > 64) {
+        fprintf(stderr, "invalid size_mib (1..64)\n"); return 2;
+    }
+    return run_copy(mib);
 }

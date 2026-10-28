@@ -79,16 +79,24 @@ of the existing board pre-build. This clean build recipe has not yet been run
 on macOS, and GPU functionality of its output is not verified.
 
 The board hook spawns `/private/var/ngpu/bin/a04br3-memory-copy-bench` only
-when `a04br3-membench=1` is present. The child opens `/dev/console`, waits 180
-seconds, checks free VM pages, and if at least 64 MiB are reported free,
-allocates two 16 MiB buffers. It initializes the source and writes each 4 KiB
-of the destination through a volatile pointer before timing one copy; it
-compares the buffers after timing, writes the result to the console, and exits.
-The free-page check is conservative, racy and **not a safety guarantee**; it
-can skip even if reclaimable memory exists. A boot that has not reached idle at
-180 seconds is not an idle measurement. No repeated load or rendering fallback
-is introduced. Nonzero spawn errno, missing console, free-page refusal,
-allocation failure, process exit, and absent results must be distinguished.
+when `a04br3-membench=1` (or the matched profile's `mb=1`) is present. After
+the process reaches its entry point and opens `/dev/console`, it waits 180
+seconds. It then tests 1 MiB and 4 MiB per buffer in that order, once each,
+with a 10-second recovery gap after freeing the first pair. Each stage checks
+free VM pages immediately before allocation, requiring twice the buffer size
+plus a 32 MiB reserve (34 MiB and 40 MiB respectively). If a check, allocation,
+copy verification or timing fails, it stops without running later stages.
+The prior matched boot reported 40.5 MiB free and skipped the old 16 MiB
+stage; that observation does not guarantee either new stage will run. Free
+pages can change between checking and allocating. Reclaimable or inactive pages
+are not added to free pages: their availability and reclamation cost are not
+established by these counters. The reserve is conservative, not a safety
+guarantee; the allocator may retain freed pages during the recovery gap.
+Both stages initialize and touch their buffers outside the timed copy. This is
+an artificial workload, not an idle or real-application measurement; record the
+surrounding load separately. The 180-second delay begins after the process
+starts, not at boot, and neither it nor the recovery interval guarantees idle.
+No rendering path or GPU/Data/VM setting is changed.
 
 The normal standalone `--run size_mib` accepts 1–64 MiB per buffer: this is an
 input limit, not a safe allocation limit. Output includes monotonic start/end,
@@ -98,13 +106,16 @@ wall-clock CPU-copy measurements include scheduling and interrupts; cache,
 write allocation, DRAM activity from other masters, placement, CPU frequency,
 and memcpy implementation affect them. They are not DRAM controller traffic or
 total system bandwidth. Neither the buffer size nor volatile page touching
-proves cache misses. A validated controller counter is still needed for actual
+proves cache misses. The 1 MiB and 4 MiB sizes can fit partly or wholly in
+cache; differences between them are not a direct cache-size measurement.
+Single-copy timing is vulnerable to scheduling and timer quantization, so it
+is not a statistically robust throughput estimate. A validated controller counter is still needed for actual
 system DRAM traffic.
 
 Record source and image IDs, workload, free pages and boot identity. Separate
 idle and real-workload observations from the artificial test, and compare
 before/after baselines. For distributions, run separately with recovery gaps;
-the automatic path performs only one pass per boot. Verify the relationship
+the automatic path performs one pass at each permitted size per boot. Verify the relationship
 between user `CLOCK_MONOTONIC` and kernel timestamps before joining them.
 Heartbeat lines are sequential, not an atomic snapshot. Target compilation,
 signature, trust, spawn, console and measurement are all unverified until the
