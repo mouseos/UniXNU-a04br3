@@ -705,3 +705,13 @@ concatenation without a recognizable boundary cannot be disproved from hashes
 or counters. These rates inherit the non-atomic snapshots and logging overhead
 above. This tool covers MSDC transport, not whole-system utilization or memory
 bandwidth.
+
+The kernel build uses a source-generated bootstrap reference: the driver first
+removes the previous prelinked candidate, builds and prelinks from the selected
+source and locked feeds, saves `kernel.reference.macho` and its JSON record,
+then builds and prelinks again against that reference. The board validator
+requires the real PMGR and legacy display definitions before a kernel can be
+used in a payload. A missing validator, reference, or required definition is a
+build error. `llvm-nm` from the configured LLVM toolchain is required. Record
+the source revisions, build options, reference hash, final hash, and dependency
+versions in the artifact manifest. Do not distribute the reference kernel.

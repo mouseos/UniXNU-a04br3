@@ -12,6 +12,7 @@ reads is linked from the IPSW cache of the unixnu driver.
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -36,6 +37,13 @@ def require(value, message):
 
 
 reference = ROOT.parent / 'kernel/kernel.macho'
+reference_pass = os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')
+require(reference_pass in ('bootstrap', 'final'),
+        'PMGR requires the source-reference-aware UniXNU kernel build driver')
+if reference_pass == 'bootstrap':
+    require(not reference.exists(), 'bootstrap must not use a previous kernel')
+else:
+    require(reference.is_file(), 'final PMGR build requires the source-generated reference kernel')
 if not reference.is_file():
     stub = OUT / 'FirstPassStub.c'
     stub.write_text('// No reference kernel yet: the bridge needs one, so the first kernel links without it.\n'

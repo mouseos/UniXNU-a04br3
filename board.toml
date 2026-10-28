@@ -37,6 +37,9 @@ windows = [
 ]
 
 [kernel]
+# The reference is produced from this source configuration on the first pass.
+source_reference_bootstrap = true
+candidate_validator = "scripts/validate-a04br3-kernel.py"
 defconfig = "a04br3_defconfig"
 archives = [
   "build-corecrypto-14.py",
