@@ -60,6 +60,7 @@ extern "C" {
 #include "native_powervr_jobs.h"
 #include "native_powervr_pte.h"
 #include "NativePowerVRABI.h"
+#include "NativePowerVRIoTrace.h"
 #undef min
 #undef max
 
@@ -456,6 +457,7 @@ struct PerfCounter { uint64_t entered, finished, ticks; };
 PerfCounter gSubmitPerf[PerfStages];
 unsigned gSubmitPerfEnabled;
 uint64_t gWaitFenceResult[2][3];
+NativeIoTrace gNativeIoTrace;
 uint64_t nowAbs() { return mach_absolute_time(); }
 uint64_t perfBegin(PerfStage s)
 {
@@ -473,6 +475,38 @@ void perfEnd(PerfStage s, uint64_t start)
 bool queueReached(pvr_queue *q, uint32_t seqno) { return int32_t(READ_ONCE(*q->timeline_ufo.value) - seqno) >= 0; }
 bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); }
 }  // namespace
+
+extern "C" void native_powervr_io_trace_enable(unsigned enabled)
+{
+  __atomic_store_n(&gNativeIoTrace.enabled, enabled == 1, __ATOMIC_RELAXED);
+}
+extern "C" unsigned native_powervr_io_trace_enabled(void)
+{
+  return __atomic_load_n(&gNativeIoTrace.enabled, __ATOMIC_RELAXED);
+}
+extern "C" void native_powervr_io_trace_record(uint64_t start, uint64_t end, uint64_t tid,
+                                               uint64_t fence, unsigned pid, unsigned kind, int result)
+{
+  if (!start || end < start) return;
+  NativeIoRecord record = {start, end, tid, fence, pid, kind, result};
+  native_io_record(&gNativeIoTrace, record);
+}
+extern "C" void native_powervr_io_trace_report(void)
+{
+  if (!native_powervr_io_trace_enabled()) return;
+  for (unsigned i=0; i<128; i++) {
+    NativeIoRecord r;
+    if (!native_io_take(&gNativeIoTrace, i, &r)) continue;
+    uint64_t startNs=0, endNs=0;
+    absolutetime_to_nanoseconds(r.start, &startNs);
+    absolutetime_to_nanoseconds(r.end, &endNs);
+    IOLog("a04br3 gpu io trace: pid=%u tid=%llu kind=%u start_ns=%llu end_ns=%llu fence=%llu result=%d\n",
+          r.pid, (unsigned long long)r.tid, r.kind, (unsigned long long)startNs,
+          (unsigned long long)endNs, (unsigned long long)r.fence, r.result);
+  }
+  IOLog("a04br3 gpu io trace: dropped=%llu (cumulative)\n",
+        (unsigned long long)__atomic_load_n(&gNativeIoTrace.dropped,__ATOMIC_RELAXED));
+}
 
 extern "C" void native_powervr_submit_perf_enable(unsigned enabled)
 {

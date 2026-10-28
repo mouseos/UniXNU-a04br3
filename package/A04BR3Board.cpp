@@ -50,6 +50,8 @@ int a04br3_powervrprobed_spawn(void *process, uint64_t scratch);
 int a04br3_memory_bench_spawn(void *process, uint64_t scratch);
 void native_powervr_submit_perf_enable(unsigned);
 void native_powervr_submit_perf_report(void);
+void native_powervr_io_trace_enable(unsigned);
+void native_powervr_io_trace_report(void);
 void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
 extern volatile uint64_t native_msdc_verified_cache_stats[3] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_irq_stats[4] __attribute__((weak_import));
@@ -358,6 +360,7 @@ void procLogThread(void *, wait_result_t)
     boot_ipi_reason_report();
     boot_ast_caller_report();
     native_powervr_submit_perf_report();
+    native_powervr_io_trace_report();
     msdcRootTimingReport(rootTiming);
     cacheReportSeconds += gProcLogSeconds;
     if (cacheReportSeconds >= 60) {
@@ -421,6 +424,9 @@ extern "C" void unixnu_board_init(void)
   if (!PE_parse_boot_argn("a04br3-gpu-submit-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf)))
     PE_parse_boot_argn("a04br3-home-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf));
   native_powervr_submit_perf_enable(gpuSubmitPerf);
+  unsigned gpuIoTrace = 0;
+  PE_parse_boot_argn("a04br3-gpu-io-trace", &gpuIoTrace, sizeof(gpuIoTrace));
+  native_powervr_io_trace_enable(gpuIoTrace);
   a04br3_proclog_init();
   a04br3_gpu_init();   // package/A04BR3Gpu.cpp (a04br3-gpu=1)
   unsigned events = 0;

@@ -41,6 +41,7 @@
 //    semantics of copy_struct_from_user(), pvr_get_uobj() and pvr_set_uobj().
 //  - DRM_IOCTL_GEM_CLOSE does not check drm_gem_close.pad, as drm_gem_close_ioctl() does not.
 #include <IOKit/IOLib.h>
+#include <kern/thread.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -82,6 +83,9 @@
 #include "native_powervr_bo_stats.h"
 #define NATIVE_POWERVR_JOBS_API __attribute__((weak))
 #include "native_powervr_jobs.h"
+extern "C" unsigned native_powervr_io_trace_enabled(void);
+extern "C" void native_powervr_io_trace_record(uint64_t, uint64_t, uint64_t, uint64_t, unsigned, unsigned, int);
+extern "C" uint64_t mach_absolute_time(void);
 extern "C" uint64_t native_powervr_submit_perf_ioctl_begin(unsigned);
 extern "C" void native_powervr_submit_perf_ioctl_end(unsigned, uint64_t);
 extern "C" unsigned native_powervr_wait_perf_enabled(void);
@@ -1625,7 +1629,13 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
       backboard = strcmp(perfName, "backboardd") == 0;
       waitPerf = native_powervr_wait_perf_begin(backboard);
     }
+    uint64_t ioStart=0, ioTid=0; unsigned ioPid=0;
+    if (native_powervr_io_trace_enabled()) {
+      char name[20]={}; proc_selfname(name,sizeof(name));
+      if (!strcmp(name,"backboardd")) { ioPid=proc_selfpid(); ioTid=current_thread()->thread_id; ioStart=mach_absolute_time(); }
+    }
     const int err = native_powervr_fence_wait(jobs, wait.fence, wait.timeout_ns);
+    if (ioStart) native_powervr_io_trace_record(ioStart,mach_absolute_time(),ioTid,wait.fence,ioPid,1,err);
     if (waitPerf) native_powervr_wait_perf_end(backboard, waitPerf, err);
     if (!err) return kIOReturnSuccess;
     if (err == -ETIMEDOUT) return kIOReturnTimeout;
@@ -1639,13 +1649,24 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
   memcpy(args, input, shape->input);
   NativePowerVRAbiSubmitReply reply = {};
   const bool submitPerf = method == NativePowerVRMethodSubmitJobs;
+  uint64_t ioStart=0, ioTid=0; unsigned ioPid=0;
+  if (submitPerf && native_powervr_io_trace_enabled()) {
+    char name[20]={}; proc_selfname(name,sizeof(name));
+    if (!strcmp(name,"backboardd")) { ioPid=proc_selfpid(); ioTid=current_thread()->thread_id; ioStart=mach_absolute_time(); }
+  }
   const uint64_t lockPerf = submitPerf ? native_powervr_submit_perf_ioctl_begin(0) : 0;
   IOLockLock(lock_);
   if (submitPerf) native_powervr_submit_perf_ioctl_end(0, lockPerf);
+  uint64_t ioLocked = ioStart ? mach_absolute_time() : 0;
   const uint64_t callPerf = submitPerf ? native_powervr_submit_perf_ioctl_begin(1) : 0;
   const int err = closing_ ? -ENODEV : call(method, args, &reply);
   if (submitPerf) native_powervr_submit_perf_ioctl_end(1, callPerf);
+  uint64_t ioEnd = ioStart ? mach_absolute_time() : 0;
   IOLockUnlock(lock_);
+  if (ioStart) {
+    native_powervr_io_trace_record(ioStart,ioLocked,ioTid,0,ioPid,2,0);
+    native_powervr_io_trace_record(ioLocked,ioEnd,ioTid,0,ioPid,3,err);
+  }
   if (closing_) return kIOReturnNotReady;
   if (err) return ioReturnOf(err);
   if (method == NativePowerVRMethodSubmitJobs) memcpy(output, &reply, sizeof(reply));
