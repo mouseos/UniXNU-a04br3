@@ -1,8 +1,9 @@
 # KCCB kickの短時間poll
 
 `a04br3-kccb-fast=1` は機種固有の実験設定で、既定オフ。通常のkickと
-combined geometry/fragment kickのみ、実行済みカウンタを最大50μsの間、
-10μs間隔で再確認し、未完了なら従来の1ms sleepに戻る。最初の確認で完了
+combined geometry/fragment kickのみ、実行済みカウンタを再確認し、未完了なら
+10μsのdelayを最大5回挟んで、従来の1ms sleepに戻る。delayの指定合計は
+最大50μsだが、cache操作とスケジューリングで経過時間は増え得る。最初の確認で完了
 していれば待機せず、実行済みカウンタの同じ目標値を用いる。MMU cache、
 cleanupなど他のコマンドやtimeout 0には短時間pollを行わない。
 
@@ -11,7 +12,7 @@ cleanupなど他のコマンドやtimeout 0には短時間pollを行わない。
 この区間には他の処理とスケジュール待ちも含まれ、firmware完了時刻は未測定。
 実機のfirmwareが50μs以内に完了する保証はなく、CPU負荷・充電への影響も
 未測定。ホスト試験による早期発見はロジックの検証で、実機改善の証明ではない。
-有効時も最大50μsでsleepに戻すが、スケジューリングによる経過時間は増え得る。
+最大5回のdelay後はsleepに戻す。
 
 根本的にはLinuxのような非同期slot予約・完了通知と、全enqueue経路の予約および
 失敗処理が必要。診断対象の待機を成功したことにしたり、GPUのfenceを先にsignal

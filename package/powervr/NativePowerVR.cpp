@@ -725,8 +725,9 @@ extern "C" int native_powervr_kccb_submit(const struct rogue_fwif_kccb_cmd *cmd,
   int err = -ETIMEDOUT;
   // Experimental: only job kicks, no MMU/cleanup commands. If firmware has
   // already acknowledged a kick, avoid rounding its wait up to IOSleep(1).
-  // Five bounded 10-us delays cost at most 50 us of CPU before the existing
-  // sleeping loop; the same cumulative executed-counter predicate is used.
+  // Five bounded 10-us delays add 50 us of requested delay before the existing
+  // sleeping loop; cache reads and scheduling add time. The same cumulative
+  // executed-counter predicate is used.
   if (gKccbFastPoll && timeout_ms &&
       (local.cmd_type == ROGUE_FWIF_KCCB_CMD_KICK ||
        local.cmd_type == ROGUE_FWIF_KCCB_CMD_COMBINED_GEOM_FRAG_KICK)) {
