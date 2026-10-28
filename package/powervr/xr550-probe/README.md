@@ -18,20 +18,12 @@ Do not treat a pass as general ROA or XR conformance.
 
 Build on an Xcode host using `python3 scripts/build-a04br3-xr550-probe.py
 --out /path/to/output`. Its ad-hoc 4K signature and entitlements are checked;
-pass the generated `trust.json` as `--extra-trust` to the normal owner trust
-bundle builder. Pass `--xr550-probe /path/to/output` to
-`a04br3-seed-powervr-probe.py`: in this opt-in diagnostic image it replaces
-`bin/powervrprobed` and places the metallib alongside it. Use the existing
-`a04br3-powervrprobed=1` boot hook, a published Metal GPU plugin with COLOR
-ROA enabled, and authorize `powervrprobed` as a Metal client. This image runs
-the XR probe in place of the ordinary PowerVR probe. Build and trust the normal
-GPU plugin and Vulkan driver as well. Inspect serial output for the two PASS
-lines; spawn, build or feature advertising alone are not success.
-
-Alternatively, the existing `make-a04br3-gpu-addon.py` accepts
-`--xr550-probe /path/to/output`, verifies the signed XR binary's CDHash,
-adds it and its metallib plus the publish/client markers, and emits an owner
-trust bundle including that CDHash. Its normal probe and plugin inputs must
-carry identical signed Vulkan libraries; use a Metal plugin built with
-`--roa-color`. Generate the payload with that addon and owner trust bundle,
-plus the existing prepared Data seed and `a04br3-powervrprobed=1`.
+Use `make-a04br3-gpu-addon.py --xr550-probe /path/to/output` with the
+normal signed probe, ROA-enabled Metal plugin and pinned original trust bundle.
+It verifies the XR binary's signature and CDHash before packing, places the
+probe in `bin/powervrprobed`, adds the metallib and publish/client markers,
+and emits an owner trust bundle including the XR CDHash. The ordinary PowerVR
+probe is replaced only for this diagnostic image. Use the existing
+`a04br3-powervrprobed=1` boot hook and the generated addon and trust bundle.
+Inspect serial output for both PASS lines; spawn, build or feature advertising
+alone are not success.
