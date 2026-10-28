@@ -1,8 +1,8 @@
 {
   "mesa": {
     "repository": "https://github.com/mouseos/mesa-pco.git",
-    "commit": "4f14de68985417e2c1899eebcd7086a71e710770",
-    "tree": "f23416452b4205cf2d2ed0d3f91f5c0ef30abcfe"
+    "commit": "e87d21365563f6f79daa132756dd6c03ce1665b6",
+    "tree": "8ed77b0db8c3c23a3856de88ab81d40fac0d14a9"
   },
   "patches": [
     "patches/mesa/pvr-darwin-winsys.patch"
