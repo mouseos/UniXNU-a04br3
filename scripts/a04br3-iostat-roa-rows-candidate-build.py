@@ -578,7 +578,7 @@ def main():
                 raise ValueError(f'{variant}: payload copy mismatch')
             with log_path.open('a', encoding='utf-8') as log:
                 subprocess.run(boot_cmd, cwd=source, check=True, stdout=log, stderr=subprocess.STDOUT)
-                subprocess.run([sys.executable, str(device / 'scripts/check-a04br3-bootimg.py'), str(target / 'boot.img')], check=True, stdout=log, stderr=subprocess.STDOUT)
+                subprocess.run([sys.executable, '-B', str(device / 'scripts/check-a04br3-bootimg.py'), str(target / 'boot.img')], check=True, stdout=log, stderr=subprocess.STDOUT)
             report['variants'][variant] = {'kernel_args': line, 'payload_sha256': sha(target / 'payload.img'),
                                            'boot_sha256': sha(target / 'boot.img'), 'adt_sha256': meta['adt_sha256']}
         check_repo(source, UNIXNU)
