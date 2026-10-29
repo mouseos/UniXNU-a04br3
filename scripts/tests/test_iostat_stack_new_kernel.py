@@ -16,7 +16,7 @@ def prop(name, value):
 class NewKernelContracts(unittest.TestCase):
     def test_iostat_arguments_remove_home_perf_and_keep_iostat(self):
         line = 'serial=1 a04br3-home-perf=1 pl=1 native-msdc-iostat=1'
-        self.assertEqual(BUILD.rewrite_args(line), 'serial=1 pl=60 native-msdc-iostat=1')
+        self.assertEqual(BUILD.rewrite_args(line), 'serial=1 pl=60 native-msdc-iostat=1 a04br3-stacklog=1')
         with self.assertRaises(ValueError): BUILD.rewrite_args('serial=1 a04br3-home-perf=1 pl=1')
 
     def test_adt_allows_only_seed_and_preserved_identity(self):
@@ -43,7 +43,15 @@ class NewKernelContracts(unittest.TestCase):
     def test_no_identity_or_private_log_output_contract(self):
         source = (ROOT/'scripts/a04br3-iostat-stack-new-kernel.py').read_text()
         self.assertIn('historical_private_log_risk', source)
-        self.assertNotIn('UNIXNU_UNIQUE_CHIP_ID', source)
+        self.assertIn("replace(secret, '[redacted]')", source)
         self.assertNotIn('private-build.log', source)
+
+    def test_configuration_only_allows_changed_arguments(self):
+        import copy
+        old = {'entry': [{'id':'xnu', 'args':'old', 'path':'kernel'}], 'version':1}
+        new = copy.deepcopy(old); new['entry'][0]['args'] = 'new'
+        BUILD.compare_config(copy.deepcopy(old), copy.deepcopy(new), 'new')
+        new['entry'][0]['path'] = 'other'
+        with self.assertRaises(ValueError): BUILD.compare_config(copy.deepcopy(old), new, 'new')
 
 if __name__ == '__main__': unittest.main()

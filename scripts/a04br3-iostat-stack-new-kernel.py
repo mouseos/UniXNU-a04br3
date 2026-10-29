@@ -23,7 +23,7 @@ import tomllib
 
 OLD_SOURCE = 'e8f5385e4cee02bb15efa2fb97c20bb59b98d72f'
 OLD_DEVICE = '8fde8ba87486338342f3be528823cb46394f2c5b'
-NEW_DEVICE = '78d2c29'
+NEW_DEVICE = '78d2c29a2a8122df2b0ae4809619c96ade662f5a'
 UEFI = 'd3d4f28a89b29553ede7d7523c6af86d7e2459e8'
 FIXED = ('scratch-data.img', 'kernel.macho.trustcache', 'kernel.macho.gpuaddon')
 BOOT_MAGIC = b'ANDROID!'
@@ -82,6 +82,25 @@ def fat_files(payload, destination):
         subprocess.run(['mcopy', '-i', str(payload), f'::/EFI/UniXNU/Payloads/{name}', str(target)], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return {name: sha(destination / name) for name in names}
+
+
+def payload_config(payload, target):
+    subprocess.run(['mcopy', '-i', str(payload), '::/EFI/UniXNU/unixnu.toml', str(target)],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return tomllib.loads(target.read_text())
+
+
+def compare_config(old, new, expected_args):
+    old_entries, new_entries = old.get('entry'), new.get('entry')
+    if not isinstance(old_entries, list) or not isinstance(new_entries, list):
+        raise ValueError('missing boot entries')
+    old_xnu = [x for x in old_entries if x.get('id') == 'xnu']
+    new_xnu = [x for x in new_entries if x.get('id') == 'xnu']
+    if len(old_xnu) != 1 or len(new_xnu) != 1 or new_xnu[0].get('args') != expected_args:
+        raise ValueError('actual FAT boot arguments mismatch')
+    old_xnu[0]['args'] = expected_args
+    if old != new:
+        raise ValueError('FAT boot configuration differs beyond requested arguments')
 
 
 def adt_tree(path):
@@ -164,6 +183,9 @@ def rewrite_args(line):
     if values.get('pl') != '1' or 'a04br3-home-perf' not in values or values.get('native-msdc-iostat') != '1':
         raise ValueError('baseline arguments are not the expected iostat stack profile')
     changed = [('pl=60' if word.startswith('pl=') else word) for word in words if not word.startswith('a04br3-home-perf=')]
+    if 'a04br3-stacklog' in keys:
+        raise ValueError('unexpected existing stacklog argument')
+    changed.append('a04br3-stacklog=1')
     line = ' '.join(changed)
     if len(line.encode('ascii')) > 1023: raise ValueError('rewritten command line exceeds 1023 bytes')
     return line
@@ -203,19 +225,29 @@ def main():
         if not set(FIXED).issubset(old_files) or 'kernel.macho.adt' not in old_files: raise ValueError('old payload misses required files')
         for name in FIXED:
             if old_files[name] != declared[name]: raise ValueError('old pair hash mismatch: ' + name)
+        if old_files.get('kernel.macho') != declared['kernel.macho']:
+            raise ValueError('old pair kernel hash mismatch')
+        identities = [value for _, props in adt_tree(old_dir/'kernel.macho.adt') for key, value in props if key == 'unique-chip-id']
+        if len(identities) != 1 or len(identities[0]) != 8 or identities[0] == bytes(8):
+            raise ValueError('invalid old ADT identity')
+        secret = format(int.from_bytes(identities[0], 'little'), 'x')
         board = tomllib.loads((new_device/'board.toml').read_text()); original_keys = [word.partition('=')[0] for word in board['payload']['kernel_args']]
         command = [str(source/'unixnu'), 'build', 'payload', '-D', str(new_device), '--out', str(stage/'work'), '--uefi', str(uefi), '--kernel', str(kernel), '--data-ramdisk', str(old_dir/'scratch-data.img'), '--owner-trust-cache', str(old_dir/'kernel.macho.trustcache'), '--gpu-addon', str(old_dir/'kernel.macho.gpuaddon')]
         new_keys = {word.partition('=')[0] for word in rewritten.split()}
         command.extend('--omit-kernel-arg=' + key for key in original_keys if key not in new_keys)
         command.extend('--kernel-arg=' + word for word in rewritten.split()); validate_cli(source, new_device, command, rewritten)
         log = stage/'build.log'
-        with log.open('w', encoding='utf-8') as stream: result = subprocess.run(command, cwd=source, stdout=stream, stderr=subprocess.STDOUT)
+        env = dict(os.environ, UNIXNU_UNIQUE_CHIP_ID=secret, PYTHONDONTWRITEBYTECODE='1')
+        result = subprocess.run(command, cwd=source, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
+        log.write_text(result.stdout.replace(secret, '[redacted]'), encoding='utf-8')
         if result.returncode: raise ValueError('official payload generation failed')
         payload = stage/'work/a04br3/payload'; image = payload/'payload.img'; meta = json.loads((payload/'payload.json').read_text())
         expected = {'kernel_sha256': sha(kernel), 'data_ramdisk_sha256': old_files['scratch-data.img'], 'trust_cache_sha256': old_files['kernel.macho.trustcache'], 'gpu_addon_sha256': old_files['kernel.macho.gpuaddon']}
         if meta.get('kernel_args') != rewritten or any(meta.get(key) != value for key, value in expected.items()): raise ValueError('payload metadata mismatch')
         if meta.get('payload_sha256') != sha(image): raise ValueError('payload hash mismatch')
         new_files = fat_files(image, new_dir)
+        if new_files.get('kernel.macho') != sha(kernel): raise ValueError('new FAT kernel hash mismatch')
+        compare_config(payload_config(source_payload, stage/'old.toml'), payload_config(image, stage/'new.toml'), rewritten)
         if set(old_files) != set(new_files) or any(old_files[name] != new_files[name] for name in FIXED): raise ValueError('fixed payload files changed')
         changed = sorted(name for name in old_files if old_files[name] != new_files[name])
         if changed != ['kernel.macho', 'kernel.macho.adt']: raise ValueError('payload differs beyond replacement kernel and ADT')
@@ -228,9 +260,9 @@ def main():
         if sha(boot_payload) != sha(image): raise ValueError('output boot FAT differs from new payload')
         check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, NEW_DEVICE); check_repo(uefi, UEFI)
         report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
-        shutil.copyfile(image, stage/'payload.img'); shutil.copyfile(output_boot, stage/'boot.img'); (stage/'manifest.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')
+        shutil.copyfile(image, stage/'payload.img'); (stage/'manifest.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')
         for path in (stage/'work', stage/'boot-work', old_dir, new_dir): shutil.rmtree(path)
-        source_payload.unlink(); boot_payload.unlink(); stage.rename(out)
+        source_payload.unlink(); boot_payload.unlink(); (stage/'old.toml').unlink(); (stage/'new.toml').unlink(); stage.rename(out)
         print('Prepared diagnostic boot:', out)
     finally:
         if stage.exists(): shutil.rmtree(stage)
