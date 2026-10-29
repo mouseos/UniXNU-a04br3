@@ -67,6 +67,8 @@ while index < len(arguments):
         if value == '-o':
             command.extend(['-o', str(destination)])
         index += 1
+    elif any(value.startswith(flag) and value != flag for flag in ('-MF', '-MT', '-MJ')):
+        pass  # borrowed compile record must not overwrite XNU metadata
     elif value == '-Xclang' and arguments[index + 1].startswith('-W'):
         index += 1
     elif not value.startswith('-W'):
