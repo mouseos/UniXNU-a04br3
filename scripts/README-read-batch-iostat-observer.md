@@ -2,9 +2,8 @@
 
 This host-only observer reads an existing append-only regular UART log and
 parent-written flash records. It does not access a serial device, flash, reset,
-or operate the target. Keep the existing UART capture running. This observer
-has not yet received its required independent review; inspect its results as
-provisional and do not use them to decide hardware safety or performance.
+or operate the target. Keep the existing UART capture running. Treat its
+results as provisional; do not use them to decide hardware safety or performance.
 
 Make a fresh absolute-path plan JSON with `schema: 1`, `manifest` and its
 `manifest_sha256`, an absolute `uart` path, and a `runs` array of two objects.
@@ -32,7 +31,10 @@ boot after a subsequent preloader and boot reason. It records transitions in
 `events.jsonl`, current state in `state.json`, capture and JSONL deltas per run,
 and `comparison.json` once both runs finish or fail. The timeout retains any
 partial snapshot; rerun the same command to resume. Existing captures are never
-overwritten. An interrupted partial capture may require a fresh output folder;
+overwritten. Resume checks the retained snapshot, boot segments, flash record,
+checkpoint and iostat output against their recorded hashes before reuse. Hash
+consistency is not proof against coordinated modification. An interrupted
+partial capture may require a fresh output folder;
 retain the old one as evidence. A later watchdog reason, panic/EL3 candidate,
 missing boundary or malformed frames is explicitly flagged. If no subsequent
 boot is observed, the first boot remains open and no final result is claimed.

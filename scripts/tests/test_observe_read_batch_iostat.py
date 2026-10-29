@@ -74,5 +74,33 @@ class Observer(unittest.TestCase):
         (out/'baseline/capture-open').mkdir(parents=True);(out/'baseline/capture-open/evidence').write_text('retain')
         self.assertEqual(self.execute(p,out).returncode,0);state=json.loads((out/'state.json').read_text())
         self.assertEqual(state['runs'][0]['phase'],'failed');self.assertIn('interrupted capture',state['runs'][0]['detail']);self.assertEqual((out/'baseline/capture-open/evidence').read_text(),'retain')
+ def test_equals_boot_reason_is_summarized(self):
+    with tempfile.TemporaryDirectory() as d:
+        root=Path(d);plan,m,p,uart=self.fixture(root);out=root/'out';self.put(root,plan,m,uart,'baseline')
+        uart.write_bytes(uart.read_bytes().replace(b'BOOT_REASON: 4',b'BOOT_REASON=4'))
+        self.assertEqual(self.execute(p,out).returncode,0)
+        result=json.loads((out/'baseline/result-final.json').read_text())
+        self.assertEqual(result['state'],'recorded_conditions_unverified');self.assertEqual(result['iostat']['successful_read_bytes'],6144)
+ def test_resume_rejects_corrupt_saved_raw_evidence(self):
+    for filename in ('post-flash.raw','boot-1.raw','flash-record.json','uart-checkpoint.json'):
+     with self.subTest(filename=filename),tempfile.TemporaryDirectory() as d:
+        root=Path(d);plan,m,p,uart=self.fixture(root);out=root/'out';self.put(root,plan,m,uart,'baseline')
+        self.assertEqual(self.execute(p,out).returncode,0)
+        state=json.loads((out/'state.json').read_text());run=state['runs'][0]
+        result=O.capture(out,state,run,plan['runs'][0],m,plan,'final');self.assertEqual(result['state'],'recorded_conditions_unverified')
+        (out/'baseline/capture-final'/filename).write_bytes(b'corrupt')
+        with self.assertRaises(ValueError):O.capture(out,state,run,plan['runs'][0],m,plan,'final')
+ def test_finished_run_reverified_before_comparison_and_on_resume(self):
+    for when in ('before_comparison','after_comparison'):
+     with self.subTest(when=when),tempfile.TemporaryDirectory() as d:
+        root=Path(d);plan,m,p,uart=self.fixture(root);out=root/'out';self.put(root,plan,m,uart,'baseline')
+        self.assertEqual(self.execute(p,out).returncode,0)
+        if when=='after_comparison':
+            self.put(root,plan,m,uart,'batch');self.assertEqual(self.execute(p,out).returncode,0)
+        (out/'baseline/capture-final/boot-1.raw').write_bytes(b'corrupt')
+        if when=='before_comparison':self.put(root,plan,m,uart,'batch')
+        self.assertEqual(self.execute(p,out).returncode,0)
+        report=json.loads((out/'comparison.json').read_text());baseline=report['runs'][0]
+        self.assertEqual(baseline['phase'],'failed');self.assertIsNone(baseline['result']);self.assertIn('saved evidence',baseline['detail'])
 
 if __name__=='__main__':unittest.main()

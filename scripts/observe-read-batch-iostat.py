@@ -154,7 +154,25 @@ def capture(out,state,run,entry,manifest,plan,label):
         if (result.get('capture')!=str(target) or result.get('flash_record_sha256')!=run['flash_sha256'] or
             result.get('capture_sha256')!=file_sha(target/'capture.json')):
             raise ValueError('existing result does not match capture or flash record')
-        if result.get('iostat') and file_sha(Path(result['iostat']['path']))!=result['iostat']['sha256']:
+        meta=load(target/'capture.json')
+        if (meta.get('flash_record_sha256')!=run['flash_sha256'] or
+            meta.get('checkpoint_sha256')!=run['checkpoint_sha256'] or
+            file_sha(target/'flash-record.json')!=run['flash_sha256'] or
+            file_sha(target/'uart-checkpoint.json')!=run['checkpoint_sha256']):
+            raise ValueError('saved flash record or checkpoint changed')
+        with C.open_regular(target/'post-flash.raw') as f:
+            raw=f.read(MAX_UART+1)
+        if len(raw)>MAX_UART or sha(raw)!=meta.get('snapshot_sha256') or result.get('snapshot_sha256')!=meta.get('snapshot_sha256'):
+            raise ValueError('saved UART snapshot changed')
+        offset=meta['flash_offset']
+        for index,boot in enumerate(meta['boots'],1):
+            start=boot['start_offset']-offset;end=boot['end_offset']-offset
+            if (boot.get('path')!=f'boot-{index}.raw' or start<0 or end<start or end>len(raw) or
+                boot.get('bytes')!=end-start or sha(raw[start:end])!=boot['sha256'] or
+                file_sha(target/boot['path'])!=boot['sha256']):
+                raise ValueError('saved boot capture changed')
+        if result.get('iostat') and (result['iostat']['path']!=str(folder/('iostat-'+label+'.jsonl')) or
+                                     file_sha(Path(result['iostat']['path']))!=result['iostat']['sha256']):
             raise ValueError('existing iostat result changed')
         return result
     if target.exists() or (folder/('iostat-'+label+'.jsonl')).exists():
@@ -230,6 +248,16 @@ def step(out,state,plan,manifest):
         except (ValueError,OSError,KeyError,TypeError,AttributeError) as e:
             event(out,state,run,'failed',str(e))
     if all(r['phase'] in ('finished','failed') for r in state['runs']):
+        # A run may have finished long before the other one. Revalidate its
+        # saved evidence before publishing or republishing any comparison.
+        for run,entry in zip(state['runs'],plan['runs']):
+            if run['phase']!='finished':continue
+            try:
+                result=capture(out,state,run,entry,manifest,plan,'final')
+                if result!=run.get('result'):raise ValueError('saved result differs from recorded state')
+            except (ValueError,OSError,KeyError,TypeError,AttributeError) as e:
+                run.pop('result',None)
+                event(out,state,run,'failed','saved evidence: '+str(e))
         report={'schema':1,'plan_sha256':state['plan_sha256'],'manifest_sha256':state['manifest_sha256'],
                 'runs':[{**{k:r.get(k) for k in ('id','variant','phase','detail','result')},'conditions':entry.get('conditions',{})} for r,entry in zip(state['runs'],plan['runs'])],
                 'comparison':'exploratory_only_no_automatic_winner',
@@ -255,7 +283,9 @@ def main():
         state=load(state_path) if state_path.exists() else init(a.out,plan,manifest,sha(plan_bytes),sha(manifest_bytes))
         if state['plan_sha256']!=sha(plan_bytes) or state['manifest_sha256']!=sha(manifest_bytes) or state['observer_sha256']!=file_sha(Path(__file__)) or state['collector_sha256']!=file_sha(HERE/'collect-read-batch-uart.py') or state['summarizer_sha256']!=file_sha(HERE/'summarize-msdc-io.py'):
             raise ValueError('plan, manifest or scripts changed; use a fresh output directory')
-        if state['phase']=='complete':return
+        if state['phase']=='complete':
+            step(a.out,state,plan,manifest)
+            return
         if state['phase']=='timed_out':
             state['phase']='waiting';atomic_json(state_path,state)
         deadline=time.monotonic()+a.timeout_seconds

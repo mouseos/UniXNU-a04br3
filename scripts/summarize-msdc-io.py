@@ -17,7 +17,7 @@ expected = transport_keys + offer_keys + [('queue','','')]
 
 anchor = b'[pmic6392_init] Preloader Start'
 bldr = b'[BLDR] Build Time:'
-reason = re.compile(rb'(?i)\bBOOT_REASON\s*:')
+reason = re.compile(rb'(?i)\bBOOT_REASON[ \t]*[:=]')
 sample_marker = b'a04br3 msdc io sample seq='
 record_marker = 'a04br3 msdc '
 # Captures may have no prefix, or one numeric UART/kernel timestamp.
