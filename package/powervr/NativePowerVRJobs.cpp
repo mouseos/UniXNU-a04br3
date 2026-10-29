@@ -62,6 +62,7 @@ extern "C" {
 #include "NativePowerVRABI.h"
 #include "NativePowerVRIoTrace.h"
 #include "NativePowerVRIoAggregate.h"
+#include "NativePowerVRSubmitStage.h"
 #include "NativePowerVRWaitSeries.h"
 #include "NativePowerVRWaitReason.h"
 #undef min
@@ -468,6 +469,8 @@ NativeWaitReasonLimit gNativeWaitReason;
 unsigned gWaitMonitorStarted;
 unsigned gIoLiveEnabled;
 NativeIoAggregate gNativeIoAggregate;
+NativeSubmitStage gSubmitStage;
+unsigned gSubmitStageEnabled;
 uint64_t nowAbs() { return mach_absolute_time(); }
 uint64_t perfBegin(PerfStage s)
 {
@@ -489,6 +492,7 @@ bool depDone(const Dep &d) { return !d.queue || queueReached(d.queue, d.seqno); 
 static void native_wait_monitor(void *, wait_result_t)
 {
   unsigned aggregateBusy=~0u,aggregateReportBusy=~0u,aggregateFull=~0u,aggregateRetired=~0u;
+  unsigned stageBusy=~0u,stageReportBusy=~0u,stageFull=~0u;
   for (;;) {
     IOSleep(250);
     if (!__atomic_load_n(&gNativeWaitSeries.enabled,__ATOMIC_ACQUIRE) || gNativeWaitSeries.mode<4) break;
@@ -502,6 +506,27 @@ static void native_wait_monitor(void *, wait_result_t)
       IOLog("a04br3 gpu wait active: clock=mach_absolute_ns pid=%u tid=%llu fence=%llu series=%llu pending_ns=%llu now_ns=%llu completed_ns=%llu count=%u errors=%u\n",
         active[i].pid,(unsigned long long)active[i].tid,(unsigned long long)active[i].fence,(unsigned long long)active[i].serial,
         (unsigned long long)begin,(unsigned long long)now,(unsigned long long)sum,active[i].count,active[i].errors);
+    }
+    if (__atomic_load_n(&gSubmitStageEnabled,__ATOMIC_ACQUIRE)) {
+      NativeSubmitRow rows[2]={};
+      unsigned n=native_submit_stage_take(&gSubmitStage,rows);
+      for (unsigned i=0;i<n;i++) {
+        const auto &r=rows[i]; uint64_t first=0,last=0,ns[NativeSubmitStages]={};
+        absolutetime_to_nanoseconds(r.sample.first,&first); absolutetime_to_nanoseconds(r.sample.last,&last);
+        for(unsigned k=0;k<NativeSubmitStages;k++) absolutetime_to_nanoseconds(r.sample.ticks[k],&ns[k]);
+        IOLog("a04br3 gpu submit stage: pid=%u tid=%llu first_ns=%llu last_ns=%llu calls=%llu total=%llu create=%llu pte=%llu lock=%llu space=%llu bo=%llu kick=%llu kccb=%llu busy=%u report_busy=%u full=%u nested=1\n",
+          r.sample.pid,(unsigned long long)r.sample.tid,(unsigned long long)first,(unsigned long long)last,(unsigned long long)r.count,
+          (unsigned long long)ns[0],(unsigned long long)ns[1],(unsigned long long)ns[2],(unsigned long long)ns[3],
+          (unsigned long long)ns[4],(unsigned long long)ns[5],(unsigned long long)ns[6],(unsigned long long)ns[7],
+          __atomic_load_n(&gSubmitStage.busy,__ATOMIC_RELAXED),__atomic_load_n(&gSubmitStage.reportBusy,__ATOMIC_RELAXED),__atomic_load_n(&gSubmitStage.full,__ATOMIC_RELAXED));
+      }
+      const unsigned busy=__atomic_load_n(&gSubmitStage.busy,__ATOMIC_RELAXED);
+      const unsigned reportBusy=__atomic_load_n(&gSubmitStage.reportBusy,__ATOMIC_RELAXED);
+      const unsigned full=__atomic_load_n(&gSubmitStage.full,__ATOMIC_RELAXED);
+      if (busy!=stageBusy || reportBusy!=stageReportBusy || full!=stageFull) {
+        IOLog("a04br3 gpu submit stage loss: busy=%u report_busy=%u full=%u cumulative=1\n",busy,reportBusy,full);
+        stageBusy=busy;stageReportBusy=reportBusy;stageFull=full;
+      }
     }
     if (__atomic_load_n(&gIoLiveEnabled,__ATOMIC_ACQUIRE)) {
       NativeIoAggregateRow rows[2]={};
@@ -531,6 +556,12 @@ static void native_wait_monitor(void *, wait_result_t)
   thread_terminate_self();
 }
 
+// Requires the existing mode-6 monitor; no worker, timestamps or records by default.
+extern "C" void native_powervr_submit_stage_enable(unsigned enabled, unsigned ioMode)
+{
+  __atomic_store_n(&gSubmitStageEnabled,enabled==1 && ioMode==6,__ATOMIC_RELEASE);
+  if (enabled==1 && ioMode!=6) IOLog("a04br3 gpu submit stage: requires a04br3-gio=6\n");
+}
 extern "C" void native_powervr_io_trace_enable(unsigned enabled)
 {
   if (enabled >= 1 && enabled <= 6) {
@@ -1718,7 +1749,7 @@ void submit_job_to_cccb(Job *job, UfoList &deps)
 }
 
 // Write one job (or a geometry job and its paired fragment job) and kick it (pvr_queue_run_job()).
-void run_job(Job *job, HwrtTrack *track)
+void run_job(Job *job, HwrtTrack *track, uint64_t *kccbTicks)
 {
   UfoList deps;
   deps.n = 0;
@@ -1737,11 +1768,15 @@ void run_job(Job *job, HwrtTrack *track)
     hwrtDeps(frag_job, track, frag_deps);
     submit_job_to_cccb(frag_job, frag_deps);
     hwrtUpdate(frag_job, track);
+    const uint64_t stageStart=kccbTicks ? nowAbs() : 0;
     pvr_cccb_send_kccb_combined_kick(&gJobs.dev, &job->queue->cccb, &frag_job->queue->cccb, ctx_fw_addr + job->queue->ctx_offset,
                                      ctx_fw_addr + frag_job->queue->ctx_offset, job->hwrt,
                                      frag_job->fw_ccb_cmd_type == ROGUE_FWIF_CCB_CMD_TYPE_FRAG_PR);
+    if (stageStart) *kccbTicks += nowAbs()-stageStart;
   } else {
+    const uint64_t stageStart=kccbTicks ? nowAbs() : 0;
     pvr_cccb_send_kccb_kick(&gJobs.dev, &job->queue->cccb, ctx_fw_addr + job->queue->ctx_offset, job->hwrt);
+    if (stageStart) *kccbTicks += nowAbs()-stageStart;
   }
 }
 
@@ -2180,10 +2215,24 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     PerfScope() : start(perfBegin(PerfSubmit)) {}
     ~PerfScope() { perfEnd(PerfSubmit, start); }
   } perfScope;
+  struct StageScope {
+    NativeSubmitSample sample={};
+    StageScope() {
+      if (!__atomic_load_n(&gSubmitStageEnabled,__ATOMIC_ACQUIRE)) return;
+      char name[20]={}; proc_selfname(name,sizeof(name));
+      if (strcmp(name,"backboardd")) return;
+      sample.pid=static_cast<unsigned>(proc_selfpid()); sample.tid=thread_tid(current_thread()); sample.first=nowAbs();
+    }
+    uint64_t begin() const {return sample.first ? nowAbs() : 0;}
+    void end(unsigned stage,uint64_t start) {if(start) sample.ticks[stage]+=nowAbs()-start;}
+    ~StageScope() {if(sample.first) {sample.last=nowAbs();sample.ticks[NativeSubmitTotal]=sample.last-sample.first;native_submit_stage_record(&gSubmitStage,sample);}}
+  } stage;
   Job *js[NativePowerVRAbiMaxJobs] = {};
   int err = 0;
+  uint64_t stageStart=stage.begin();
   // pvr_job_data_init(): every job is created (and checked) before any is queued.
   for (uint32_t i = 0; i < count && !err; i++) err = create_job(file, &jobs[i], &js[i]);
+  stage.end(NativeSubmitCreate,stageStart);
   if (err) {
     for (uint32_t i = 0; i < count; i++)
       if (js[i]) pvr_job_release(js[i]);
@@ -2204,7 +2253,9 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     pte_snapshots[pte_count] = js[i]->pte;
     pte_records[pte_count++] = js[i]->pre_pte;
   }
+  stageStart=stage.begin();
   if (pte_count && pte_phase) err = pte_phase(pte_cookie, pte_snapshots, pte_records, pte_count);
+  stage.end(NativeSubmitPte,stageStart);
   if (err) {
     for (uint32_t i = 0; i < count; ++i) pvr_job_release(js[i]);
     return err;
@@ -2222,9 +2273,12 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
   nanoseconds_to_absolutetime(uint64_t(kSchedTimeoutMs) * 1000000ULL, &deadline);
   deadline += nowAbs();
   const uint64_t lockPerf = perfBegin(PerfLock);
+  stageStart=stage.begin();
   IOLockLock(gJobs.lock);
+  stage.end(NativeSubmitLock,stageStart);
   perfEnd(PerfLock, lockPerf);
   const uint64_t spacePerf = perfBegin(PerfSpace);
+  stageStart=stage.begin();
   for (;;) {
     pvr_queue *queues[NativePowerVRAbiMaxJobs];
     u32 need[NativePowerVRAbiMaxJobs];
@@ -2256,10 +2310,13 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     IOSleep(1);
     IOLockLock(gJobs.lock);
   }
+  stage.end(NativeSubmitSpace,stageStart);
   perfEnd(PerfSpace, spacePerf);
   if (!err && !reserveTracks(count)) err = -ENOMEM;
   const uint64_t boPerf = perfBegin(PerfBo);
+  stageStart=stage.begin();
   for (uint32_t i = 0; i < count && !err; i++) err = native_powervr_hosts_sync(js[i]->hosts);
+  stage.end(NativeSubmitBo,stageStart);
   perfEnd(PerfBo, boPerf);
   if (err) {
     IOLockUnlock(gJobs.lock);
@@ -2272,11 +2329,13 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     js[i]->fence = file->nextFence++;
   }
   const uint64_t kickPerf = perfBegin(PerfKick);
+  stageStart=stage.begin();
   for (uint32_t i = 0; i < count; i++) {
     Job *j = js[i];
     if (j->type == DRM_PVR_JOB_TYPE_FRAGMENT && j->paired) continue;   // written with its geometry job
-    run_job(j, j->hwrt ? trackFor(j->hwrt) : nullptr);
+    run_job(j, j->hwrt ? trackFor(j->hwrt) : nullptr, stage.sample.first ? &stage.sample.ticks[NativeSubmitKccb] : nullptr);
   }
+  stage.end(NativeSubmitKick,stageStart);
   perfEnd(PerfKick, kickPerf);
   const uint64_t kicked = nowAbs();
   for (uint32_t i = 0; i < count; i++) {

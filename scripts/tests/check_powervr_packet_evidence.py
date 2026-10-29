@@ -89,7 +89,7 @@ void pvr_cccb_send_kccb_combined_kick(int *,pvr_cccb *,pvr_cccb *,uint32_t,uint3
 void pvr_cccb_send_kccb_kick(int *,pvr_cccb *,uint32_t,pvr_hwrt_data *){assert(jobsLock.held);++kicks;}
 '''
 h += function(JOBS, 'void submit_job_to_cccb(') + '\n'
-h += 'void capturePte(Job *) {} // Separate PTE fixture covers this values-only hook.\n'
+h += 'void capturePte(Job *) {} // Separate PTE fixture covers this values-only hook.\nstatic uint64_t nowAbs(){ static uint64_t t=100;return ++t;}\n'
 h += function(JOBS, 'void run_job(') + '\n'
 h += r'''
 static_assert(offsetof(rogue_fwif_cmd_frag,regs)==16,"actual FRAG ABI");
@@ -153,12 +153,14 @@ int main(int argc,char **argv){
  frag.regs.pbe_word[7][2]=0xabcdef; tq.regs.event_pixel_pds_code=0x42000;tq.regs.pbe_wordx_mrty[8]=0x987654;
  Job a{11,0,ROGUE_FWIF_CCB_CMD_TYPE_GEOM,sizeof(geom),0,&ctx,&hw,&qa,&geom,nullptr};
  Job b{12,1,ROGUE_FWIF_CCB_CMD_TYPE_FRAG,sizeof(frag),0,&ctx,&hw,&qb,&frag,&a};a.paired=&b;
- IOLockLock(&jobsLock);run_job(&a,nullptr);IOLockUnlock(&jobsLock);
+ IOLockLock(&jobsLock);run_job(&a,nullptr,nullptr);IOLockUnlock(&jobsLock);
  assert(gPacketCount==2&&kicks==1&&commands==4&&!logs);
  assert(gPackets[0].paired==12&&gPackets[1].paired==11&&gPackets[1].validSize);
  assert(gPackets[1].queueFw==ctx.fw+32&&gPackets[1].hwrtFw==obj.fw&&gPackets[1].root==0x12345000);
  ctx.type=2;Job c{13,3,ROGUE_FWIF_CCB_CMD_TYPE_TQ_3D,sizeof(tq),0,&ctx,nullptr,&qb,&tq,nullptr};
- IOLockLock(&jobsLock);run_job(&c,nullptr);IOLockUnlock(&jobsLock);
+ uint64_t measured=0;
+ IOLockLock(&jobsLock);run_job(&c,nullptr,&measured);IOLockUnlock(&jobsLock);
+ assert(measured==1);
  assert(gPackets[2].ctxType==2&&gPackets[2].regs.tq.event_pixel_pds_code==0x42000);
  // Invalid size never dereferences the deliberately invalid pointer.
  c.id=14;c.cmd_len=UINT32_MAX;c.cmd=(void*)1;
