@@ -339,13 +339,13 @@ void cpuDiagnosticReport()
           infra != nullptr, apmixed != nullptr, timerFrequency);
   }
   static bool routedAttempted;
-  if ((gCpuMeterEnabled == 1 || (gCpuMeterEnabled == 2 && !routedAttempted)) && !gCpuMeterQuarantined) {
+  if ((gCpuMeterEnabled == 1 || ((gCpuMeterEnabled == 2 || gCpuMeterEnabled == 3) && !routedAttempted)) && !gCpuMeterQuarantined) {
     static volatile uint8_t *top;
     if (!top) top = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10000000, 0x1000));
     if (!top || !infra || !apmixed) IOLog("a04br3 cpu-fmeter status=map-failed\n");
     else if (!a04br3_runtime_recovery_recheck()) IOLog("a04br3 cpu-fmeter status=recovery-not-ready\n");
     else {
-      if (gCpuMeterEnabled == 2) {
+      if (gCpuMeterEnabled == 2 || gCpuMeterEnabled == 3) {
         routedAttempted = true;
         A04BR3CpuMeterIO before{top, infra, apmixed};
         IOLog("a04br3 cpu-fmeter route-before ctrl=%08x debug=%08x test=%08x hop=%08x mux=%08x dcm=%08x pll0=%08x pll1=%08x pwr=%08x (non-atomic; external-owner-unverified)\n", before.top(0x10), before.top(0x38), before.pll(0x64), before.pll(0x14), before.infra(0), before.infra(0x14), before.pll(0x100), before.pll(0x104), before.pll(0x110));
@@ -354,11 +354,22 @@ void cpuDiagnosticReport()
       // write/readback leaves its state uncertain; do not probe it again.
       __atomic_store_n(&a04br3_runtime_probe_active, 1U, __ATOMIC_RELEASE);
       A04BR3CpuMeterIO io{top, infra, apmixed};
-      auto r = gCpuMeterEnabled == 2 ? a04br3_cpu_meter_routed(io) : a04br3_cpu_meter(io);
-      if (a04br3_cpu_meter_requires_recovery(r.status)) gCpuMeterQuarantined = true;
+      A04BR3CpuMeterCrosscheck cross = {};
+      auto r = gCpuMeterEnabled == 3 ? a04br3_cpu_meter_crosscheck(io, cross) :
+               gCpuMeterEnabled == 2 ? a04br3_cpu_meter_routed(io) : a04br3_cpu_meter(io);
+      if (gCpuMeterEnabled == 3 ? !a04br3_cpu_crosscheck_feed_allowed(r, cross) :
+          a04br3_cpu_meter_requires_recovery(r.status)) gCpuMeterQuarantined = true;
       else __atomic_store_n(&a04br3_runtime_probe_active, 0U, __ATOMIC_RELEASE);
+      if (gCpuMeterEnabled == 3) {
+        const unsigned ids[] = {25, 7, 24};
+        IOLog("a04br3 cpu-fmeter crosscheck status=%u attempted=%u route_stage=%u reference_independent_unverified=1 core_hz_unverified=1 completion_unverified=1 external_owner_unverified=1\n", r.status, cross.attempted, cross.route_stage);
+        for (unsigned i=0; i<3; ++i) {
+          const auto &sample = cross.sample[i];
+          IOLog("a04br3 cpu-fmeter sample id=%u attempted=%u status=%u stage=%u valid=%u baseline=%u count=%u second=%u\n", ids[i], unsigned(i<cross.attempted), sample.status, sample.stage, sample.valid, sample.baseline, sample.count, sample.second);
+        }
+      }
       uint64_t at; absolutetime_to_nanoseconds(mach_absolute_time(), &at);
-      IOLog("a04br3 cpu-fmeter at_ns=%llu status=%u count=%u armpll_khz=%llu ref_khz=26000 window=520 mux=%08x dcm=%08x debug=%08x hop=%08x test=%08x ctrl=%08x baseline=%08x pll0=%08x pll1=%08x power=%08x core_hz_unverified=1 external_owner_unverified=1 completion_unverified=1 recovery_unverified=1\n",
+      if (gCpuMeterEnabled != 3) IOLog("a04br3 cpu-fmeter at_ns=%llu status=%u count=%u armpll_khz=%llu ref_khz=26000 window=520 mux=%08x dcm=%08x debug=%08x hop=%08x test=%08x ctrl=%08x baseline=%08x pll0=%08x pll1=%08x power=%08x core_hz_unverified=1 external_owner_unverified=1 completion_unverified=1 recovery_unverified=1\n",
             at, r.status, r.count, r.khz, r.mux, r.dcm, r.debug, r.hopping, r.plltest, r.ctrl, r.baseline, r.pll0, r.pll1, r.power);
     }
   }
@@ -506,7 +517,7 @@ extern "C" void unixnu_board_init(void)
   unsigned runtimeCycle = 0;
   if (!PE_parse_boot_argn("armcpu-runtime-cycle", &runtimeCycle, sizeof(runtimeCycle)))
     PE_parse_boot_argn("arc", &runtimeCycle, sizeof(runtimeCycle));
-  if ((gCpuMeterEnabled == 1 || gCpuMeterEnabled == 2) && runtimeCycle == 1) {
+  if ((gCpuMeterEnabled == 1 || gCpuMeterEnabled == 2 || gCpuMeterEnabled == 3) && runtimeCycle == 1) {
     gCpuMeterEnabled = 0;
     IOLog("a04br3 cpu-fmeter status=pmu-conflict-use-separate-boot\n");
   }

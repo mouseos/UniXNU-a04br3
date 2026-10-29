@@ -11,3 +11,15 @@
 ホスト試験は `c++ -std=c++17 -O2 -Wall -Wextra -Werror scripts/tests/test_cpu_clock_meter.cpp -o /tmp/a04-cpu-meter-test && /tmp/a04-cpu-meter-test`。mockの排他、未設定拒否、control復元、値0、外部変更、PLL条件変化を検証する。実装は実機で未検証。
 
 メーカのFHCTL定義はARMCA7 PLLをID 0に対応づける。他のhopping bitの存在を拒否しないが、全registerの前後値が変われば他のPLLによる変化も含めてstatus 7として保守的に棄却する。TEST_CON1とdebug selectorはread-onlyで扱い、測定実現のために設定を書き換えない。事前条件は非原子的で、途中で変わって元に戻る競合や、基準26 MHz・選択経路の正しさは未証明。TEST_CON1の設定が通常時に成立するかは未確認で、不成立なら測定を拒否する。
+
+## 明示指定の比較計測 `cm=3`
+
+既定はオフ。`cm=3` は `cm=2` と同じルート・watchdog の条件で一度だけ実行し、同じローカルロックとルートの下で CKGEN 25、7、24 を順に測る。`cm=1` と `cm=2` は従来どおり。`arc=1` などの PMU 指定とは併用しない。CT3 の名称はそれぞれ `mcusys_debug_mon0`、`g_univpll_d24_52m_ck`、`csw_52m_ck`。各回は reset、baseline、窓 519、40 µs 後と更に 10 µs 後の読み取り、reset と idle の読み戻しを行う。
+
+`sample` ログは ID、attempted、status、stage、valid、baseline、count、second を出す。valid は baseline=1、count=2、second=4 のビットで、未取得と取得したゼロを区別する。stage は 0=準備、1=初期 reset、2=baseline、3=計測、4=最終 reset、5=周辺状態確認、6=成功。全体の `route_stage` は 0=未確立、1=PLL test 設定確認、2=debug 設定確認、3=debug 復元確認、4=PLL test 復元確認で、書込み失敗時の実際の状態を保証しない。各 sample の status は個別の測定結果、全体 status はルート復元等も含む。途中で失敗したら後続を実行しない。meter が不確か、または競合が見られる場合は追加の復元書込みを避け、status 9 として隔離する。復元を保証できるのは読み戻しが成功した場合に限る。
+
+CKGEN 7 と 24 は比較対象であり、26 MHz の基準発振器を独立に検証したものではない。計測完了、外部主体の排他、CPU 物理クロックの絶対値は証明しない。`cm=3` は生カウントを出力し、校正済み周波数と表示しない。ホスト模擬試験は `c++ -std=c++17 -O2 -Wall -Wextra -Werror scripts/tests/test_cpu_meter_crosscheck.cpp -o /tmp/a04-crosscheck-test && /tmp/a04-crosscheck-test`。実機では未検証。
+
+`cm=3` は測定中または前後に周辺状態の変化を検出すると、個別結果の status 7 を保持しつつ全体を status 9 とし、それ以降のルート復元書込みを行わず隔離する。復元が部分的に進んだ後に変化を検出した場合も、残りの書込みを止める。watchdog の給餌は、書込み前のロック取得失敗・事前条件拒否（`route_stage=0` かつ status 1 または 2）、または meter と両ルートの復元が読み戻しで確認された `route_stage=4` の場合に、ログ出力より先に戻す。最初の書込み後の読み戻し失敗も `route_stage=0` になり得るが status 9 なので給餌停止を維持する。読み戻しとローカルロックは外部主体との競合がなかったことを保証しない。
+
+`cm=2` の従来動作は変更していない。周辺状態変化の status 7 でも、既存の所有状態チェックを通ればルート復元を試み、復元後は給餌を再開する。
