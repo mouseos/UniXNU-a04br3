@@ -313,7 +313,7 @@ def verify_data_uuid(source, device, data, expected, staged_seed, plugin_dir, re
         keep = True
         try:
             attached = plistlib.loads(subprocess.check_output(['hdiutil', 'attach', '-readonly',
-                '-imagekey', 'diskimage-class=CRawDiskImage', '-nobrowse', '-mountpoint', str(mount), '-plist', str(raw)]))
+                '-imagekey', 'diskimage-class=CRawDiskImage', '-nobrowse', '-owners', 'on', '-mountpoint', str(mount), '-plist', str(raw)]))
             entities = attached.get('system-entities', [])
             image_device = next((entry.get('dev-entry') for entry in entities if entry.get('dev-entry')), None)
             if not image_device:raise ValueError('hdiutil did not report image device')
@@ -336,7 +336,7 @@ def verify_data_uuid(source, device, data, expected, staged_seed, plugin_dir, re
                 stat = destination.stat()
                 actual_mode = format(stat.st_mode & 0o777, '04o')
                 if stat.st_uid != 0 or stat.st_gid != 0 or actual_mode != mode or sha(destination) != sha(source_file):
-                    raise ValueError('seeded Data content, owner, or mode mismatch: ' + guest_path)
+                    raise ValueError(f'seeded Data mismatch: {guest_path} uid={stat.st_uid} gid={stat.st_gid} mode={actual_mode} expected_mode={mode} hash_equal={sha(destination)==sha(source_file)}')
                 observed.append({'path': guest_path, 'sha256': sha(destination), 'mode': actual_mode, 'uid': stat.st_uid, 'gid': stat.st_gid})
             report = {'volume_uuid': str(uuid.UUID(expected)).upper(), 'files': observed}
             report_path.write_text(json.dumps(report, indent=2) + '\n')
