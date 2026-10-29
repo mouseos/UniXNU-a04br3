@@ -50,6 +50,18 @@ class Capture(unittest.TestCase):
    raw=m.ANCHOR+b'\nBOOT_REASON=4_9\nBOOT_REASON='+b'9'*5000+b'\nBOOT_REASON=4'
    u.write_bytes(raw);f.write_text(json.dumps({'uart_offset':0,'boot_sha256':'a'*64}))
    r=m.collect(u,f,p/'out');self.assertEqual(r['boots'][0]['boot_reason_markers'],3);self.assertEqual(r['boots'][0]['boot_reasons'],[]);self.assertEqual((p/'out/post-flash.raw').read_bytes(),raw)
+ def test_preloader_lines_not_android_command_line(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d);u=p/'u';f=p/'f'
+   raw=(m.ANCHOR+b'\r\r\nBOOT_REASON: 4\r\r\n[18] BOOT_REASON: 4\r\r\n'
+        b'[16708] cmdline: quiet boot_reason=4 androidboot.bootreason=wdt\r\r\n'+m.ANCHOR+b'\n[18] BOOT_REASON=9\n')
+   u.write_bytes(raw);f.write_text(json.dumps({'uart_offset':0,'boot_sha256':'a'*64}))
+   r=m.collect(u,f,p/'out');self.assertEqual(r['boots'][0]['boot_reason_markers'],2)
+   self.assertEqual([x['value'] for x in r['boots'][0]['boot_reasons']],[4,4]);self.assertEqual([x['value'] for x in r['boots'][1]['boot_reasons']],[9])
+   self.assertTrue(r['boots'][0]['closed_by_next_preloader']);self.assertEqual((p/'out/post-flash.raw').read_bytes(),raw)
+ def test_malformed_standalone_reason_is_not_silenced(self):
+  data=b'[18] BOOT_REASON: broken\ncmdline: boot_reason=4 other\nBOOT_REASON=4\n'
+  self.assertEqual(len(list(m.REASON_MARK.finditer(data))),2);self.assertEqual([x['value'] for x in m.reason_values(data,0)],[4])
  def test_fifo_rejected_without_opening_and_duplicate_keys(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d);u=p/'fifo';os.mkfifo(u)

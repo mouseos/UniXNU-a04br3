@@ -17,7 +17,8 @@ expected = transport_keys + offer_keys + [('queue','','')]
 
 anchor = b'[pmic6392_init] Preloader Start'
 bldr = b'[BLDR] Build Time:'
-reason = re.compile(rb'(?i)\bBOOT_REASON[ \t]*[:=]')
+reason = re.compile(rb'(?im)^[ \t]*(?:\[[ \t]*[0-9]+[ \t]*\][ \t]*)?BOOT_REASON[ \t]*[:=]')
+reason_valid = re.compile(rb'(?im)^[ \t]*(?:\[[ \t]*[0-9]+[ \t]*\][ \t]*)?BOOT_REASON[ \t]*[:=][ \t]*(?:0[xX][0-9a-fA-F]{1,16}|[0-9]{1,20})[ \t\r]*\n')
 sample_marker = b'a04br3 msdc io sample seq='
 record_marker = 'a04br3 msdc '
 # Captures may have no prefix, or one numeric UART/kernel timestamp.
@@ -40,7 +41,7 @@ def verify_source(data, source_hash, offset, boot_id):
     if first_sample < 0 or first_sample < data.find(bldr):
         raise ValueError('missing sample after boot anchor')
     reasons = list(reason.finditer(data))
-    if not reasons or any(x.start() < offset or x.start() >= first_sample for x in reasons):
+    if not reasons or len(reasons)!=len(list(reason_valid.finditer(data))) or any(x.start() < offset or x.start() >= first_sample for x in reasons):
         raise ValueError('missing boot reason or boot boundary after sampling began')
     return segment
 

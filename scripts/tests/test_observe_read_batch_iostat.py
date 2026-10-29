@@ -35,7 +35,7 @@ class Observer(unittest.TestCase):
     entry=next(x for x in plan['runs'] if x['variant']==variant);cp=root/(variant+'.cp');C.checkpoint(uart,cp);offset=uart.stat().st_size
     flash={'uart_offset':offset,'flash_completed_uart_offset':offset,'uart_checkpoint':str(cp),'boot_sha256':manifest['variants'][variant]['boot_sha256'],'flash_success':True,'flash_success_evidence':'test fixture'}
     Path(entry['flash_record']).write_text(json.dumps(flash))
-    with uart.open('ab') as f:f.write(boot(manifest['variants'][variant]['kernel_args'],**opts)+C.ANCHOR+b'\nBOOT_REASON: 4\n')
+    with uart.open('ab') as f:f.write(boot(manifest['variants'][variant]['kernel_args'],**opts)+C.ANCHOR+b'\n[BLDR] Build Time: fixture\nBOOT_REASON: 4\n')
  def execute(self,plan,out):
     return subprocess.run(['python3',str(ROOT/'scripts/observe-read-batch-iostat.py'),'--plan',str(plan),'--out',str(out)],capture_output=True,text=True)
  def test_wait_resume_and_two_runs(self):
@@ -65,7 +65,7 @@ class Observer(unittest.TestCase):
         with uart.open('ab') as f:f.write(boot(m['variants']['baseline']['kernel_args']))
         self.assertEqual(self.execute(p,out).returncode,0)
         state=json.loads((out/'state.json').read_text());self.assertEqual(state['runs'][0]['phase'],'first_boot_open_snapshot_saved')
-        with uart.open('ab') as f:f.write(C.ANCHOR+b'\nBOOT_REASON: 9\n')
+        with uart.open('ab') as f:f.write(C.ANCHOR+b'\n[BLDR] Build Time: fixture\nBOOT_REASON: 9\n')
         self.assertEqual(self.execute(p,out).returncode,0)
         result=json.loads((out/'baseline/result-final.json').read_text());self.assertIn('following_watchdog_reason_observed',result['reasons']);self.assertFalse(result['first_boot']['panics'])
  def test_interrupted_capture_is_not_overwritten(self):
@@ -81,6 +81,34 @@ class Observer(unittest.TestCase):
         self.assertEqual(self.execute(p,out).returncode,0)
         result=json.loads((out/'baseline/result-final.json').read_text())
         self.assertEqual(result['state'],'recorded_conditions_unverified');self.assertEqual(result['iostat']['successful_read_bytes'],6144)
+ def test_lk_command_line_does_not_create_reason_or_hide_bad_reason(self):
+    for bad in (False,True):
+     with self.subTest(bad=bad),tempfile.TemporaryDirectory() as d:
+        root=Path(d);plan,m,p,uart=self.fixture(root);out=root/'out';self.put(root,plan,m,uart,'baseline')
+        extra=b'[18] BOOT_REASON: '+(b'bad' if bad else b'4')+b'\n[16708] cmdline: x boot_reason=4 androidboot.bootreason=wdt\n'
+        uart.write_bytes(uart.read_bytes().replace(b'BOOT_REASON: 4\n',b'BOOT_REASON: 4\n'+extra,1))
+        self.assertEqual(self.execute(p,out).returncode,0);result=json.loads((out/'baseline/result-final.json').read_text())
+        if bad:self.assertIn('first_boot_reason_missing_or_unparsed',result['reasons'])
+        else:self.assertEqual(result['state'],'recorded_conditions_unverified');self.assertEqual(result['first_boot']['boot_reason_markers'],2)
+ def test_false_anchor_and_fake_reason_do_not_close_boot(self):
+    with tempfile.TemporaryDirectory() as d:
+        root=Path(d);plan,m,p,uart=self.fixture(root);out=root/'out';cp=root/'baseline.cp';C.checkpoint(uart,cp);offset=uart.stat().st_size
+        Path(plan['runs'][0]['flash_record']).write_text(json.dumps({'uart_offset':offset,'flash_completed_uart_offset':offset,'uart_checkpoint':str(cp),'boot_sha256':m['variants']['baseline']['boot_sha256'],'flash_success':True,'flash_success_evidence':'fixture'}))
+        with uart.open('ab') as f:f.write(boot(m['variants']['baseline']['kernel_args'])+b'log: '+C.ANCHOR+b'\ncmdline: boot_reason=4\n')
+        self.assertEqual(self.execute(p,out).returncode,0);s=json.loads((out/'state.json').read_text());self.assertEqual(s['runs'][0]['anchors'],1)
+        with uart.open('ab') as f:f.write(C.ANCHOR+b'\ncmdline: boot_reason=4\n')
+        self.assertEqual(self.execute(p,out).returncode,0);s=json.loads((out/'state.json').read_text());self.assertEqual(s['runs'][0]['anchors'],2);self.assertFalse(s['runs'][0]['second_reason'])
+        with uart.open('ab') as f:f.write(b'BOOT_REASON: 9\n')
+        self.assertEqual(self.execute(p,out).returncode,0);s=json.loads((out/'state.json').read_text());self.assertNotEqual(s['runs'][0]['phase'],'finished')
+        with uart.open('ab') as f:f.write(b'[BLDR] Build Time: fixture\n')
+        self.assertEqual(self.execute(p,out).returncode,0);s=json.loads((out/'state.json').read_text());self.assertEqual(s['runs'][0]['phase'],'finished');self.assertIn('following_watchdog_reason_observed',s['runs'][0]['result']['reasons'])
+ def test_next_boot_evidence_cannot_come_from_third_boot(self):
+    with tempfile.TemporaryDirectory() as d:
+        root=Path(d);plan,m,p,uart=self.fixture(root);out=root/'out';cp=root/'baseline.cp';C.checkpoint(uart,cp);offset=uart.stat().st_size
+        Path(plan['runs'][0]['flash_record']).write_text(json.dumps({'uart_offset':offset,'flash_completed_uart_offset':offset,'uart_checkpoint':str(cp),'boot_sha256':m['variants']['baseline']['boot_sha256'],'flash_success':True,'flash_success_evidence':'fixture'}))
+        with uart.open('ab') as f:f.write(boot(m['variants']['baseline']['kernel_args'])+C.ANCHOR+b'\nBOOT_REASON: 4\n'+C.ANCHOR+b'\n[BLDR] Build Time: fixture\nBOOT_REASON: 9\n')
+        self.assertEqual(self.execute(p,out).returncode,0);result=json.loads((out/'baseline/result-final.json').read_text())
+        self.assertEqual(result['state'],'incomplete_or_excluded');self.assertIn('following_boot_bldr_missing',result['reasons']);self.assertNotIn('following_watchdog_reason_observed',result['reasons'])
  def test_resume_rejects_corrupt_saved_raw_evidence(self):
     for filename in ('post-flash.raw','boot-1.raw','flash-record.json','uart-checkpoint.json'):
      with self.subTest(filename=filename),tempfile.TemporaryDirectory() as d:

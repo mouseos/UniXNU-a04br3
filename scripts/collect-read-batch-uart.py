@@ -11,8 +11,13 @@ import stat
 import tempfile
 
 ANCHOR = b'[pmic6392_init] Preloader Start'
-REASON = re.compile(rb'(?i)\bBOOT_REASON[ \t]*[:=][ \t]*(0[xX][0-9a-fA-F]{1,16}|[0-9]{1,20})[ \t\r]*\n')
-REASON_MARK = re.compile(rb'(?i)\bBOOT_REASON[ \t]*[:=]')
+ANCHOR_LINE = re.compile(rb'(?m)^' + re.escape(ANCHOR))
+# A preloader/LK reason is a whole UART line, optionally with an LK numeric
+# timestamp. Do not mistake boot_reason= inside the Android command line for
+# a preloader marker. Keep malformed or unterminated standalone lines counted.
+REASON_PREFIX = rb'(?im)^[ \t]*(?:\[[ \t]*[0-9]+[ \t]*\][ \t]*)?BOOT_REASON[ \t]*[:=]'
+REASON_MARK = re.compile(REASON_PREFIX)
+REASON = re.compile(REASON_PREFIX + rb'[ \t]*(0[xX][0-9a-fA-F]{1,16}|[0-9]{1,20})[ \t\r]*\n')
 PANIC = re.compile(rb'(?i)(?:panic[ \t]*(?:\(|:)|kernel panic)')
 EL3 = re.compile(rb'(?i)(?:EL3[^\r\n]{0,60}(?:exception|abort|serror)|(?:exception|abort|serror)[^\r\n]{0,60}EL3|\bESR_EL3[ \t]*[:=])')
 
@@ -138,11 +143,9 @@ def collect(uart, flash, output, max_bytes=128*1024*1024):
         raise ValueError('UART path changed or was truncated while snapshotting')
     if len(raw) != length or after.st_size < before.st_size or (after.st_dev,after.st_ino)!=(before.st_dev,before.st_ino):
         raise ValueError('UART file changed incompatibly while snapshotting')
-    positions=[]; cursor=0
-    while True:
-        hit=raw.find(ANCHOR,cursor)
-        if hit<0:break
-        positions.append(hit);cursor=hit+len(ANCHOR)
+    positions=[]
+    for match in ANCHOR_LINE.finditer(raw):
+        positions.append(match.start())
         if len(positions)>BOOT_LIMIT:break
     if output.exists():
         raise ValueError('refusing existing output')

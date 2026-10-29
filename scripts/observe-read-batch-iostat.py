@@ -89,7 +89,7 @@ def validate_plan(plan, manifest):
 
 def init(out,plan,manifest,plan_digest,manifest_digest):
     runs=[{'id':x['id'],'variant':x['variant'],'phase':'awaiting_flash_record','detail':None,
-           'cursor':None,'carry':'','anchors':0,'second_anchor':None,'frames':0,'second_reason':False,
+           'cursor':None,'carry':'','anchors':0,'second_anchor':None,'third_anchor':None,'frames':0,'second_reason':False,'second_bldr':False,
            'flash_sha256':None,'checkpoint_sha256':None,'open_saved':False} for x in plan['runs']]
     state={'schema':1,'plan_sha256':plan_digest,'manifest_sha256':manifest_digest,
            'observer_sha256':file_sha(Path(__file__)),'collector_sha256':file_sha(HERE/'collect-read-batch-uart.py'),
@@ -130,15 +130,18 @@ def scan(plan,run,flash,entry):
             data=f.read(min(remaining,SCAN_CHUNK))
             if not data:raise ValueError('UART shortened while scanning')
             combined=carry+data;base=run['cursor']-len(carry)
-            for m in re.finditer(re.escape(C.ANCHOR),combined):
-                if m.end()>len(carry):
+            for m in C.ANCHOR_LINE.finditer(combined):
+                if m.end()>len(carry) and not (m.start()==0 and base>flash['uart_offset']):
                     run['anchors']+=1
                     if run['anchors']==2:run['second_anchor']=base+m.start()
+                    if run['anchors']==3:run['third_anchor']=base+m.start()
             for m in FRAME.finditer(combined):
                 if m.end()>len(carry):run['frames']+=1
             if run['second_anchor'] is not None:
+                for m in re.finditer(rb'(?m)^\[BLDR\] Build Time:',combined):
+                    if m.end()>len(carry) and base+m.start()>run['second_anchor'] and (run['third_anchor'] is None or base+m.start()<run['third_anchor']) and not (m.start()==0 and base>flash['uart_offset']):run['second_bldr']=True
                 for m in C.REASON.finditer(combined):
-                    if m.end()>len(carry) and base+m.start()>=run['second_anchor']:run['second_reason']=True
+                    if m.end()>len(carry) and base+m.start()>=run['second_anchor'] and (run['third_anchor'] is None or base+m.start()<run['third_anchor']) and not (m.start()==0 and base>flash['uart_offset']):run['second_reason']=True
             run['cursor']+=len(data);remaining-=len(data);carry=combined[-CARRY:]
         run['carry']=base64.b64encode(carry).decode('ascii')
         after=os.fstat(f.fileno());named=uart.stat()
@@ -199,6 +202,7 @@ def capture(out,state,run,entry,manifest,plan,label):
         if len(arg_lines)!=1 or arg_lines[0]!=manifest['variants'][run['variant']]['kernel_args']:reasons.append('boot_arguments_missing_or_mismatch')
         if len(boots)>1:
             later=boots[1];result['following_boot']={k:later.get(k) for k in ('start_offset','boot_reasons','boot_reason_markers','panics','el3_candidates','closed_by_next_preloader')}
+            if not re.search(rb'(?m)^\[BLDR\] Build Time:',(target/'boot-2.raw').read_bytes()):reasons.append('following_boot_bldr_missing')
             if later.get('panics'):reasons.append('following_boot_panic_candidate')
             if later.get('el3_candidates'):reasons.append('following_boot_el3_candidate')
             if later.get('boot_reason_markers')!=len(later.get('boot_reasons',[])) or not later.get('boot_reasons'):reasons.append('following_boot_reason_missing_or_unparsed')
@@ -242,7 +246,7 @@ def step(out,state,plan,manifest):
             if run['anchors']>=1 and run['frames']>=2 and not run['open_saved']:
                 capture(out,state,run,entry,manifest,plan,'open');run['open_saved']=True
                 event(out,state,run,'first_boot_open_snapshot_saved')
-            if run['anchors']>=2 and run['second_reason']:
+            if run['anchors']>=2 and ((run['second_reason'] and run['second_bldr']) or run['third_anchor'] is not None):
                 result=capture(out,state,run,entry,manifest,plan,'final');run['result']=result
                 event(out,state,run,'finished',result['state'])
         except (ValueError,OSError,KeyError,TypeError,AttributeError) as e:
