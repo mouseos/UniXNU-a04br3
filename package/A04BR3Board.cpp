@@ -294,7 +294,7 @@ extern "C" void a04br3_cpu_context_sample(unsigned round, unsigned cpu, unsigned
   static volatile uint8_t *infra, *apmixed;
   static bool attempted;
   uint64_t begin, end;
-  __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(begin) :: "memory");
+  __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(begin) :: "memory");
   if (!attempted) {
     attempted = true;
     infra = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10001000, 0x1000));
@@ -311,7 +311,7 @@ extern "C" void a04br3_cpu_context_sample(unsigned round, unsigned cpu, unsigned
     __asm__ volatile("dmb oshld" ::: "memory");
   }
   const int load=a04br3_cpu_load_snapshot(cpu,ticks);
-  __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(end) :: "memory");
+  __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(end) :: "memory");
   IOLog("a04br3 cpu-context round=%u cpu=%u phase=%u begin=%llu end=%llu clock=%u load=%u rail=unknown temp=unknown\n",round,cpu,phase,begin,end,(unsigned)clocks,(unsigned)load);
   if (clocks) IOLog("a04br3 cpu-context-clk round=%u cpu=%u phase=%u infra=%08x dcm=%08x con0=%08x con1=%08x pll_pwr=%08x\n",round,cpu,phase,mux,dcm,con0,con1,power);
   if (load) IOLog("a04br3 cpu-context-load round=%u cpu=%u phase=%u user=%u system=%u idle=%u nice=%u state=%u/%u ticks32=1\n",round,cpu,phase,ticks[0],ticks[1],ticks[2],ticks[3],ticks[4],ticks[5]);
