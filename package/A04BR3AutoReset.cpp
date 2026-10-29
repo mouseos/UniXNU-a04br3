@@ -331,6 +331,10 @@ void cycleThread(void *, wait_result_t)
 // target may acquire it. This is deliberately not a boot-argument override.
 static A04BR3PmuLease gRuntimePmuLease = {};
 static bool a04br3_pmu_access_qualified(unsigned cpu) { (void)cpu; return false; }
+extern "C" bool a04br3_pmu_qualification_available(unsigned cpu)
+{
+  return a04br3_pmu_access_qualified(cpu);
+}
 // Bound contention while retaining the watchdog gate; failure remains closed.
 static bool a04br3_pmu_gate_lock_bounded(void)
 {

@@ -10,9 +10,9 @@ assert source.count(needle)==1
 # unreachable local lease/gate interlock without presenting it as evidence.
 source=source.replace(needle,'static bool a04br3_pmu_access_qualified(unsigned cpu) { (void)cpu; return testQualified; }')
 main='''
-int main(){uint64_t gen=0;
+int main(){uint64_t gen=0;assert(!a04br3_pmu_qualification_available(0));
  assert(a04br3_runtime_probe_begin());assert(!a04br3_pmu_lease_acquire(0,&gen));assert(a04br3_runtime_probe_end_checked());
- testQualified=true;assert(a04br3_runtime_probe_begin());assert(a04br3_pmu_lease_acquire(0,&gen)&&gen);
+ testQualified=true;assert(a04br3_pmu_qualification_available(0));assert(a04br3_runtime_probe_begin());assert(a04br3_pmu_lease_acquire(0,&gen)&&gen);
  assert(!a04br3_runtime_probe_end_checked());a04br3_runtime_probe_end();assert(a04br3_runtime_probe_active);
  assert(!a04br3_pmu_lease_release(1,gen));assert(a04br3_pmu_lease_valid(0,gen));
  assert(gWatchdogGate.lock());assert(!a04br3_runtime_probe_end_checked());assert(!a04br3_pmu_lease_valid(0,gen));gWatchdogGate.unlock();
