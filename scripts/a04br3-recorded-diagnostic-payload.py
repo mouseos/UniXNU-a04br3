@@ -59,8 +59,13 @@ def checked_near_kernel(kernel_bytes, symbols, worker, near):
  offsets=[int(x.group(2),0) if x.group(2) else 0 for x in loads];bases=[x.group(1).lower() for x in loads]
  if len(barrier)!=1 or len(loads)!=6 or offsets!=[0,0x14,0x100,0x104,0x110,0x14] or loads[-1].end()>barrier[0].start():raise ValueError('near-clock load/barrier order invalid')
  if bases[0]!=bases[1] or len(set(bases[2:]))!=1 or bases[0]==bases[2]:raise ValueError('near-clock MMIO bases inconsistent')
+ base_no=bases[2][1:];intervening=body[loads[2].end():loads[-1].start()]
+ if re.search(r'\b(?:mov|add|sub|orr|adr|adrp|ldr|ldur|ldp)\s+[xw]'+base_no+r'\b',intervening,re.I):raise ValueError('near-clock MMIO base overwritten')
  for line in lines:
-  if re.search(r'\b(?:str|stur|stp|stnp)\b',line,re.I) and not re.search(r'\bstr\s+x\d+,\s*\[x0(?:,\s*#(?:0x[0-9a-f]+|\d+))?\]',line,re.I):raise ValueError('near-clock unexpected store')
+  if re.search(r'\bst[a-z0-9]+\b',line,re.I):
+   store=re.search(r'\bstr\s+x\d+,\s*\[x0(?:,\s*#(0x[0-9a-f]+|\d+))?\]',line,re.I)
+   offset=int(store.group(1),0) if store and store.group(1) else 0
+   if not store or offset>56 or offset%8:raise ValueError('near-clock unexpected store')
 
 
 def main():

@@ -70,7 +70,7 @@ for blob,nm,code,body in ((b'',near_symbols,worker,near),(b'fhctl_hp=%08llx',sym
  else:raise AssertionError('invalid near-clock kernel accepted')
 print('PASS near-clock linked hook, calls, timestamps, MMIO and barrier')
 
-for altered in (near.replace('ldr w1, [x3, #0x14]','ldr w1, [x2, #0x14]'),near+'str w1, [x3, #0x14]\n'):
+for altered in (near.replace('ldr w1, [x3, #0x14]','ldr w1, [x2, #0x14]'),near+'str w1, [x3, #0x14]\n',near+'stlr w1, [x3]\n',near+'str x1, [x0, #64]\n',near.replace('ldr w1, [x3, #0x104]', 'mov x3, x2\nldr w1, [x3, #0x104]')):
  try:m.checked_near_kernel(b'fhctl_hp=%08llx',near_symbols,worker,altered)
  except ValueError:pass
  else:raise AssertionError('wrong base or unsafe store accepted')

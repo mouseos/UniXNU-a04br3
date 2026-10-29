@@ -26,6 +26,7 @@ def summarize(raw, timeline):
         if not m: issues.append('malformed near-clock record'); continue
         if line[m.end():].strip(): issues.append('unexpected near-clock suffix'); continue
         a=m.groups(); key=tuple(map(int,a[:3])); ok=int(a[3]); safe=int(a[4]); begin=int(a[5]); end=int(a[6]); values=a[7:]
+        if any(v is not None and len(v)!=8 for v in values): issues.append(f'invalid register width {key}'); continue
         if key[2] not in (0,1) or ok not in (0,1) or safe not in (0,1): issues.append(f'invalid phase/availability {key}'); continue
         if key in entries: issues.append(f'duplicate {key}'); continue
         entries[key]={'ok':ok,'safe':safe,'begin':begin,'end':end,'raw':dict(zip(('infra','dcm','con0','con1','pwr','fhctl_hp'),values))}

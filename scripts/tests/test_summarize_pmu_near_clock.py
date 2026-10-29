@@ -12,7 +12,7 @@ class NearTests(unittest.TestCase):
   new=run(line(0,11,12).replace('pwr=00000005','pwr=00000005 fhctl_hp=00000001')+line(1,90,91).replace('pwr=00000005','pwr=00000005 fhctl_hp=00000001'))
   self.assertFalse(new['issues']);self.assertEqual(new['records'][0]['before']['raw']['fhctl_hp'],'00000001')
  def test_malformed_fhctl_rejected(self):
-  for v in ('garbage','','00000001ZZ'):
+  for v in ('garbage','','00000001ZZ','100000000','f'*32):
    broken=line(0,11,12).replace('pwr=00000005','pwr=00000005 fhctl_hp='+v)+line(1,90,91)
    self.assertTrue(run(broken)['issues'])
  def test_missing(self):self.assertTrue(run(line(0,11,12))['issues'])
