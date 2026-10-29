@@ -140,8 +140,12 @@ def boot_ramdisk(boot, destination):
 
 def fat_files(payload, destination):
     destination.mkdir(mode=0o700)
-    names = subprocess.check_output(['mdir', '-b', '-i', str(payload), '::/EFI/UniXNU/Payloads'], text=True,
-                                    stderr=subprocess.DEVNULL).splitlines()
+    listing = subprocess.check_output(['mdir', '-b', '-i', str(payload), '::/EFI/UniXNU/Payloads'], text=True,
+                                      stderr=subprocess.DEVNULL).splitlines()
+    prefix = '::/EFI/UniXNU/Payloads/'
+    if any(not entry.startswith(prefix) for entry in listing):
+        raise ValueError('payload FAT file listing has an unexpected prefix')
+    names = [entry[len(prefix):] for entry in listing]
     if not names or any(not name or '/' in name or '\\' in name for name in names):
         raise ValueError('payload FAT file listing is invalid')
     for name in names:
@@ -164,7 +168,7 @@ def compare_payload_files(original, output):
 
 
 def pair_hashes(pair_data):
-    files = pair_data.get('files')
+    files = pair_data.get('inputs_sha256')
     if not isinstance(files, dict):
         raise ValueError('pair has no component hash declarations')
     aliases = {'kernel.macho': ('kernel', 'kernel.macho'), 'scratch-data.img': ('data', 'scratch-data.img'),
@@ -172,14 +176,12 @@ def pair_hashes(pair_data):
                'kernel.macho.gpuaddon': ('gpu', 'kernel.macho.gpuaddon')}
     result = {}
     for component, keys in aliases.items():
-        entry = next((files.get(key) for key in keys if isinstance(files.get(key), dict)), None)
-        digest = entry.get('sha256') if entry else None
+        digest = next((files.get(key) for key in keys if isinstance(files.get(key), str)), None)
         if not isinstance(digest, str) or len(digest) != 64:
             raise ValueError('pair component hash declaration is invalid: ' + component)
         result[component] = digest
     for name in ('fd', 'dtb'):
-        entry = files.get(name)
-        digest = entry.get('sha256') if isinstance(entry, dict) else None
+        digest = files.get(name)
         if not isinstance(digest, str) or len(digest) != 64:
             raise ValueError('pair component hash declaration is invalid: ' + name)
         result[name] = digest
@@ -221,6 +223,8 @@ def main():
     pair_data = json.loads(pair.read_text())
     if pair_data.get('source_commit') != UNIXNU or pair_data.get('device_commit') != DEVICE or pair_data.get('uefi_commit') != UEFI:
         raise ValueError('pair source pins mismatch')
+    if pair_data.get('variants', {}).get('baseline', {}).get('boot_sha256') != sha(boot):
+        raise ValueError('pair baseline boot hash mismatch')
     declared = pair_hashes(pair_data)
     if declared['fd'] != sha(fd):
         raise ValueError('pair FD hash mismatch')
@@ -266,8 +270,15 @@ def main():
         env = dict(os.environ, UNIXNU_UNIQUE_CHIP_ID=secret, PYTHONDONTWRITEBYTECODE='1',
                    PYTHONPYCACHEPREFIX=str(stage / 'pycache'))
         log = stage / 'build.log'
-        with log.open('w', encoding='utf-8') as stream:
-            subprocess.run(command, cwd=source, env=env, check=True, stdout=stream, stderr=subprocess.STDOUT)
+        private_log = stage / '.private-build.log'
+        try:
+            with private_log.open('w', encoding='utf-8') as stream:
+                result = subprocess.run(command, cwd=source, env=env, stdout=stream, stderr=subprocess.STDOUT)
+            log.write_text(private_log.read_text(errors='replace').replace(secret, '[redacted]'), encoding='utf-8')
+        finally:
+            private_log.unlink(missing_ok=True)
+        if result.returncode:
+            raise ValueError('official payload generation failed')
         secret = None
         identity_file.unlink()
         payload = stage / 'work/a04br3/payload'
@@ -282,6 +293,8 @@ def main():
         output_extracted = stage / 'output-extracted'
         output_files = fat_files(new_payload, output_extracted)
         changed_files = compare_payload_files(original_files, output_files)
+        if adt_identity(output_extracted / 'kernel.macho.adt') != identity:
+            raise ValueError('output ADT identity differs from source')
         output_boot = stage / 'boot.img'
         boot_command = [str(source / 'unixnu'), 'bootimg', '-D', str(device), '--out', str(stage / 'boot-work'), '--uefi', str(uefi),
                         '--fd', str(fd), '--dtb', str(dtb), '--ramdisk', str(new_payload), '-o', str(output_boot)]
@@ -289,6 +302,13 @@ def main():
             subprocess.run(boot_command, cwd=source, check=True, stdout=stream, stderr=subprocess.STDOUT)
             subprocess.run([sys.executable, '-B', str(device / 'scripts/check-a04br3-bootimg.py'), str(output_boot)], check=True,
                            stdout=stream, stderr=subprocess.STDOUT)
+        boot_payload = stage / 'boot-payload.img'
+        boot_ramdisk(output_boot, boot_payload)
+        if sha(boot_payload) != sha(new_payload):
+            raise ValueError('output boot ramdisk differs from generated payload')
+        check_repo(source, UNIXNU, submodules=False)
+        check_repo(device, DEVICE, submodules=False)
+        check_repo(uefi, UEFI, submodules=False)
         report = {'schema': 1, 'kind': 'a04br3-iostat-roa-stacklog-payload', 'source_commit': UNIXNU, 'device_commit': DEVICE,
                   'uefi_commit': UEFI, 'hardware_tested': False, 'original_boot_sha256': sha(boot), 'original_pair_sha256': sha(pair),
                   'inputs_sha256': input_hashes, 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'original_kernel_args': original,
@@ -303,6 +323,8 @@ def main():
         shutil.rmtree(stage / 'boot-work')
         shutil.rmtree(extracted)
         shutil.rmtree(output_extracted)
+        source_fat.unlink()
+        boot_payload.unlink()
         shutil.rmtree(stage / 'pycache', ignore_errors=True)
         stage.rename(out)
         print('Prepared stacklog payload and validated boot image:', out)

@@ -41,7 +41,7 @@ class StacklogPayload(unittest.TestCase):
 
     def test_pair_hashes_and_fat_diff_reject_undeclared_changes(self):
         digest = 'a' * 64
-        pair = {'files': {name: {'sha256': digest} for name in ('kernel', 'data', 'trust', 'gpu', 'fd', 'dtb')}}
+        pair = {'inputs_sha256': {name: digest for name in ('kernel', 'data', 'trust', 'gpu', 'fd', 'dtb')}}
         hashes = BUILD.pair_hashes(pair)
         self.assertEqual(set(hashes), set(BUILD.FIXED) | {'fd', 'dtb'})
         original = {'kernel.macho': '1', 'kernel.macho.adt': '2'}
@@ -50,7 +50,7 @@ class StacklogPayload(unittest.TestCase):
         with self.assertRaises(ValueError):
             BUILD.compare_payload_files(original, {'kernel.macho': '4', 'kernel.macho.adt': '3'})
         with self.assertRaises(ValueError):
-            BUILD.pair_hashes({'files': {'kernel': {'sha256': digest}}})
+            BUILD.pair_hashes({'inputs_sha256': {'kernel': digest}})
 
     def test_only_requested_arguments_change(self):
         original = 'serial=1 a04br3-home-perf=1 pl=1 native-msdc-iostat=1'
