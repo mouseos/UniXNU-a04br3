@@ -45,7 +45,14 @@ def main():
  cmd=[str(root/'unixnu'),'build','payload','-D',str(device),'--out',str(out),'--kernel',str(kernel),'--data-ramdisk',str(data),'--owner-trust-cache',str(trust)]
  for v in ('sheng-fb-gpu=1','a04br3-charger-owner=1','sheng-vsync=60','vm_compressor=2','a04br3-home-perf=1','pl=1','gi=6','gs=1','cc=1','native-msdc-irq=1','a04br3-gpu-clock=380','native-io-trace=1','debug=334','a04br3-autoreset=720'):cmd+=['--kernel-arg='+v]
  for v in ('a04br3-stacklog','boot-ui-focus3','boot-ui-focus4','a04br3-gpu-packet','offline-hid-auto-home-count','offline-hid-auto-home','a04br3-powervrprobed','-no_corpses','-v','a04br3-proclog'):cmd+=['--omit-kernel-arg='+v]
- subprocess.run(cmd,cwd=root,env=env,check=True)
+ # UniXNU logs its ADT generator command. Keep the workflow identity out of
+ # the build log as well as the public manifest.
+ secrets={identity,hex(int(identity,16))}
+ with subprocess.Popen(cmd,cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1) as process:
+  for line in process.stdout:
+   for secret in sorted(secrets,key=len,reverse=True):line=line.replace(secret,'<diagnostic-identity>')
+   sys.stdout.write(line);sys.stdout.flush()
+  if process.wait():raise RuntimeError('official payload build failed')
  p=out/'a04br3/payload';meta=json.loads((p/'payload.json').read_text());length=checked_args(meta['kernel_args'])
  adt=p/'stage/EFI/UniXNU/Payloads/kernel.macho.adt';payload=p/'payload.img'
  for key,file in (('kernel_sha256',kernel),('data_ramdisk_sha256',data),('trust_cache_sha256',trust),('adt_sha256',adt),('payload_sha256',payload)):
