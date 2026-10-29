@@ -14,7 +14,7 @@ case "$(basename "$task")" in io-read-batch-iostat-roa-rows-*) ;; *) echo 'Unexp
 prior="$root/io-read-batch-e8f-20261029b"
 iostat="$root/io-read-batch-iostat-e8f-20261030c"
 rows="$root/pipeline-retry-roa-rows-isolated"
-for required in "$prior/official/data-32.dbr" "$prior/official/owner-data/seed.json" \
+for required in "$prior/trust-base" "$prior/official/data-32.dbr" "$prior/official/owner-data/seed.json" \
                 "$iostat/inputs/kernel" "$iostat/inputs/fd" "$iostat/inputs/data" "$iostat/inputs/trust" "$iostat/inputs/gpu" \
                 "$rows/powervr-metal/NativePowerVRMetal.bundle/NativePowerVRMetal" \
                 "$rows/powervr-metal/trust.json" "$rows/status" \
@@ -71,7 +71,7 @@ plugin_hashes=cdhashes(plugin_dir/'trust.json','ROA plugin trust record')
 fresh=task/'fresh';fresh.mkdir()
 baseline=copy(prior/'official/data-32.dbr','seed-source-data-32.dbr')
 source_seed=copy(seed_path,'official-seed-provenance.json')
-copy(iostat/'inputs/trust','original-trustcache')
+copy(prior/'trust-base','original-trustcache')
 copy(rows/'powervr-metal/trust.json','roa-plugin-trust.json')
 for source,name in ((iostat/'records/kernel_provenance.json','kernel_provenance.json'),(iostat/'records/firmware_provenance.json','firmware_provenance.json'),(iostat/'records/seed_provenance.json','official-pre-build-seed.json'),(iostat/'records/pre_build.log','official-pre-build.log'),(iostat/'records/data_provenance.json','official-data-provenance.json'),(iostat/'inputs/data','original-data'),(iostat/'inputs/trust','original-trust'),(iostat/'inputs/gpu','original-gpu')):
  copy(source,name)
