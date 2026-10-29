@@ -108,3 +108,13 @@ SIGKILLなどでは一時領域やmacOSの検証用マウントが残る可能�
 
 生成器は入力hashと出自記録の整合を確認するが、署名やtrust cacheの暗号学的な
 有効性は検証しない。host改ざん試験も実機での改ざん拒否の証明ではない。
+
+増分runnerのlauncherは専用taskの `runner.sh` を配置したうえで、
+`scripts/a04br3-read-batch-iostat-wrapper.sh` に `IO_TASK` と毎回一意の
+`IO_ATTEMPT`、`RELEASE`、`GITHUB_REPOSITORY` を渡し、標準出力・標準エラーを
+事前に `io-batch-iostat-$IO_ATTEMPT-run.log` へ保存する。wrapperはtaskを
+runnerへ渡し、既存assetを拒否し、ログ公開後にstatusを公開する。Release照会と
+アップロードは原子的ではなく、同一attemptを複数hostで同時利用しない。
+status uploadの通信失敗は公開結果不明であり、旧remote statusだけを成功と見なさず
+local status、archive、hashと実行記録を照合する。ログを公開する前に、内容が
+公開先に適していることを実行担当が確認する。
