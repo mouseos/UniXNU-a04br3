@@ -65,7 +65,7 @@ class PairBuild(unittest.TestCase):
                           'data_uuid':'00112233-4455-6677-8899-AABBCCDDEEFF',
                           'pmgr_build_report':{'virtual_entries':340}, 'reference_kernel_sha256':'reference',
                           'display_build_report':{'virtual_entries':358,'original_candidate_sha256':'reference'}}
-            firmware = {'uefi_commit': build.UEFI, 'unixnu_commit': build.UNIXNU, 'fd_sha256': build.sha(paths['fd'])}
+            firmware = {'uefi_commit': build.UEFI, 'unixnu_commit': build.FIRMWARE_UNIXNU, 'darwinboot_commit':build.DARWINBOOT, 'fd_sha256': build.sha(paths['fd'])}
             (root/'kernel.json').write_text(json.dumps(provenance))
             (root/'firmware.json').write_text(json.dumps(firmware))
             (root/'seed.json').write_text(json.dumps({'volume_uuid':provenance['data_uuid']}))
@@ -111,7 +111,7 @@ class PairBuild(unittest.TestCase):
                 elif argv[1:2] == ['bootimg']:
                     Path(argv[argv.index('-o')+1]).write_bytes(b'boot')
                 return mock.Mock(returncode=0)
-            with mock.patch.object(build, 'check_preparation_source', return_value='prep-commit'), mock.patch.object(build, 'check_repo'), mock.patch.object(build, 'git', side_effect=lambda path,*a: build.ARMCPU if str(path).endswith('ArmCpu') else build.MSDC), mock.patch.object(build, 'check_uefi_checkout'), mock.patch.object(build, 'check_uefi_firmware'), mock.patch.object(build, 'verify_data_uuid'), mock.patch.object(build.subprocess, 'run', side_effect=run), \
+            with mock.patch.object(build, 'check_preparation_source', return_value='prep-commit'), mock.patch.object(build, 'check_repo'), mock.patch.object(build, 'git', side_effect=lambda path,*a: build.ARMCPU if str(path).endswith('ArmCpu') else build.MSDC), mock.patch.object(build, 'check_uefi_checkout'), mock.patch.object(build, 'check_uefi_firmware'), mock.patch.object(build, 'check_firmware_unixnu'), mock.patch.object(build, 'verify_data_uuid'), mock.patch.object(build.subprocess, 'run', side_effect=run), \
                  mock.patch.object(sys, 'argv', command), contextlib.redirect_stdout(io.StringIO()):
                 build.main()
             # Generate input records from artifacts using the real recorder; it does not claim proof of origin.
@@ -122,7 +122,7 @@ class PairBuild(unittest.TestCase):
                       '--kernel-provenance',str(root/'kernel.json'),'--firmware-provenance',str(root/'firmware.json'),
                       '--seed-provenance',str(root/'seed.json'),'--pre-build-log',str(root/'pre-build.log'),'--out',str(record_out)]
             for name,path in paths.items(): rec_argv += ['--'+name,str(path)]
-            with mock.patch.object(recorder.build,'check_repo'), mock.patch.object(recorder.build,'check_uefi_checkout'), mock.patch.object(sys,'argv',rec_argv), contextlib.redirect_stdout(io.StringIO()):
+            with mock.patch.object(recorder.build,'check_repo'), mock.patch.object(recorder.build,'check_uefi_checkout'), mock.patch.object(recorder.build,'check_firmware_unixnu'), mock.patch.object(sys,'argv',rec_argv), contextlib.redirect_stdout(io.StringIO()):
                 recorder.main()
             recorded=json.loads((record_out/'inputs.json').read_text())
             self.assertEqual(recorded['files']['data']['sha256'], build.sha(paths['data']))
@@ -147,7 +147,7 @@ class PairBuild(unittest.TestCase):
                 if argv[1:2]==['bootimg']:
                     raise subprocess.CalledProcessError(1, argv)
                 return run(argv,**kwargs)
-            with mock.patch.object(build, 'check_preparation_source', return_value='prep-commit'), mock.patch.object(build, 'check_repo'), mock.patch.object(build, 'git', side_effect=lambda path,*a: build.ARMCPU if str(path).endswith('ArmCpu') else build.MSDC), mock.patch.object(build, 'check_uefi_checkout'), mock.patch.object(build, 'check_uefi_firmware'), mock.patch.object(build, 'verify_data_uuid'), mock.patch.object(build.subprocess,'run',side_effect=fail_boot), mock.patch.object(sys,'argv',command):
+            with mock.patch.object(build, 'check_preparation_source', return_value='prep-commit'), mock.patch.object(build, 'check_repo'), mock.patch.object(build, 'git', side_effect=lambda path,*a: build.ARMCPU if str(path).endswith('ArmCpu') else build.MSDC), mock.patch.object(build, 'check_uefi_checkout'), mock.patch.object(build, 'check_uefi_firmware'), mock.patch.object(build, 'check_firmware_unixnu'), mock.patch.object(build, 'verify_data_uuid'), mock.patch.object(build.subprocess,'run',side_effect=fail_boot), mock.patch.object(sys,'argv',command):
                 with self.assertRaises(subprocess.CalledProcessError): build.main()
             self.assertFalse(failure_out.exists())
             self.assertFalse(list(root.glob('.failure-output.*')))

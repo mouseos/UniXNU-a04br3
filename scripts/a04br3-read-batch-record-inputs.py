@@ -30,11 +30,12 @@ def main():
     if (kp.get('source_commit')!=build.UNIXNU or kp.get('device_commit')!=build.DEVICE or
         kp.get('kernel_sha256')!=build.sha(paths['kernel']) or
         kp.get('kernel_build_flags',{}).get('XNU_ROOT_TIMING')!='1' or
-        fp.get('uefi_commit')!=build.UEFI or fp.get('unixnu_commit')!=build.UNIXNU or
+        fp.get('uefi_commit')!=build.UEFI or fp.get('unixnu_commit')!=build.FIRMWARE_UNIXNU or fp.get('darwinboot_commit')!=build.DARWINBOOT or
         fp.get('fd_sha256')!=build.sha(paths['fd']) or
         str(seed.get('volume_uuid','')).upper()!=str(kp.get('data_uuid','')).upper() or
         not kp.get('data_uuid')):
         raise ValueError('kernel, firmware or Data seed records do not match')
+    build.check_firmware_unixnu(source, fp)
     if not records['pre_build_log'].stat().st_size:
         raise ValueError('pre-build log is empty')
     out=args.out.resolve()

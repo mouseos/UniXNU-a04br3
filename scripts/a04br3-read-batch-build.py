@@ -21,6 +21,8 @@ DEVICE = '8fde8ba87486338342f3be528823cb46394f2c5b'
 UEFI = 'd3d4f28a89b29553ede7d7523c6af86d7e2459e8'
 ARMCPU = '85d06a5248a4516c777763d195866a2362e5d7b0'
 MSDC = '66d40654ae43ef27090a6d6e1f552be6ea10d24b'
+FIRMWARE_UNIXNU = '7fb02c678704a11a9c7455f4896afde1fef7401e'
+DARWINBOOT = 'b9063ad22903288df989c3449621b7eb97de7dd2'
 HERE = Path(__file__).resolve().parent
 sys.dont_write_bytecode = True
 
@@ -60,6 +62,18 @@ def check_repo(path, expected):
         raise ValueError(f'{path}: submodules must be initialized at pinned commits')
 
 
+def check_firmware_unixnu(source, provenance):
+    if provenance.get('unixnu_commit') != FIRMWARE_UNIXNU or provenance.get('darwinboot_commit') != DARWINBOOT:
+        raise ValueError('firmware UniXNU/DarwinBoot provenance mismatch')
+    changed = git(source, 'diff', '--name-only', FIRMWARE_UNIXNU, UNIXNU).splitlines()
+    if changed != ['docs/guide/root-startup-timing.md', 'scripts/tests/check_native4k_page_validation.py']:
+        raise ValueError('firmware UniXNU differs beyond documented host tests')
+    for revision in (FIRMWARE_UNIXNU, UNIXNU):
+        entry = git(source, 'ls-tree', revision, 'drivers/DarwinBoot').split()
+        if len(entry) < 3 or entry[2] != DARWINBOOT:
+            raise ValueError('DarwinBoot gitlink mismatch')
+
+
 def check_uefi_checkout(uefi):
     if git(uefi, 'rev-parse', 'HEAD') != UEFI or git(uefi, 'status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all'):
         raise ValueError('UEFI top-level revision or cleanliness mismatch')
@@ -89,7 +103,8 @@ def check_uefi_firmware(uefi, fp):
             return subprocess.check_output(['git','-C',str(mu),'write-tree'],env=env,text=True).strip()
     if (git(mu, 'diff', '--cached', '--name-only') or git(mu, 'ls-files', '--others', '--exclude-standard') or
         any(line and line[0]!='H' for line in git(mu,'ls-files','-v').splitlines()) or
-        tree(False) != tree(True) or tree(False) != fp.get('mu_basecore_patched_tree')):
+        tree(False) not in (git(mu, 'rev-parse', 'HEAD^{tree}'), tree(True)) or
+        tree(True) != fp.get('mu_basecore_patched_tree')):
         raise ValueError('UEFI Mu_Basecore derived tree mismatch')
     for name in expected_submodules[:2]:
         if (git(uefi / name, 'status', '--porcelain', '--untracked-files=normal') or
@@ -269,8 +284,9 @@ def main():
         kp.get('armcpu_commit') != ARMCPU or kp.get('native_msdc_commit') != MSDC or
         kp.get('kernel_sha256') != sha(inputs['kernel']) or kp.get('kernel_build_flags', {}).get('XNU_ROOT_TIMING') != '1'):
         raise ValueError('kernel provenance mismatch')
-    if fp.get('uefi_commit') != UEFI or fp.get('unixnu_commit') != UNIXNU or fp.get('fd_sha256') != sha(inputs['fd']):
+    if fp.get('uefi_commit') != UEFI or fp.get('fd_sha256') != sha(inputs['fd']):
         raise ValueError('firmware provenance mismatch')
+    check_firmware_unixnu(source, fp)
     if (not kp.get('reference_kernel_sha256') or kp.get('pmgr_build_report', {}).get('virtual_entries') != 340 or
         kp.get('display_build_report', {}).get('virtual_entries') != 358 or
         kp.get('display_build_report', {}).get('original_candidate_sha256') != kp.get('reference_kernel_sha256')):
@@ -326,7 +342,7 @@ def main():
                 raise ValueError(f'{name}: input changed during copy')
             frozen[name] = target
         inputs = frozen
-        report = {'source_commit': UNIXNU, 'device_commit': DEVICE, 'uefi_commit': UEFI, 'preparation_commit': preparation_commit,
+        report = {'source_commit': UNIXNU, 'device_commit': DEVICE, 'uefi_commit': UEFI, 'firmware_unixnu_commit': FIRMWARE_UNIXNU, 'firmware_darwinboot_commit': DARWINBOOT, 'preparation_commit': preparation_commit,
                   'inputs_sha256': recorded_hashes,
                   'input_records_sha256': {name: sha(input_path(manifest[name])) for name in ('kernel_provenance', 'firmware_provenance', 'data_provenance', 'seed_provenance', 'pre_build_log')},
                   'identity_origin': 'new software identity generated per pair; diagnostic only',

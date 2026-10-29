@@ -11,7 +11,11 @@ UEFIは正本 `uefi-a04br3` の `d3d4f28a89b29553ede7d7523c6af86d7e2459e8` を�
    GPU addonとowner trustは固定deviceの `make-a04br3-gpu-addon.py` で、同じ
    pre-buildが生成・署名したprobeとMetal bundle、およびIPSWから生成した
    trustを使って作る。ログとsource・出力hash・Dataのvolume UUIDを記録する。
-2. 正本UEFIの `Platforms/Benesse/a04br3Pkg/scripts/build-recorded-fd.py` が
+2. 既存d3d4 FDのUniXNU出自は `7fb02c6` で、比較kernelの `e8f5385` ではない。
+両commitはdocsとhost testだけが異なり、DarwinBoot gitlinkは同一であることを
+生成時に検査し、FDの実際の出自をそのまま記録する。
+
+正本UEFIの `Platforms/Benesse/a04br3Pkg/scripts/build-recorded-fd.py` が
    内部で正規 `build_uefi.py` を呼ぶ。fixed UniXNU checkoutとともに実行し、
    出力FD・manifest・実際のMu_Basecoreのパッチ適用状態を照合する。
 3. `a04br3-read-batch-record-inputs.py` は上記の入力とログのhashをまとめ、
