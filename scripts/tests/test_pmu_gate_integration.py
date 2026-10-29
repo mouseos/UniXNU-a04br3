@@ -17,10 +17,17 @@ int main(){uint64_t gen=0;
  assert(!a04br3_pmu_lease_release(1,gen));assert(a04br3_pmu_lease_valid(0,gen));
  assert(gWatchdogGate.lock());assert(!a04br3_runtime_probe_end_checked());assert(!a04br3_pmu_lease_valid(0,gen));gWatchdogGate.unlock();
  assert(a04br3_pmu_lease_release(0,gen));assert(a04br3_runtime_probe_end_checked());assert(!a04br3_runtime_probe_active);
+ for(int i=0;i<100;++i){assert(a04br3_runtime_probe_begin());std::atomic<int> ready{0};std::atomic<bool> go{false};bool acquired=false,ended=false;uint64_t token=0;
+  std::thread a([&]{++ready;while(!go.load()){} acquired=a04br3_pmu_lease_acquire(0,&token);});
+  std::thread b([&]{++ready;while(!go.load()){} ended=a04br3_runtime_probe_end_checked();});
+  while(ready.load()!=2){} go=true;a.join();b.join();assert(!(acquired&&ended));
+  if(acquired){assert(a04br3_runtime_probe_active);assert(a04br3_pmu_lease_release(0,token));}
+  if(a04br3_runtime_probe_active)assert(a04br3_runtime_probe_end_checked());
+ }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='pmu-gate-integration-') as d:
- p=Path(d);cpp=p/'test.cpp';exe=p/'test';cpp.write_text('#include <cassert>\n#include "A04BR3WatchdogGate.h"\n#include "A04BR3PmuLease.h"\nstatic A04BR3WatchdogGate gWatchdogGate={};\nstatic volatile uint32_t a04br3_runtime_probe_active=0;\nstatic bool testQualified=false;\n'+source+main)
- subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all','-I',str(root/'package'),str(cpp),'-o',str(exe)],check=True)
+ p=Path(d);cpp=p/'test.cpp';exe=p/'test';cpp.write_text('#include <cassert>\n#include <atomic>\n#include <thread>\n#include "A04BR3WatchdogGate.h"\n#include "A04BR3PmuLease.h"\nstatic A04BR3WatchdogGate gWatchdogGate={};\nstatic volatile uint32_t a04br3_runtime_probe_active=0;\nstatic bool testQualified=false;\n'+source+main)
+ subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all','-pthread','-I',str(root/'package'),str(cpp),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True)
 print('PASS actual gate/lease wrappers: refusal, active lease blocks release, nonblocking contention')
