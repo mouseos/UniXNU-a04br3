@@ -38,6 +38,7 @@ def join_context(raw, timeline, skips=()):
     if not snap or 'base' not in snap:issues.append('missing context '+label);continue
     base=snap['base']
     if base['end']<base['begin']:issues.append('context timer reversed '+label)
+    if base['clock'] not in (0,1) or base['load'] not in (0,1):issues.append('invalid context availability '+label)
     for kind in ('clock','load'):
      if bool(base[kind])!=(kind in snap):issues.append('context availability mismatch '+kind+' '+label)
     if phase==0 and base['end']>entry['begin']:issues.append('before context overlaps window '+label)
@@ -47,6 +48,8 @@ def join_context(raw, timeline, skips=()):
   if key in keys:issues.append('measurement and skip overlap '+str(key));continue
   before=snaps.get((*key,0));after=snaps.get((*key,1))
   if after:issues.append('post context on skipped attempt '+str(key))
+  no_pre=('reason=recovery-not-ready','reason=context-recovery-not-ready','unavailable=pmu-unqualified')
+  if not before and not any(reason in skip.get('event','') for reason in no_pre):issues.append('missing pre context on skipped attempt '+str(key))
   records.append({'attempt':list(key),'skip':skip,'before':before,'after':after,'rail':'unknown','temperature':'unknown'})
  for round_,cpu,phase in snaps:
   key=(round_,cpu,phase);snap=snaps[key]
@@ -55,6 +58,7 @@ def join_context(raw, timeline, skips=()):
    if 'base' not in snap:issues.append('missing context base '+str(key));continue
    base=snap['base']
    if base['end']<base['begin']:issues.append('context timer reversed '+str(key))
+   if base['clock'] not in (0,1) or base['load'] not in (0,1):issues.append('invalid context availability '+str(key))
    for kind in ('clock','load'):
     if bool(base[kind])!=(kind in snap):issues.append('context availability mismatch '+kind+' '+str(key))
  return {'records':records,'issues':issues,'context_count':len(snaps),'limits':['non-atomic snapshots','PLL values are raw, not a measurement of CPU frequency or voltage','load ticks are cumulative and not simultaneous with PMU active intervals','temperature and CPU voltage unavailable','context logging perturbs scheduling','counter comparison assumes synchronized CNTVCT across CPUs']}

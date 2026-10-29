@@ -11,5 +11,9 @@ for bad in (before,before+after+base(1,210,220),base(0,80,110)+clk(0)+load(0)+af
 skip={'attempt':[2,1],'event':'runtime-skip cpu=1 reason=bind-deadline-or-recovery'}
 skipped=m.join_context(before,[],[skip]);assert not skipped['issues'] and skipped['records'][0]['before']['clock']['con1']=='0009a000' and skipped['records'][0]['skip']==skip
 assert m.join_context(before+after,[],[skip])['issues']
+assert m.join_context('',[],[skip])['issues']
+assert not m.join_context('',[],[{'attempt':[2,1],'event':'unavailable=pmu-unqualified'}])['issues']
+assert m.join_context(before.replace('clock=1','clock=2'),[],[skip])['issues']
+assert m.join_context((before+after).replace('load=1','load=2'),rows)['issues']
 for bad in (base(0,90,80)+clk(0)+load(0),clk(0)+load(0),base(0,80,90)+load(0)):assert m.join_context(bad,[],[skip])['issues']
 print('PASS context join, pre/post order, duplicates, missing and availability')
