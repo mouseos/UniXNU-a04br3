@@ -49,7 +49,14 @@ def join_context(raw, timeline, skips=()):
   if after:issues.append('post context on skipped attempt '+str(key))
   records.append({'attempt':list(key),'skip':skip,'before':before,'after':after,'rail':'unknown','temperature':'unknown'})
  for round_,cpu,phase in snaps:
-  if (round_,cpu) not in keys and (round_,cpu) not in skipkeys:issues.append('context without measurement or skip '+str((round_,cpu,phase)))
+  key=(round_,cpu,phase);snap=snaps[key]
+  if (round_,cpu) not in keys and (round_,cpu) not in skipkeys:issues.append('context without measurement or skip '+str(key))
+  if (round_,cpu) in skipkeys:
+   if 'base' not in snap:issues.append('missing context base '+str(key));continue
+   base=snap['base']
+   if base['end']<base['begin']:issues.append('context timer reversed '+str(key))
+   for kind in ('clock','load'):
+    if bool(base[kind])!=(kind in snap):issues.append('context availability mismatch '+kind+' '+str(key))
  return {'records':records,'issues':issues,'context_count':len(snaps),'limits':['non-atomic snapshots','PLL values are raw, not a measurement of CPU frequency or voltage','load ticks are cumulative and not simultaneous with PMU active intervals','temperature and CPU voltage unavailable','context logging perturbs scheduling','counter comparison assumes synchronized CNTVCT across CPUs']}
 
 def main():
