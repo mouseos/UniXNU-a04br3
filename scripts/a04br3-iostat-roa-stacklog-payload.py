@@ -258,7 +258,8 @@ def main():
                    '--uefi', str(uefi), '--kernel', str(inputs['kernel.macho']),
                    '--data-ramdisk', str(inputs['scratch-data.img']), '--owner-trust-cache', str(inputs['kernel.macho.trustcache']),
                    '--gpu-addon', str(inputs['kernel.macho.gpuaddon'])]
-        original_keys = [word.partition('=')[0] for word in original.split()]
+        board = tomllib.loads((device / 'board.toml').read_text())
+        original_keys = [word.partition('=')[0] for word in board['payload']['kernel_args']]
         new_words = rewritten.split()
         new_keys = {word.partition('=')[0] for word in new_words}
         for key in original_keys:
