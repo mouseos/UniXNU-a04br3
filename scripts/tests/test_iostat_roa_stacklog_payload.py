@@ -70,6 +70,7 @@ class StacklogPayload(unittest.TestCase):
             path = Path(temporary) / 'adt'
             path.write_bytes(tree)
             self.assertEqual(BUILD.adt_identity(path), secret)
+            self.assertEqual(int(BUILD.identity_argument(secret), 16).to_bytes(8, 'little'), secret)
             path.write_bytes(struct.pack('<II', 0, 0))
             with self.assertRaises(ValueError):
                 BUILD.adt_identity(path)

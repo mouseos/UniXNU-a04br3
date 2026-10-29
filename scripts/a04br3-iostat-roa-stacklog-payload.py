@@ -116,6 +116,12 @@ def adt_identity(adt):
     return found[0]
 
 
+def identity_argument(value):
+    if len(value) != 8 or value == bytes(8):
+        raise ValueError('invalid ADT unique-chip-id')
+    return format(int.from_bytes(value, 'little'), 'x')
+
+
 def boot_ramdisk(boot, destination):
     """Extract and strictly validate the Android-v0 ramdisk before FAT access."""
     data = Path(boot).read_bytes()
@@ -251,7 +257,7 @@ def main():
         identity = adt_identity(old_adt)
         fd_number = os.open(identity_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd_number, 'wb') as stream:
-            stream.write(identity.hex().encode('ascii'))
+            stream.write(identity_argument(identity).encode('ascii'))
         inputs = {name: extracted / name for name in FIXED}
         input_hashes = {name: sha(path) for name, path in inputs.items()}
         command = [str(source / 'unixnu'), 'build', 'payload', '-D', str(device), '--out', str(stage / 'work'),
@@ -332,6 +338,10 @@ def main():
     finally:
         identity_file.unlink(missing_ok=True)
         if stage.exists():
+            saved_log = stage / 'build.log'
+            if saved_log.is_file():
+                with (out.parent / (out.name + '.failed.log')).open('x', encoding='utf-8') as target:
+                    target.write(saved_log.read_text(errors='replace'))
             shutil.rmtree(stage)
 
 
