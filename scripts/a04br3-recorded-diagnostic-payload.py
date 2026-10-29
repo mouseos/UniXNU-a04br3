@@ -34,7 +34,7 @@ def checked_context_kernel(config, kernel_bytes, symbols):
   if marker not in kernel_bytes:raise ValueError('context kernel marker missing')
  for sym in ('_a04br3_cpu_context_sample','_unixnu_pmuv3_active_start','_unixnu_pmuv3_active_stop','_unixnu_idle_epoch_observe'):
   rows=[line.split() for line in symbols.splitlines() if line.split() and line.split()[-1]==sym]
-  if not any(len(row)>=4 and row[-3]=='(__TEXT_EXEC,__text)' and row[-2] in ('external','non-external') for row in rows):raise ValueError('context kernel symbol not defined: '+sym)
+  if not any(len(row)>=4 and row[-3]=='(__TEXT_EXEC,__text)' and row[-2]=='external' for row in rows):raise ValueError('context kernel symbol not defined: '+sym)
 
 
 def main():
