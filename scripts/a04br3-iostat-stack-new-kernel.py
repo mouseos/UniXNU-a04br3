@@ -23,6 +23,7 @@ import tomllib
 
 OLD_SOURCE = 'e8f5385e4cee02bb15efa2fb97c20bb59b98d72f'
 KERNEL_SOURCE = '22146ccf1721db40f53e35f1afb1d745819f4735'
+SEED_PROVENANCE_SHA256 = '486b9a968e624145697966194c83de6bd782f6d6ce3c68257f0ec955f28e3756'
 OLD_DEVICE = '8fde8ba87486338342f3be528823cb46394f2c5b'
 NEW_DEVICE = '78d2c29a2a8122df2b0ae4809619c96ade662f5a'
 UEFI = 'd3d4f28a89b29553ede7d7523c6af86d7e2459e8'
@@ -272,6 +273,7 @@ def main():
         if not set(FIXED).issubset(old_files) or 'kernel.macho.adt' not in old_files: raise ValueError('old payload misses required files')
         for name in FIXED:
             if old_files[name] != declared[name]: raise ValueError('old pair hash mismatch: ' + name)
+        if sha(seed_provenance) != SEED_PROVENANCE_SHA256: raise ValueError('seed provenance pin mismatch')
         data_uuid = check_owner_seed(record, json.loads(seed_provenance.read_text()), old_dir/'kernel.macho', kernel, old_files['scratch-data.img'])
         if old_files.get('kernel.macho') != declared['kernel.macho']:
             raise ValueError('old pair kernel hash mismatch')

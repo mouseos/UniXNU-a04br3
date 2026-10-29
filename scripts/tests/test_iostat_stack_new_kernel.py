@@ -73,6 +73,9 @@ class NewKernelContracts(unittest.TestCase):
             with self.assertRaises(ValueError): BUILD.check_owner_seed(record, provenance, old, new, 'seedhash')
             record['owner_data_volume_uuid'] = u; new.write_bytes(b'other')
             with self.assertRaises(ValueError): BUILD.check_owner_seed(record, provenance, old, new, 'seedhash')
+            new.write_bytes(b'x'+u.encode()+b'\0'); old.write_bytes(b'other')
+            with self.assertRaises(ValueError): BUILD.check_owner_seed(record, provenance, old, new, 'seedhash')
+            with self.assertRaises(ValueError): BUILD.check_owner_seed(record, {}, old, new, 'seedhash')
 
     def test_private_log_redaction(self):
         with tempfile.TemporaryDirectory() as temp:
