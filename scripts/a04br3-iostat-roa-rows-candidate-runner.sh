@@ -9,6 +9,7 @@ case "$BATCH_PREP_COMMIT" in *[!0-9a-f]*|'') echo 'Invalid preparation commit' >
 [ "$(dirname "$task")" = "$root" ] || { echo 'Task must be a direct child of runner temp' >&2; exit 2; }
 case "$(basename "$task")" in io-read-batch-iostat-roa-rows-*) ;; *) echo 'Unexpected task directory' >&2; exit 2 ;; esac
 [ -d "$task" ] && [ ! -L "$task" ] || { echo 'Missing or symlinked task directory' >&2; exit 2; }
+[ -s "$task/preparation.bundle" ] && [ ! -L "$task/preparation.bundle" ] || { echo "Missing source bundle" >&2; exit 3; }
 [ ! -e "$task/preparation" ] && [ ! -e "$task/pair" ] || { echo 'Task already used' >&2; exit 3; }
 prior="$root/io-read-batch-e8f-20261029b"
 iostat="$root/io-read-batch-iostat-e8f-20261030c"
