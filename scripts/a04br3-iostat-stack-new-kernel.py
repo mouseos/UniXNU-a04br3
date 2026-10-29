@@ -22,7 +22,7 @@ import tempfile
 import tomllib
 
 OLD_SOURCE = 'e8f5385e4cee02bb15efa2fb97c20bb59b98d72f'
-KERNEL_SOURCE = '51828b522fb80797a0865eb09f00f27f579845a5'
+KERNEL_SOURCE = '22146ccf1721db40f53e35f1afb1d745819f4735'
 OLD_DEVICE = '8fde8ba87486338342f3be528823cb46394f2c5b'
 NEW_DEVICE = '78d2c29a2a8122df2b0ae4809619c96ade662f5a'
 UEFI = 'd3d4f28a89b29553ede7d7523c6af86d7e2459e8'
@@ -204,6 +204,25 @@ def load_kernel_record(path, kernel):
     return record
 
 
+def check_owner_seed(record, provenance, old_kernel, new_kernel, scratch_sha):
+    import uuid
+    stage = provenance.get('staged_seed', {})
+    expected = stage.get('expected_volume_uuid')
+    try:
+        expected = str(uuid.UUID(expected)).upper()
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError('missing or invalid verified seed UUID') from None
+    if stage.get('data_sha256') != scratch_sha:
+        raise ValueError('seed provenance does not match preserved scratch data')
+    if record.get('owner_data_volume_uuid', '').upper() != expected:
+        raise ValueError('kernel build record and seed UUID mismatch')
+    needle = expected.encode('ascii') + b'\0'
+    for name, path in (('old', old_kernel), ('new', new_kernel)):
+        if needle not in Path(path).read_bytes().upper():
+            raise ValueError(name + ' kernel does not contain expected Data UUID')
+    return expected
+
+
 def rewrite_args(line):
     words = line.split(); keys = [word.partition('=')[0] for word in words]
     if len(keys) != len(set(keys)): raise ValueError('duplicate kernel argument keys')
@@ -232,9 +251,9 @@ def validate_cli(source, device, command, line):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('source', 'old-device', 'new-device', 'uefi', 'old-boot', 'old-pair', 'kernel', 'kernel-record', 'fd', 'out'):
+    for name in ('source', 'old-device', 'new-device', 'uefi', 'old-boot', 'old-pair', 'kernel', 'kernel-record', 'fd', 'out', 'seed-provenance'):
         parser.add_argument('--' + name, type=Path, required=True)
-    args = parser.parse_args(); source, old_device, new_device, uefi, old_boot, old_pair, kernel, record_path, fd, out = (getattr(args, name.replace('-', '_')).resolve() for name in ('source','old_device','new_device','uefi','old_boot','old_pair','kernel','kernel_record','fd','out'))
+    args = parser.parse_args(); source, old_device, new_device, uefi, old_boot, old_pair, kernel, record_path, fd, out, seed_provenance = (getattr(args, name.replace('-', '_')).resolve() for name in ('source','old_device','new_device','uefi','old_boot','old_pair','kernel','kernel_record','fd','out','seed_provenance'))
     check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, NEW_DEVICE); check_repo(uefi, UEFI)
     if out.exists(): raise ValueError('refuse to overwrite output')
     if not all(path.is_file() for path in (old_boot, old_pair, kernel, record_path, fd)): raise ValueError('a required input is missing')
@@ -253,6 +272,7 @@ def main():
         if not set(FIXED).issubset(old_files) or 'kernel.macho.adt' not in old_files: raise ValueError('old payload misses required files')
         for name in FIXED:
             if old_files[name] != declared[name]: raise ValueError('old pair hash mismatch: ' + name)
+        data_uuid = check_owner_seed(record, json.loads(seed_provenance.read_text()), old_dir/'kernel.macho', kernel, old_files['scratch-data.img'])
         if old_files.get('kernel.macho') != declared['kernel.macho']:
             raise ValueError('old pair kernel hash mismatch')
         identities = [value for _, props in adt_tree(old_dir/'kernel.macho.adt') for key, _, value in props if key == 'unique-chip-id']
@@ -286,7 +306,7 @@ def main():
         boot_payload = stage/'boot-payload.img'; boot_ramdisk(output_boot, boot_payload)
         if sha(boot_payload) != sha(image): raise ValueError('output boot FAT differs from new payload')
         check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, NEW_DEVICE); check_repo(uefi, UEFI)
-        report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
+        report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'owner_data_volume_uuid': data_uuid, 'seed_provenance_sha256': sha(seed_provenance), 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
         shutil.copyfile(image, stage/'payload.img'); (stage/'manifest.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')
         for path in (stage/'work', stage/'boot-work', old_dir, new_dir): shutil.rmtree(path)
         source_payload.unlink(); boot_payload.unlink(); (stage/'old.toml').unlink(); (stage/'new.toml').unlink(); stage.rename(out)

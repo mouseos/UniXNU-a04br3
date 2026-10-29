@@ -60,6 +60,20 @@ class NewKernelContracts(unittest.TestCase):
         new['entry'][0]['path'] = 'other'
         with self.assertRaises(ValueError): BUILD.compare_config(copy.deepcopy(old), new, 'new')
 
+    def test_rejects_kernel_data_seed_uuid_mismatch(self):
+        u = 'A6DD3DAA-6629-41C4-8E19-51473AA52AF8'
+        with tempfile.TemporaryDirectory() as temp:
+            old = Path(temp)/'old'; new = Path(temp)/'new'
+            old.write_bytes(b'x'+u.encode()+b'\0'); new.write_bytes(b'x'+u.encode()+b'\0')
+            provenance = {'staged_seed': {'expected_volume_uuid': u, 'data_sha256': 'seedhash'}}
+            record = {'owner_data_volume_uuid': u}
+            self.assertEqual(BUILD.check_owner_seed(record, provenance, old, new, 'seedhash'), u)
+            with self.assertRaises(ValueError): BUILD.check_owner_seed(record, provenance, old, new, 'different')
+            record['owner_data_volume_uuid'] = '606695F1-0F7D-4B73-84E2-B164784E0EFC'
+            with self.assertRaises(ValueError): BUILD.check_owner_seed(record, provenance, old, new, 'seedhash')
+            record['owner_data_volume_uuid'] = u; new.write_bytes(b'other')
+            with self.assertRaises(ValueError): BUILD.check_owner_seed(record, provenance, old, new, 'seedhash')
+
     def test_private_log_redaction(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp); nested=root/'logs'; nested.mkdir(); path=nested/'child.log'
