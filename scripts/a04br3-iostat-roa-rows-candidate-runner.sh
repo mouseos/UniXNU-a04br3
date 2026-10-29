@@ -40,7 +40,7 @@ clean=(env -i "PATH=$PATH" "TMPDIR=$task/tmp" "XDG_CACHE_HOME=$task/cache" "PIP_
 "${clean[@]}" git -C "$task/preparation" checkout --quiet --detach "$BATCH_PREP_COMMIT"
 [ "$("${clean[@]}" git -C "$task/preparation" rev-parse HEAD)" = "$BATCH_PREP_COMMIT" ] || exit 4
 [ "$(shasum -a 256 "$task/preparation/scripts/a04br3-iostat-roa-rows-candidate-runner.sh" | cut -d ' ' -f1)" = "$(shasum -a 256 "$task/runner.sh" | cut -d ' ' -f1)" ] || { echo 'Runner source hash mismatch' >&2; exit 4; }
-"${clean[@]}" python3 -I - "$prior" "$iostat" "$rows" "$task" <<'PY'
+"${clean[@]}" python3 -IB - "$prior" "$iostat" "$rows" "$task" <<'PY'
 import hashlib,json,pathlib,shutil,subprocess,sys,uuid
 prior,iostat,rows,task=map(pathlib.Path,sys.argv[1:])
 rec=task/'records'; inputs=task/'inputs'
@@ -76,7 +76,7 @@ copy(rows/'powervr-metal/trust.json','roa-plugin-trust.json')
 for source,name in ((iostat/'records/kernel_provenance.json','kernel_provenance.json'),(iostat/'records/firmware_provenance.json','firmware_provenance.json'),(iostat/'records/seed_provenance.json','official-pre-build-seed.json'),(iostat/'records/pre_build.log','official-pre-build.log'),(iostat/'records/data_provenance.json','official-data-provenance.json'),(iostat/'inputs/data','original-data'),(iostat/'inputs/trust','original-trust'),(iostat/'inputs/gpu','original-gpu')):
  copy(source,name)
 (task/'source/build').mkdir(exist_ok=True)
-grow=[sys.executable,'-I',str(task/'source/scripts/seed-data-grow.py'),'--gib','4',str(baseline),str(fresh/'data-grown.dbr')]
+grow=[sys.executable,'-IB',str(task/'source/scripts/seed-data-grow.py'),'--gib','4',str(baseline),str(fresh/'data-grown.dbr')]
 subprocess.run(grow,check=True)
 if not (fresh/'data-grown.dbr').is_file(): raise SystemExit('fresh Data grow produced no output')
 expected=str(uuid.UUID(seed['volume_uuid'])).upper()
@@ -84,8 +84,8 @@ trust_out=fresh/'trustcache-owner'
 probe_out=fresh/'powervr-probe'
 shutil.copytree(rows/'powervr-probe', probe_out, symlinks=False)
 gpu=fresh/'powervr-gpu-addon'
-subprocess.run([sys.executable,'-I',str(task/'device/scripts/make-a04br3-gpu-addon.py'),'--probe-dir',str(probe_out),'--metal-plugin',str(plugin_dir),'--trust-base',str(inputs/'original-trustcache'),'--trust-out',str(trust_out),'--out',str(gpu)],check=True)
-subprocess.run([sys.executable,'-I',str(task/'device/scripts/a04br3-seed-powervr-probe.py'),'--tree',str(task/'source'),'--probe-dir',str(probe_out),'--metal-plugin',str(plugin_dir),'--metal-mode','publish','--expected-volume-uuid',expected,str(fresh/'data-grown.dbr'),str(fresh/'data-staged.dbr')],check=True)
+subprocess.run([sys.executable,'-IB',str(task/'device/scripts/make-a04br3-gpu-addon.py'),'--probe-dir',str(probe_out),'--metal-plugin',str(plugin_dir),'--trust-base',str(inputs/'original-trustcache'),'--trust-out',str(trust_out),'--out',str(gpu)],check=True)
+subprocess.run([sys.executable,'-IB',str(task/'device/scripts/a04br3-seed-powervr-probe.py'),'--tree',str(task/'source'),'--probe-dir',str(probe_out),'--metal-plugin',str(plugin_dir),'--metal-mode','publish','--expected-volume-uuid',expected,str(fresh/'data-grown.dbr'),str(fresh/'data-staged.dbr')],check=True)
 if not trust_out.is_file() or not gpu.is_file() or not (fresh/'data-staged.dbr').is_file(): raise SystemExit('fresh probe/trust/GPU seed staging failed')
 seed_report=fresh/'data-staged.json'
 if not seed_report.is_file():raise SystemExit('seed staging produced no report')
@@ -135,7 +135,7 @@ PY
 # The normal builder's pre-build contract remains unchanged.  The copied
 # candidate builder verifies the original records and this independent staging
 # contract before it consumes the new Data/trust/GPU inputs.
-"${clean[@]}" python3 -I "$task/preparation/scripts/a04br3-iostat-roa-rows-candidate-build.py" \
+"${clean[@]}" python3 -IB "$task/preparation/scripts/a04br3-iostat-roa-rows-candidate-build.py" \
   --source "$task/source" --device "$task/device" --uefi "$task/uefi" \
   --inputs "$task/records/inputs.json" --out "$task/pair-building" --log-dir "$task/logs" --measurement iostat
 cp -R "$task/records" "$task/pair-building/source-records"
