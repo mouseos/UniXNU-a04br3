@@ -63,8 +63,9 @@ while index < len(arguments):
     value = arguments[index]
     if value == record['file']:
         command.append(str(source))
-    elif value == '-o':
-        command.extend(['-o', str(destination)])
+    elif value in ('-o', '-MF', '-MT', '-MJ'):
+        if value == '-o':
+            command.extend(['-o', str(destination)])
         index += 1
     elif value == '-Xclang' and arguments[index + 1].startswith('-W'):
         index += 1
