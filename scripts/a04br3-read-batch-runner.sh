@@ -52,7 +52,7 @@ gh release download "$RELEASE" -R "$GITHUB_REPOSITORY" -D "$task/firmware" -p 'i
 [ "$(shasum -a 256 "$task/firmware/io-batch-fixed-d3d4-manifest.json" | cut -d ' ' -f1)" = c65d3198a1a05e2f5b42ae1168ee44f511eecc671b2f812dd00637504c81f52d ] || exit 6
 export RUNNER_TEMP="$task/official" DEVICE_DIR="$task/device" UNIXNU_OUT="$task/unixnu-out"
 export GITHUB_ENV="$task/official/github.env" TMPDIR="$task/tmp" XDG_CACHE_HOME="$task/cache"
-export RUSTUP_HOME="$task/rustup" CARGO_HOME="$task/cargo" PYTHONDONTWRITEBYTECODE=1
+export RUSTUP_HOME="$task/rustup" CARGO_HOME="$task/cargo" PIP_CACHE_DIR="$task/cache/pip" PYTHONDONTWRITEBYTECODE=1
 export PYTHONPYCACHEPREFIX="$task/pycache"
 export A04BR3_REUSE_DATA_SEED=0 A04BR3_POWERVR_PROBE=1 A04BR3_POWERVR_METAL=1 A04BR3_POWERVR_METAL_MODE=publish
 export XNU_IRQ_PC_STATS=1 XNU_MSDC_IRQ_WAIT=1 XNU_MSDC_IRQ_WORKER=1 XNU_MSDC_GIC_NS=1 XNU_PROCESS_EXIT_DIAG=1 XNU_ROOT_TIMING=1 XNU_IO_OVERLAP_TRACE=1
