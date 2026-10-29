@@ -103,7 +103,7 @@ manifest['metal_plugin']={'path':str(inputs/'metal-plugin'),'executable_sha256':
 manifest.update({'kernel_provenance':str(inputs/'kernel_provenance.json'),'firmware_provenance':str(inputs/'firmware_provenance.json'),'seed_provenance':str(inputs/'official-pre-build-seed.json'),'pre_build_log':str(inputs/'official-pre-build.log'),'data_provenance':str(inputs/'official-data-provenance.json')})
 fd=copy(iostat/'inputs/fd','fd')
 manifest['files']['fd']={'path':str(fd),'sha256':sha(fd)}
-manifest['files']['dtb']={'path':str(task/'uefi/Resources/DTBs/a04br3.dtb'),'sha256':sha(task/'uefi/Resources/DTBs/a04br3.dtb)}
+manifest['files']['dtb']={'path':str(task/'uefi/Resources/DTBs/a04br3.dtb'),'sha256':sha(task/'uefi/Resources/DTBs/a04br3.dtb')}
 # Recompute the addon builder's signed-input set from the current files; do
 # not trust a prior pipeline's metadata.  This is also the exact set that must
 # have been passed into the derived owner trust bundle.

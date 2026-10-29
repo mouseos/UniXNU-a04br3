@@ -189,3 +189,9 @@ class CandidateContract(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+# The runner embeds Python in a shell heredoc; bash -n does not parse it.
+runner = (Path(__file__).resolve().parents[1] / 'a04br3-iostat-roa-rows-candidate-runner.sh').read_text()
+start = runner.index("<<'PY'\n") + len("<<'PY'\n")
+end = runner.index('\nPY\n', start)
+compile(runner[start:end], 'candidate-runner-embedded', 'exec')
