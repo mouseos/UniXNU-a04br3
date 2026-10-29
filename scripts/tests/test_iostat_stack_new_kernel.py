@@ -19,6 +19,13 @@ class NewKernelContracts(unittest.TestCase):
         self.assertEqual(BUILD.rewrite_args(line), 'serial=1 pl=60 native-msdc-iostat=1 a04br3-stacklog=1')
         self.assertEqual(BUILD.rewrite_args(line, stream=True), 'serial=1 pl=60 native-msdc-iostat=1 a04br3-stacklog=1 native-cs-stream=1')
         self.assertEqual(BUILD.rewrite_args(line, meter=True), 'serial=1 a04br3-home-perf=1 pl=60 native-msdc-iostat=1 cm=1')
+        self.assertEqual(BUILD.rewrite_args(line, meter_route=True), 'serial=1 a04br3-home-perf=1 pl=60 native-msdc-iostat=1 cm=2')
+        with self.assertRaises(ValueError): BUILD.rewrite_args(line, meter=True, meter_route=True)
+        with self.assertRaises(ValueError): BUILD.rewrite_args(line, stream=True, meter_route=True)
+        with self.assertRaises(ValueError): BUILD.rewrite_args(line + ' cm=1', meter_route=True)
+        for conflict in ('native-cs-stream=1', 'arc=1', 'armcpu-runtime-cycle=1'):
+            with self.assertRaises(ValueError): BUILD.rewrite_args(line + ' ' + conflict, meter_route=True)
+        with self.assertRaises(ValueError): BUILD.rewrite_args(line.replace('home-perf=1', 'home-perf=0'), meter_route=True)
         with self.assertRaises(ValueError): BUILD.rewrite_args(line, stream=True, meter=True)
         with self.assertRaises(ValueError): BUILD.rewrite_args(line + ' cm=0', meter=True)
         with self.assertRaises(ValueError): BUILD.rewrite_args(line + ' native-cs-stream=0', stream=True)
@@ -45,6 +52,10 @@ class NewKernelContracts(unittest.TestCase):
             import json
             path = root/'record.json'; path.write_text(json.dumps(record))
             self.assertEqual(BUILD.load_kernel_record(path, kernel)['sha256'], BUILD.sha(kernel))
+            record['device_commit'] = BUILD.ROUTE_DEVICE; path.write_text(json.dumps(record))
+            self.assertEqual(BUILD.load_kernel_record(path, kernel, BUILD.ROUTE_DEVICE)['device_commit'], BUILD.ROUTE_DEVICE)
+            with self.assertRaises(ValueError): BUILD.load_kernel_record(path, kernel)
+            record['device_commit'] = BUILD.NEW_DEVICE
             record['source_commit'] = BUILD.OLD_SOURCE; path.write_text(json.dumps(record))
             with self.assertRaises(ValueError): BUILD.load_kernel_record(path, kernel)
             record['source_commit'] = BUILD.KERNEL_SOURCE

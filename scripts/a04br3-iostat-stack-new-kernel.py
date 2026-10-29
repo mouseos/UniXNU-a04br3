@@ -26,6 +26,7 @@ KERNEL_SOURCE = '22146ccf1721db40f53e35f1afb1d745819f4735'
 SEED_PROVENANCE_SHA256 = '486b9a968e624145697966194c83de6bd782f6d6ce3c68257f0ec955f28e3756'
 OLD_DEVICE = '8fde8ba87486338342f3be528823cb46394f2c5b'
 NEW_DEVICE = '2066e1832a770a7c64cda79f9b03d953bcd04752'
+ROUTE_DEVICE = 'c968ba1863b061d39f39ef882b8a0a6daa1ca2d8'
 UEFI = 'd3d4f28a89b29553ede7d7523c6af86d7e2459e8'
 FIXED = ('scratch-data.img', 'kernel.macho.trustcache', 'kernel.macho.gpuaddon')
 BOOT_MAGIC = b'ANDROID!'
@@ -193,14 +194,14 @@ def pair_hashes(pair):
     return result
 
 
-def load_kernel_record(path, kernel):
+def load_kernel_record(path, kernel, expected_device=NEW_DEVICE):
     record = json.loads(Path(path).read_text(encoding='utf-8'))
     required = ('sha256', 'device_commit', 'source_commit', 'run_id')
     if any(not isinstance(record.get(key), str) or not record[key] for key in required):
         raise ValueError('kernel build record lacks sha256, device_commit, source_commit, or run_id')
     digest = record['sha256']
     if digest != sha(kernel): raise ValueError('kernel build record hash mismatch')
-    if record['source_commit'] != KERNEL_SOURCE or record['device_commit'] != NEW_DEVICE:
+    if record['source_commit'] != KERNEL_SOURCE or record['device_commit'] != expected_device:
         raise ValueError('kernel build record source/device mismatch')
     return record
 
@@ -224,18 +225,22 @@ def check_owner_seed(record, provenance, old_kernel, new_kernel, scratch_sha):
     return expected
 
 
-def rewrite_args(line, stream=False, meter=False):
+def rewrite_args(line, stream=False, meter=False, meter_route=False):
+    if meter and meter_route: raise ValueError('select exactly one meter mode')
+    meter_enabled = meter or meter_route
     words = line.split(); keys = [word.partition('=')[0] for word in words]
     if len(keys) != len(set(keys)): raise ValueError('duplicate kernel argument keys')
     values = {word.partition('=')[0]: word.partition('=')[2] for word in words if '=' in word}
-    if values.get('pl') != '1' or 'a04br3-home-perf' not in values or values.get('native-msdc-iostat') != '1':
+    if values.get('pl') != '1' or values.get('a04br3-home-perf') != '1' or values.get('native-msdc-iostat') != '1':
         raise ValueError('baseline arguments are not the expected iostat stack profile')
-    if stream and meter: raise ValueError('meter and stream trials must be separate')
-    if meter and 'cm' in keys: raise ValueError('unexpected existing meter argument')
-    changed = [('pl=60' if word.startswith('pl=') else word) for word in words if meter or not word.startswith('a04br3-home-perf=')]
+    if stream and meter_enabled: raise ValueError('meter and stream trials must be separate')
+    if meter_enabled and any(values.get(k, '0') != '0' for k in ('native-cs-stream', 'arc', 'armcpu-runtime-cycle')):
+        raise ValueError('meter trial conflicts with existing stream or PMU arguments')
+    if meter_enabled and 'cm' in keys: raise ValueError('unexpected existing meter argument')
+    changed = [('pl=60' if word.startswith('pl=') else word) for word in words if meter_enabled or not word.startswith('a04br3-home-perf=')]
     if 'a04br3-stacklog' in keys:
         raise ValueError('unexpected existing stacklog argument')
-    changed.append('cm=1' if meter else 'a04br3-stacklog=1')
+    changed.append('cm=2' if meter_route else 'cm=1' if meter else 'a04br3-stacklog=1')
     if stream:
         if 'native-cs-stream' in keys: raise ValueError('unexpected existing stream argument')
         changed.append('native-cs-stream=1')
@@ -261,18 +266,20 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--stream', action='store_true', help='enable the opt-in native4k streaming trial')
     parser.add_argument('--meter', action='store_true', help='enable the separate opt-in clock meter trial')
+    parser.add_argument('--meter-route', action='store_true', help='enable the experimental vendor clock route trial')
     args = parser.parse_args(); source, old_device, new_device, uefi, old_boot, old_pair, kernel, record_path, fd, out, seed_provenance = (getattr(args, name.replace('-', '_')).resolve() for name in ('source','old_device','new_device','uefi','old_boot','old_pair','kernel','kernel_record','fd','out','seed_provenance'))
-    check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, NEW_DEVICE); check_repo(uefi, UEFI)
+    expected_device = ROUTE_DEVICE if args.meter_route else NEW_DEVICE
+    check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, expected_device); check_repo(uefi, UEFI)
     if out.exists(): raise ValueError('refuse to overwrite output')
     if not all(path.is_file() for path in (old_boot, old_pair, kernel, record_path, fd)): raise ValueError('a required input is missing')
-    record = load_kernel_record(record_path, kernel); pair = json.loads(old_pair.read_text()); declared = pair_hashes(pair)
+    record = load_kernel_record(record_path, kernel, expected_device); pair = json.loads(old_pair.read_text()); declared = pair_hashes(pair)
     if (pair.get('source_commit'), pair.get('device_commit'), pair.get('uefi_commit')) != (OLD_SOURCE, OLD_DEVICE, UEFI): raise ValueError('old pair pins mismatch')
     if pair.get('variants', {}).get('baseline', {}).get('boot_sha256') != sha(old_boot): raise ValueError('old pair boot hash mismatch')
     dtb = uefi / 'Resources/DTBs/a04br3.dtb'
     if sha(fd) != declared['fd'] or not dtb.is_file() or sha(dtb) != declared['dtb']: raise ValueError('FD/DTB pin mismatch with old pair')
     original_args = pair.get('variants', {}).get('baseline', {}).get('kernel_args')
     if not isinstance(original_args, str): raise ValueError('old pair lacks baseline kernel args')
-    rewritten = rewrite_args(original_args, stream=args.stream, meter=args.meter)
+    rewritten = rewrite_args(original_args, stream=args.stream, meter=args.meter, meter_route=args.meter_route)
     stage = Path(tempfile.mkdtemp(prefix='.' + out.name + '.', dir=out.parent))
     try:
         source_payload, old_dir, new_dir = stage/'old.img', stage/'old', stage/'new'
@@ -314,8 +321,8 @@ def main():
             subprocess.run([sys.executable, '-B', str(new_device/'scripts/check-a04br3-bootimg.py'), str(output_boot)], check=True, stdout=stream, stderr=subprocess.STDOUT)
         boot_payload = stage/'boot-payload.img'; boot_ramdisk(output_boot, boot_payload)
         if sha(boot_payload) != sha(image): raise ValueError('output boot FAT differs from new payload')
-        check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, NEW_DEVICE); check_repo(uefi, UEFI)
-        report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'native_cs_stream': bool(args.stream), 'clock_meter': bool(args.meter), 'owner_data_volume_uuid': data_uuid, 'seed_provenance_sha256': sha(seed_provenance), 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
+        check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, expected_device); check_repo(uefi, UEFI)
+        report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'native_cs_stream': bool(args.stream), 'clock_meter': bool(args.meter or args.meter_route), 'clock_meter_route': bool(args.meter_route), 'owner_data_volume_uuid': data_uuid, 'seed_provenance_sha256': sha(seed_provenance), 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
         shutil.copyfile(image, stage/'payload.img'); (stage/'manifest.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')
         for path in (stage/'work', stage/'boot-work', old_dir, new_dir): shutil.rmtree(path)
         source_payload.unlink(); boot_payload.unlink(); (stage/'old.toml').unlink(); (stage/'new.toml').unlink(); stage.rename(out)
