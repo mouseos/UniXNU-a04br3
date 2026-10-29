@@ -2,7 +2,7 @@
 
 この準備用スクリプトは端末に接続しない。UniXNU `e8f5385e4cee02bb15efa2fb97c20bb59b98d72f`、
 device `8fde8ba87486338342f3be528823cb46394f2c5b` を生成対象とし、
-UEFIは正本 `uefi-a04br3` の `15d4f1edb4e09bfd29a450b8a8200766b129b965` を使う。
+UEFIは正本 `uefi-a04br3` の `d3d4f28a89b29553ede7d7523c6af86d7e2459e8` を使う。
 この文書と生成補助はdeviceの上記commitから分岐した準備ブランチにある。
 
 1. 公式の `unixnu defconfig`、`unixnu fetch`、deviceの `a04br3-pre-build.sh`、
