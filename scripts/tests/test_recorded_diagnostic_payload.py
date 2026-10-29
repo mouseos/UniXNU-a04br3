@@ -23,3 +23,10 @@ for bad in (good+' arw=1',good+' arw=1 aq=0',good+' arw=1 aq=1 aq=1',good+' aq=1
 try:m.checked_args(good+' arw=1 aq=1',True,False)
 except ValueError:pass
 else:raise AssertionError('unexpected PMUv3 experiment accepted')
+
+assert m.checked_args(good+' arw=2 aq=1',True,True,True)==len((good+' arw=2 aq=1').encode())+1
+for line,window,active,repeat in ((good+' arw=1 aq=1',True,True,True),(good+' arw=2 aq=1',True,True,False),(good+' arw=2',True,False,True)):
+ try:m.checked_args(line,window,active,repeat)
+ except ValueError:pass
+ else:raise AssertionError('invalid repeat flags accepted')
+print('PASS explicit repeated active sampling arguments')
