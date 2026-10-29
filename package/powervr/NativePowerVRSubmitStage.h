@@ -4,9 +4,9 @@
 #pragma once
 #include <stdint.h>
 enum { NativeSubmitTotal, NativeSubmitCreate, NativeSubmitPte, NativeSubmitLock,
-       NativeSubmitSpace, NativeSubmitBo, NativeSubmitKick, NativeSubmitKccb, NativeSubmitStages };
-struct NativeSubmitSample { uint32_t pid; uint64_t tid, first, last, ticks[NativeSubmitStages]; };
-struct NativeSubmitRow { NativeSubmitSample sample; uint64_t count, reported; };
+       NativeSubmitSpace, NativeSubmitRelock, NativeSubmitBo, NativeSubmitKick, NativeSubmitKccb, NativeSubmitStages };
+struct NativeSubmitSample { uint32_t pid; bool success; uint64_t tid, first, last, ticks[NativeSubmitStages]; };
+struct NativeSubmitRow { NativeSubmitSample sample; uint64_t count, succeeded, failed, reported; };
 struct NativeSubmitStage { unsigned lock, busy, reportBusy, full, cursor; NativeSubmitRow rows[16]; };
 static inline bool native_submit_stage_lock(NativeSubmitStage *s, bool report) {
  unsigned expected=0;
@@ -20,7 +20,7 @@ static inline void native_submit_stage_record(NativeSubmitStage *s,const NativeS
  for (auto &r:s->rows) { if (r.sample.pid==v.pid && r.sample.tid==v.tid) row=&r; if (!r.sample.pid && !freeRow) freeRow=&r; }
  if (!row && freeRow) {row=freeRow;row->sample.pid=v.pid;row->sample.tid=v.tid;row->sample.first=v.first;}
  if (!row) __atomic_fetch_add(&s->full,1u,__ATOMIC_RELAXED);
- else { ++row->count; if (v.last>row->sample.last) row->sample.last=v.last; for(unsigned i=0;i<NativeSubmitStages;i++) row->sample.ticks[i]+=v.ticks[i]; }
+ else { ++row->count; if (v.success) ++row->succeeded; else ++row->failed; if (v.last>row->sample.last) row->sample.last=v.last; for(unsigned i=0;i<NativeSubmitStages;i++) row->sample.ticks[i]+=v.ticks[i]; }
  __atomic_store_n(&s->lock,0u,__ATOMIC_RELEASE);
 }
 static inline unsigned native_submit_stage_take(NativeSubmitStage *s,NativeSubmitRow out[2]) {

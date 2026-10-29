@@ -514,10 +514,10 @@ static void native_wait_monitor(void *, wait_result_t)
         const auto &r=rows[i]; uint64_t first=0,last=0,ns[NativeSubmitStages]={};
         absolutetime_to_nanoseconds(r.sample.first,&first); absolutetime_to_nanoseconds(r.sample.last,&last);
         for(unsigned k=0;k<NativeSubmitStages;k++) absolutetime_to_nanoseconds(r.sample.ticks[k],&ns[k]);
-        IOLog("a04br3 gpu submit stage: pid=%u tid=%llu first_ns=%llu last_ns=%llu calls=%llu total=%llu create=%llu pte=%llu lock=%llu space=%llu bo=%llu kick=%llu kccb=%llu busy=%u report_busy=%u full=%u nested=1\n",
-          r.sample.pid,(unsigned long long)r.sample.tid,(unsigned long long)first,(unsigned long long)last,(unsigned long long)r.count,
+        IOLog("a04br3 gpu submit stage: pid=%u tid=%llu first_ns=%llu last_ns=%llu calls=%llu success=%llu failed=%llu total=%llu create=%llu pte=%llu lock=%llu space=%llu relock=%llu bo=%llu kick=%llu kccb=%llu busy=%u report_busy=%u full=%u nested=1\n",
+          r.sample.pid,(unsigned long long)r.sample.tid,(unsigned long long)first,(unsigned long long)last,(unsigned long long)r.count,(unsigned long long)r.succeeded,(unsigned long long)r.failed,
           (unsigned long long)ns[0],(unsigned long long)ns[1],(unsigned long long)ns[2],(unsigned long long)ns[3],
-          (unsigned long long)ns[4],(unsigned long long)ns[5],(unsigned long long)ns[6],(unsigned long long)ns[7],
+          (unsigned long long)ns[4],(unsigned long long)ns[5],(unsigned long long)ns[6],(unsigned long long)ns[7],(unsigned long long)ns[8],
           __atomic_load_n(&gSubmitStage.busy,__ATOMIC_RELAXED),__atomic_load_n(&gSubmitStage.reportBusy,__ATOMIC_RELAXED),__atomic_load_n(&gSubmitStage.full,__ATOMIC_RELAXED));
       }
       const unsigned busy=__atomic_load_n(&gSubmitStage.busy,__ATOMIC_RELAXED);
@@ -2308,7 +2308,12 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     }
     IOLockUnlock(gJobs.lock);
     IOSleep(1);
+    // Split the space loop around lock reacquisition: relock is not queue wait.
+    stage.end(NativeSubmitSpace,stageStart);
+    const uint64_t relockStart=stage.begin();
     IOLockLock(gJobs.lock);
+    stage.end(NativeSubmitRelock,relockStart);
+    stageStart=stage.begin();
   }
   stage.end(NativeSubmitSpace,stageStart);
   perfEnd(PerfSpace, spacePerf);
@@ -2348,6 +2353,7 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     fences[i] = j->fence;
   }
   IOLockUnlock(gJobs.lock);
+  stage.sample.success=true; // This reports submission, not asynchronous GPU completion.
   return 0;
 }
 
