@@ -52,3 +52,11 @@ for cfg,blob,nm in ((config.replace('CONFIG_XNU_PMUV3_ACTIVE=y',''),markers,symb
  except ValueError:pass
  else:raise AssertionError('invalid context kernel accepted')
 print('PASS context config, markers and defined symbols')
+
+asm="<_a04br3_cpu_context_sample>:\n  isb\n  mrs x0, CNTVCT_EL0\n  bl 123 <_a04br3_cpu_load_snapshot>\n  isb\n  mrs x1, CNTVCT_EL0\n"
+m.checked_context_disassembly(asm)
+for bad in (asm.replace("mrs x0, CNTVCT_EL0","nop"),asm.replace("isb\n  mrs x1","nop\n  mrs x1"),asm.replace("  bl 123 <_a04br3_cpu_load_snapshot>\n", "")+"  bl 123 <_a04br3_cpu_load_snapshot>\n"):
+ try:m.checked_context_disassembly(bad)
+ except ValueError:pass
+ else:raise AssertionError('invalid context disassembly accepted')
+print('PASS context timer instruction order')

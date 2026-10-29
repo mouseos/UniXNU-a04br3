@@ -7,7 +7,7 @@ software identity secret, not an extracted device calibration value. Never
 use this diagnostic payload as a distribution image: runtime per-device
 identity acquisition remains a separate requirement.
 """
-import argparse,hashlib,importlib.util,json,os,pathlib,subprocess,sys,tempfile,uuid
+import argparse,hashlib,importlib.util,json,os,pathlib,re,subprocess,sys,tempfile,uuid
 
 def sha(path):
  h=hashlib.sha256()
@@ -37,6 +37,15 @@ def checked_context_kernel(config, kernel_bytes, symbols):
   if not any(len(row)>=4 and row[-3]=='(__TEXT_EXEC,__text)' and row[-2]=='external' for row in rows):raise ValueError('context kernel symbol not defined: '+sym)
 
 
+def checked_context_disassembly(text):
+ if '<_a04br3_cpu_context_sample>:' not in text:raise ValueError('context function absent from disassembly')
+ lines=text.splitlines();reads=[i for i,line in enumerate(lines) if re.search(r'\bmrs\s+x\d+,\s*CNTVCT_EL0\b',line,re.I)]
+ loads=[i for i,line in enumerate(lines) if re.search(r'\bbl\b.*<_a04br3_cpu_load_snapshot>',line)]
+ if len(reads)!=2 or len(loads)!=1 or not reads[0]<loads[0]<reads[1]:raise ValueError('context timer reads do not bracket load sampling')
+ for i in reads:
+  if i==0 or not re.search(r'\bisb\b',lines[i-1],re.I):raise ValueError('context timer read is not preceded by ISB')
+
+
 def main():
  parser=argparse.ArgumentParser(description=__doc__)
  parser.add_argument('--device',type=pathlib.Path,default=pathlib.Path(os.environ.get('DEVICE_DIR','.')))
@@ -63,6 +72,8 @@ def main():
   config=(root/'out/a04br3/.config').read_text()
   symbols=subprocess.check_output(['xcrun','nm','-m',str(kernel)],text=True)
   checked_context_kernel(config,kernel.read_bytes(),symbols)
+  disassembly=subprocess.check_output(['llvm-objdump','--disassemble-symbols=_a04br3_cpu_context_sample',str(kernel)],text=True)
+  checked_context_disassembly(disassembly)
  vol=str(uuid.UUID(json.loads(seed.read_text())['volume_uuid'])).upper()
  if not uuid.UUID(vol).int or kernel.read_bytes().count(vol.encode())!=1:raise ValueError('kernel and pre-build Data volume identity do not match')
  def git(path,*a):return subprocess.check_output(['git','-C',str(path),*a],text=True).strip()
