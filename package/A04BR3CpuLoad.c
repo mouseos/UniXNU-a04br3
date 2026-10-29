@@ -19,6 +19,29 @@ static processor_state_t a04br3_cpu_state(processor_t cpu)
     return state;
 }
 
+// Snapshot for the opt-in PMU context diagnostic. Processor registration is
+// protected by processor_list_lock, as in the existing load reporter. CPU
+// state and counters are not an atomic snapshot and are not instantaneous load.
+int a04br3_cpu_load_snapshot(unsigned cpu_id, uint32_t out[6])
+{
+    if (!out) return 0;
+    processor_t selected = (processor_t)0;
+    simple_lock(&processor_list_lock, LCK_GRP_NULL);
+    for (processor_t p = processor_list; p; p = p->processor_list) {
+        if ((unsigned)p->cpu_id == cpu_id) { selected = p; break; }
+    }
+    simple_unlock(&processor_list_lock);
+    if (!selected) return 0;
+    natural_t ticks[CPU_STATE_MAX] = {0};
+    processor_state_t before = a04br3_cpu_state(selected);
+    processor_cpu_load_info(selected, ticks);
+    processor_state_t after = a04br3_cpu_state(selected);
+    out[0] = ticks[CPU_STATE_USER]; out[1] = ticks[CPU_STATE_SYSTEM];
+    out[2] = ticks[CPU_STATE_IDLE]; out[3] = ticks[CPU_STATE_NICE];
+    out[4] = (uint32_t)before; out[5] = (uint32_t)after;
+    return 1;
+}
+
 void a04br3_cpu_load_report(void)
 {
     // The list can grow as CPUs are registered. Copy pointers under its lock;

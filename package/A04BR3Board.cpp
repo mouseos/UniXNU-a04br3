@@ -31,6 +31,7 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" {
 void a04br3_autoreset_init(void);
 void a04br3_cpu_load_report(void);
+int a04br3_cpu_load_snapshot(unsigned, uint32_t out[6]);
 void a04br3_charger_init(void);
 void a04br3_registers_init(void);
 void a04br3_gpu_init(void);
@@ -283,6 +284,37 @@ void msdcIoReport(unsigned enabled)
   else IOLog("a04br3 msdc queue seq=%llu unavailable\n", (unsigned long long)sampleSeq);
   IOLog("a04br3 msdc io end seq=%llu rows=%u\n", (unsigned long long)sampleSeq,
         (haveTransport ? 9u : 0u) + (haveOffer ? 6u : 0u) + (haveQueue ? 1u : 0u));
+}
+
+// Called only by the opt-in PMU context worker, outside PMU lease and locks.
+// Reads only the same already-mapped board clock registers used below. It does
+// not use WACS: CPU rail voltage and temperature remain unavailable.
+extern "C" void a04br3_cpu_context_sample(unsigned round, unsigned cpu, unsigned phase)
+{
+  static volatile uint8_t *infra, *apmixed;
+  static bool attempted;
+  uint64_t begin, end;
+  __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(begin) :: "memory");
+  if (!attempted) {
+    attempted = true;
+    infra = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10001000, 0x1000));
+    apmixed = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10018000, 0x1000));
+  }
+  uint32_t mux=0, dcm=0, con0=0, con1=0, power=0, ticks[6]={};
+  const bool clocks=infra && apmixed;
+  if (clocks) {
+    mux=*reinterpret_cast<volatile uint32_t *>(infra);
+    dcm=*reinterpret_cast<volatile uint32_t *>(infra+0x14);
+    con0=*reinterpret_cast<volatile uint32_t *>(apmixed+0x100);
+    con1=*reinterpret_cast<volatile uint32_t *>(apmixed+0x104);
+    power=*reinterpret_cast<volatile uint32_t *>(apmixed+0x110);
+    __asm__ volatile("dmb oshld" ::: "memory");
+  }
+  const int load=a04br3_cpu_load_snapshot(cpu,ticks);
+  __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(end) :: "memory");
+  IOLog("a04br3 cpu-context round=%u cpu=%u phase=%u begin=%llu end=%llu clock=%u load=%u rail=unknown temp=unknown\n",round,cpu,phase,begin,end,(unsigned)clocks,(unsigned)load);
+  if (clocks) IOLog("a04br3 cpu-context-clk round=%u cpu=%u phase=%u infra=%08x dcm=%08x con0=%08x con1=%08x pll_pwr=%08x\n",round,cpu,phase,mux,dcm,con0,con1,power);
+  if (load) IOLog("a04br3 cpu-context-load round=%u cpu=%u phase=%u user=%u system=%u idle=%u nice=%u state=%u/%u ticks32=1\n",round,cpu,phase,ticks[0],ticks[1],ticks[2],ticks[3],ticks[4],ticks[5]);
 }
 
 // Diagnostic sampling only. Registers and per-core counters are independently read,

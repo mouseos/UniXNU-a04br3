@@ -47,9 +47,11 @@ void processor_cpu_load_info(processor_t p,natural_t *t) {
 uint64_t mach_absolute_time(void) {assert(!locked);return ++now;}
 void absolutetime_to_nanoseconds(uint64_t t,uint64_t *n) {*n=t;}
 void a04br3_cpu_load_report(void);
+int a04br3_cpu_load_snapshot(unsigned, uint32_t out[6]);
 int main(void) {struct pset ps; struct processor p[5];for(int i=0;i<5;i++){p[i].cpu_id=i;p[i].state=i==0?0:6;p[i].processor_set=&ps;p[i].processor_list=i<4?&p[i+1]:0;}
  processor_list=p;a04br3_cpu_load_report();assert(calls==4 && !locked);
- processor_list=0;calls=0;a04br3_cpu_load_report();assert(!calls);}
+ uint32_t values[6]={0};assert(a04br3_cpu_load_snapshot(2,values));assert(values[0]==3 && values[1]==10 && values[2]==20 && values[4]==6 && values[5]==6);assert(!a04br3_cpu_load_snapshot(99,values));assert(!a04br3_cpu_load_snapshot(0,0));
+ processor_list=0;calls=0;a04br3_cpu_load_report();assert(!calls);assert(!a04br3_cpu_load_snapshot(2,values));}
 ''')
     exe = d/'test'
     subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-DMACH_KERNEL_PRIVATE=1','-I',str(d),

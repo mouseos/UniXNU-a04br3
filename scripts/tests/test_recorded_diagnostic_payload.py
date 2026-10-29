@@ -34,3 +34,10 @@ print('PASS explicit repeated active sampling arguments')
 try:m.checked_args(good+' gs=0 arw=2 aq=1',True,True,True)
 except ValueError:pass
 else:raise AssertionError('conflicting required boot key accepted')
+
+assert m.checked_args(good+' arw=3 aq=1',True,True,True,True)
+for line,window,active,repeat,context in ((good+' arw=2 aq=1',True,True,True,True),(good+' arw=3 aq=1',True,True,True,False),(good+' arw=3 aq=1',True,True,False,True)):
+ try:m.checked_args(line,window,active,repeat,context)
+ except ValueError:pass
+ else:raise AssertionError('invalid context arguments accepted')
+print('PASS opt-in context diagnostic arguments')
