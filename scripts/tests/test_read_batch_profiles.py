@@ -38,3 +38,16 @@ except UnicodeEncodeError:
 else:
     raise AssertionError('non-ASCII accepted')
 print('PASS matched profiles: only batch selector differs, strict diagnostics, coalesce disabled and argument length bounded')
+
+iostat_source=source+' a04br3-home-perf=1'
+iostat=module.profiles(iostat_source,'iostat')
+signature=module.profiles(iostat_source,'signature')
+assert iostat['batch']==iostat['baseline']+' native-cs-read-batch=1'
+for variant in ('baseline','batch'):
+    assert iostat[variant] == signature[variant].replace('native-root-timing=1','native-msdc-iostat=1')
+    assert len(iostat[variant].encode('ascii')) == len(signature[variant].encode('ascii'))
+for invalid in (source,iostat_source+' native-msdc-iostat=1',iostat_source+' pl=0',iostat_source+' a04br3-home-perf=0',iostat_source+' a04br3-proclog=0',iostat_source+' a04br3-proclog=10'):
+    try: module.profiles(invalid,'iostat')
+    except ValueError: pass
+    else: raise AssertionError(invalid)
+print('PASS iostat pair: exact selector, reporter gates, argument length and separate measurement')

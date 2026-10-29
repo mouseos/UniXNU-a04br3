@@ -13,6 +13,7 @@ import subprocess
 import struct
 import sys
 import tempfile
+import time
 import tomllib
 import uuid
 
@@ -111,12 +112,12 @@ def check_uefi_firmware(uefi, fp):
             any(line and line[0]!='H' for line in git(uefi / name, 'ls-files', '-v').splitlines())):
             raise ValueError('dirty or hidden UEFI submodule: '+name)
 
-def profile_lines():
+def profile_lines(measurement='signature'):
     profile = HERE / 'a04br3-read-batch-profiles.py'
     namespace = {'__name__': 'a04br3_profile', '__file__': str(profile)}
     exec(compile(profile.read_bytes(), str(profile), 'exec'), namespace)
     template = json.loads((HERE / 'data/read-batch-baseline.json').read_text())
-    return namespace['profiles'](template['kernel_args'])
+    return namespace['profiles'](template['kernel_args'], measurement)
 
 
 def commands(source, device, uefi, out, variant, line, board, inputs):
@@ -159,8 +160,9 @@ def verify_data_uuid(source, device, data, expected):
     packed = load('a04br3_packed', packed_path)
     stager = load('a04br3_seed_stager', stager_path)
     logical, extents = packed.regions(data.read_bytes())
-    with tempfile.TemporaryDirectory(prefix='a04br3-batch-seed-') as temporary:
-        folder = Path(temporary)
+    folder = Path(tempfile.mkdtemp(prefix='a04br3-batch-seed-'))
+    keep = False
+    try:
         raw, mount = folder / 'data.raw', folder / 'mount'
         mount.mkdir()
         with raw.open('wb') as f:
@@ -168,16 +170,48 @@ def verify_data_uuid(source, device, data, expected):
             for offset, content in extents:
                 f.seek(offset)
                 f.write(content)
-        attached = plistlib.loads(subprocess.check_output(['hdiutil', 'attach', '-readonly',
-            '-imagekey', 'diskimage-class=CRawDiskImage', '-nobrowse', '-mountpoint', str(mount), '-plist', str(raw)]))
-        entities = attached.get('system-entities', [])
-        image_device = next((entry.get('dev-entry') for entry in entities if entry.get('dev-entry')), None)
-        if not image_device:
-            raise ValueError('hdiutil did not report an image device to detach')
+        # Until the absence of this image is verified, retain the mountpoint
+        # even on malformed output, interruption, or other unexpected errors.
+        keep = True
+        try:
+            attached = plistlib.loads(subprocess.check_output(['hdiutil', 'attach', '-readonly',
+                '-imagekey', 'diskimage-class=CRawDiskImage', '-nobrowse', '-mountpoint', str(mount), '-plist', str(raw)]))
+            entities = attached.get('system-entities', [])
+            image_device = next((entry.get('dev-entry') for entry in entities if entry.get('dev-entry')), None)
+            if not image_device:raise ValueError('hdiutil did not report image device')
+        except Exception as error:
+            raise RuntimeError('image attach outcome uncertain; retained ' + str(folder)) from error
         try:
             stager.verify_volume_uuid(mount, uuid.UUID(expected))
         finally:
-            subprocess.run(['hdiutil', 'detach', image_device], check=True)
+            detached = False
+            for attempt in range(3):
+                try:
+                    subprocess.run(['hdiutil', 'detach', image_device], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    info = plistlib.loads(subprocess.check_output(['hdiutil', 'info', '-plist']))
+                    if not isinstance(info.get('images'), list):raise ValueError('missing image list')
+                    images = info['images']
+                    if any(not isinstance(image,dict) or not isinstance(image.get('image-path'),str) or not image['image-path'] or
+                           not isinstance(image.get('system-entities'),list) or not image['system-entities'] or
+                           any(not isinstance(entry,dict) or not isinstance(entry.get('dev-entry'),str) or not entry['dev-entry']
+                               for entry in image['system-entities']) for image in images):
+                        raise ValueError('incomplete image information')
+                    devices = {entry['dev-entry'] for image in images for entry in image['system-entities']}
+                    paths = {os.path.realpath(image['image-path']) for image in images}
+                    if image_device not in devices and os.path.realpath(raw) not in paths:
+                        detached = True
+                        keep = False
+                        break
+                except Exception:
+                    pass
+                if attempt < 2: time.sleep(1)
+            if not detached:
+                keep = True
+                raise RuntimeError('image detach unverified: ' + image_device + '; retained ' + str(folder))
+    finally:
+        if keep:print('image verification files retained: ' + str(folder), file=sys.stderr)
+        else:shutil.rmtree(folder)
+
 
 
 def adt_comparison(path, identity):
@@ -246,6 +280,7 @@ def main():
     for name in ('source', 'device', 'uefi', 'inputs', 'out'):
         p.add_argument('--' + name, type=Path, required=True)
     p.add_argument('--log-dir', type=Path, required=True)
+    p.add_argument('--measurement', choices=('signature','iostat'), default='signature')
     args = p.parse_args()
     preparation_commit = check_preparation_source()
     source, device, uefi = (args.source.resolve(), args.device.resolve(), args.uefi.resolve())
@@ -278,8 +313,10 @@ def main():
     kernel_bytes = inputs['kernel'].read_bytes()
     if any(flag not in kernel_bytes for flag in (b'native-root-timing', b'native-cs-read-batch')):
         raise ValueError('kernel lacks the required diagnostic flag strings')
-    kp = json.loads(input_path(manifest['kernel_provenance']).read_text(encoding='utf-8'))
-    fp = json.loads(input_path(manifest['firmware_provenance']).read_text(encoding='utf-8'))
+    record_names = ('kernel_provenance', 'firmware_provenance', 'data_provenance', 'seed_provenance', 'pre_build_log')
+    record_bytes = {name:input_path(manifest[name]).read_bytes() for name in record_names}
+    kp = json.loads(record_bytes['kernel_provenance'])
+    fp = json.loads(record_bytes['firmware_provenance'])
     if (kp.get('source_commit') != UNIXNU or kp.get('device_commit') != DEVICE or
         kp.get('armcpu_commit') != ARMCPU or kp.get('native_msdc_commit') != MSDC or
         kp.get('kernel_sha256') != sha(inputs['kernel']) or kp.get('kernel_build_flags', {}).get('XNU_ROOT_TIMING') != '1'):
@@ -291,25 +328,25 @@ def main():
         kp.get('display_build_report', {}).get('virtual_entries') != 358 or
         kp.get('display_build_report', {}).get('original_candidate_sha256') != kp.get('reference_kernel_sha256')):
         raise ValueError('kernel PMGR/display provenance mismatch')
-    seed_path = input_path(manifest['seed_provenance'])
-    seed = json.loads(seed_path.read_text())
-    dp = json.loads(input_path(manifest['data_provenance']).read_text(encoding='utf-8'))
+    seed = json.loads(record_bytes['seed_provenance'])
+    dp = json.loads(record_bytes['data_provenance'])
     if (dp.get('method') != 'official-pre-build-from-ipsw' or dp.get('source_commit') != UNIXNU or
         dp.get('device_commit') != DEVICE or dp.get('pre_build_sha256') != sha(device / 'scripts/a04br3-pre-build.sh') or
-        dp.get('seed_record_sha256') != sha(seed_path) or
-        dp.get('pre_build_log_sha256') != sha(input_path(manifest['pre_build_log'])) or
+        dp.get('seed_record_sha256') != hashlib.sha256(record_bytes['seed_provenance']).hexdigest() or
+        dp.get('pre_build_log_sha256') != hashlib.sha256(record_bytes['pre_build_log']).hexdigest() or
         any(dp.get(name + '_sha256') != sha(inputs[name]) for name in ('data', 'trust', 'gpu'))):
         raise ValueError('official pre-build record mismatch')
     if not kp.get('data_uuid') or seed.get('volume_uuid', '').upper() != kp['data_uuid'].upper():
         raise ValueError('Data volume UUID and kernel provenance mismatch')
-    verify_data_uuid(source, device, inputs['data'], seed['volume_uuid'])
     check_uefi_firmware(uefi, fp)
     if inputs['dtb'] != (uefi / 'Resources/DTBs/a04br3.dtb').resolve():
         raise ValueError('DTB must come from the fixed UEFI checkout')
     if out.exists():
         raise ValueError('output already exists')
     board = tomllib.loads((device / 'board.toml').read_text())
-    profiles = profile_lines()
+    if args.measurement == 'iostat' and b'native-msdc-iostat' not in kernel_bytes:
+        raise ValueError('kernel lacks native-msdc-iostat diagnostic flag string')
+    profiles = profile_lines(args.measurement)
     if profiles['batch'] != profiles['baseline'] + ' native-cs-read-batch=1':
         raise ValueError('profiles are not a one-token comparison')
     for variant, line in profiles.items():
@@ -342,9 +379,11 @@ def main():
                 raise ValueError(f'{name}: input changed during copy')
             frozen[name] = target
         inputs = frozen
-        report = {'source_commit': UNIXNU, 'device_commit': DEVICE, 'uefi_commit': UEFI, 'firmware_unixnu_commit': FIRMWARE_UNIXNU, 'firmware_darwinboot_commit': DARWINBOOT, 'preparation_commit': preparation_commit,
+        # Check the exact immutable staged data that the payload builder will use.
+        verify_data_uuid(source, device, inputs['data'], seed['volume_uuid'])
+        report = {'measurement': args.measurement, 'source_commit': UNIXNU, 'device_commit': DEVICE, 'uefi_commit': UEFI, 'firmware_unixnu_commit': FIRMWARE_UNIXNU, 'firmware_darwinboot_commit': DARWINBOOT, 'preparation_commit': preparation_commit,
                   'inputs_sha256': recorded_hashes,
-                  'input_records_sha256': {name: sha(input_path(manifest[name])) for name in ('kernel_provenance', 'firmware_provenance', 'data_provenance', 'seed_provenance', 'pre_build_log')},
+                  'input_records_sha256': {name: hashlib.sha256(record_bytes[name]).hexdigest() for name in record_names},
                   'identity_origin': 'new software identity generated per pair; diagnostic only',
                   'identity_sha256': sha(identity),
                   'preparation_source_sha256': {str(p.relative_to(HERE)):sha(p) for p in (HERE/'a04br3-read-batch-build.py', HERE/'a04br3-read-batch-record-inputs.py', HERE/'a04br3-read-batch-profiles.py', HERE/'data/read-batch-baseline.json')},
@@ -352,7 +391,7 @@ def main():
                   'data_origin': 'declared official IPSW pre-build; matching records are not independent proof of execution',
                   'adt_random_seed': 'fresh per variant; boot behavior may differ, do not assume a single-variable test',
                   'identity_scope': 'synthetic diagnostic pair only; not a device identity or distributable image',
-                  'hardware_tested': False, 'release_status': 'diagnostic only; not approved for hardware or distribution', 'variants': {}}
+                  'hardware_tested': False, 'signature_verified_by_builder': False, 'release_status': 'diagnostic only; not approved for hardware or distribution', 'variants': {}}
         baseline_adt = None
         for variant, line in profiles.items():
             target = stage / variant
@@ -409,5 +448,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, TypeError, AttributeError, OSError, KeyError, subprocess.CalledProcessError) as error:
+    except (ValueError, TypeError, AttributeError, OSError, KeyError, RuntimeError, subprocess.CalledProcessError) as error:
         sys.exit(str(error))

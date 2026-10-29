@@ -140,7 +140,10 @@ def summarize(segment, source_hash, boot_id, offset):
                 raise ValueError('counter decreased: reboot, reset or mixed source')
             common = {'source_sha256':source_hash, 'boot_segment_sha256':boot_id,
                       'boot_start_offset':offset, 'from_seq':previous['seq'], 'to_seq':sample['seq'],
-                      'begin_ns':previous['begin'], 'end_ns':begin}
+                      'begin_ns':previous['begin'], 'end_ns':begin,
+                      'from_sample_begin_ns':previous['begin'], 'from_sample_end_ns':previous['end'],
+                      'to_sample_begin_ns':begin, 'to_sample_end_ns':end,
+                      'sample_non_atomic':True, 'rate_interval_basis':'sample_begin_to_sample_begin'}
             for key in transport_keys:
                 calls, byte_count, errors, elapsed = deltas[key]
                 output.append({**common, 'kind':'transfer', 'mode':key[1], 'size':key[2],

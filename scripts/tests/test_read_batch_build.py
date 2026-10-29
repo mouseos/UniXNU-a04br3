@@ -33,10 +33,40 @@ class PairBuild(unittest.TestCase):
                 "import uuid\ndef verify_volume_uuid(mount, expected):\n assert isinstance(expected, uuid.UUID)\n")
             data=root/'data';data.write_bytes(b'host fixture')
             attached=plistlib.dumps({'system-entities':[{'dev-entry':'/dev/fake-image-only'}]})
-            with mock.patch.object(sys, 'platform', 'darwin'), mock.patch.object(build.subprocess, 'check_output', return_value=attached) as attach, mock.patch.object(build.subprocess,'run') as detach:
+            with mock.patch.object(sys, 'platform', 'darwin'), mock.patch.object(build.subprocess, 'check_output', side_effect=[attached,plistlib.dumps({'images':[]})]) as attach, mock.patch.object(build.subprocess,'run') as detach:
                 build.verify_data_uuid(source,device,data,'00112233-4455-6677-8899-AABBCCDDEEFF')
-                self.assertIn('-readonly',attach.call_args.args[0])
+                self.assertIn('-readonly',attach.call_args_list[0].args[0]);self.assertEqual(attach.call_args_list[1].args[0],['hdiutil','info','-plist'])
                 self.assertEqual(detach.call_args.args[0],['hdiutil','detach','/dev/fake-image-only'])
+            retained=root/'retained';retained.mkdir()
+            still_attached=plistlib.dumps({'images':[{'image-path':'/fake/attached.raw','system-entities':[{'dev-entry':'/dev/fake-image-only'}]}]})
+            with mock.patch.object(sys,'platform','darwin'), mock.patch.object(build.tempfile,'mkdtemp',return_value=str(retained)), mock.patch.object(build.subprocess,'check_output',side_effect=[attached,still_attached,still_attached,still_attached]), mock.patch.object(build.subprocess,'run'), mock.patch.object(build.time,'sleep'):
+                with self.assertRaisesRegex(RuntimeError,'detach unverified'):build.verify_data_uuid(source,device,data,'00112233-4455-6677-8899-AABBCCDDEEFF')
+            self.assertTrue((retained/'mount').is_dir());self.assertTrue((retained/'data.raw').exists())
+            incomplete=plistlib.dumps({'images':[{'image-path':str(retained/'data.raw')}]})
+            retained2=root/'retained2';retained2.mkdir()
+            with mock.patch.object(sys,'platform','darwin'), mock.patch.object(build.tempfile,'mkdtemp',return_value=str(retained2)), mock.patch.object(build.subprocess,'check_output',side_effect=[attached,incomplete,incomplete,incomplete]), mock.patch.object(build.subprocess,'run'), mock.patch.object(build.time,'sleep'):
+                with self.assertRaisesRegex(RuntimeError,'detach unverified'):build.verify_data_uuid(source,device,data,'00112233-4455-6677-8899-AABBCCDDEEFF')
+            self.assertTrue((retained2/'data.raw').exists())
+            retained3=root/'retained3';retained3.mkdir()
+            with mock.patch.object(sys,'platform','darwin'), mock.patch.object(build.tempfile,'mkdtemp',return_value=str(retained3)), mock.patch.object(build.subprocess,'check_output',return_value=b'<?xml version="1.0"?><plist><dict>'):
+                with self.assertRaises(Exception):build.verify_data_uuid(source,device,data,'00112233-4455-6677-8899-AABBCCDDEEFF')
+            self.assertTrue((retained3/'data.raw').exists())
+            for label,info in (('empty',{'images':[{'image-path':'','system-entities':[]}]}),('same-image',{'images':[{'image-path':str(root/'raw-present/data.raw'),'system-entities':[{'dev-entry':'/dev/other'}]}]})):
+                folder=root/('raw-present' if label=='same-image' else label);folder.mkdir();raw=plistlib.dumps(info)
+                with mock.patch.object(sys,'platform','darwin'), mock.patch.object(build.tempfile,'mkdtemp',return_value=str(folder)), mock.patch.object(build.subprocess,'check_output',side_effect=[attached,raw,raw,raw]), mock.patch.object(build.subprocess,'run'), mock.patch.object(build.time,'sleep'):
+                    with self.assertRaisesRegex(RuntimeError,'detach unverified'):build.verify_data_uuid(source,device,data,'00112233-4455-6677-8899-AABBCCDDEEFF')
+                self.assertTrue((folder/'data.raw').exists())
+            interrupted=root/'interrupted';interrupted.mkdir()
+            with mock.patch.object(sys,'platform','darwin'), mock.patch.object(build.tempfile,'mkdtemp',return_value=str(interrupted)), mock.patch.object(build.subprocess,'check_output',side_effect=[attached,KeyboardInterrupt]), mock.patch.object(build.subprocess,'run'):
+                with self.assertRaises(KeyboardInterrupt):build.verify_data_uuid(source,device,data,'00112233-4455-6677-8899-AABBCCDDEEFF')
+            self.assertTrue((interrupted/'data.raw').exists())
+            with mock.patch.object(sys,'platform','darwin'), mock.patch.object(build.subprocess,'check_output',side_effect=[attached,b'<?xml version="1.0"?><plist><dict>',plistlib.dumps({'images':[]})]), mock.patch.object(build.subprocess,'run') as retried, mock.patch.object(build.time,'sleep'):
+                build.verify_data_uuid(source,device,data,'00112233-4455-6677-8899-AABBCCDDEEFF');self.assertEqual(retried.call_count,2)
+
+
+            with mock.patch.object(sys,'platform','darwin'), mock.patch.object(build.subprocess,'check_output',side_effect=[attached,still_attached,plistlib.dumps({'images':[]})]), mock.patch.object(build.subprocess,'run') as retry, mock.patch.object(build.time,'sleep'):
+                build.verify_data_uuid(source,device,data,'00112233-4455-6677-8899-AABBCCDDEEFF');self.assertEqual(retry.call_count,2)
+
 
     def test_pair_and_provenance_refusal(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -56,7 +86,7 @@ class PairBuild(unittest.TestCase):
             paths = {}
             for name in ('kernel', 'data', 'trust', 'gpu', 'fd'):
                 paths[name] = root / name
-                paths[name].write_bytes(('input-'+name).encode() + (b'native-root-timing native-cs-read-batch' if name == 'kernel' else b''))
+                paths[name].write_bytes(('input-'+name).encode() + (b'native-root-timing native-cs-read-batch native-msdc-iostat' if name == 'kernel' else b''))
             paths['dtb'] = uefi / 'Resources/DTBs/a04br3.dtb'
             paths['dtb'].write_bytes(b'dtb')
             provenance = {'source_commit': build.UNIXNU, 'device_commit': build.DEVICE,
@@ -111,9 +141,10 @@ class PairBuild(unittest.TestCase):
                 elif argv[1:2] == ['bootimg']:
                     Path(argv[argv.index('-o')+1]).write_bytes(b'boot')
                 return mock.Mock(returncode=0)
-            with mock.patch.object(build, 'check_preparation_source', return_value='prep-commit'), mock.patch.object(build, 'check_repo'), mock.patch.object(build, 'git', side_effect=lambda path,*a: build.ARMCPU if str(path).endswith('ArmCpu') else build.MSDC), mock.patch.object(build, 'check_uefi_checkout'), mock.patch.object(build, 'check_uefi_firmware'), mock.patch.object(build, 'check_firmware_unixnu'), mock.patch.object(build, 'verify_data_uuid'), mock.patch.object(build.subprocess, 'run', side_effect=run), \
+            with mock.patch.object(build, 'check_preparation_source', return_value='prep-commit'), mock.patch.object(build, 'check_repo'), mock.patch.object(build, 'git', side_effect=lambda path,*a: build.ARMCPU if str(path).endswith('ArmCpu') else build.MSDC), mock.patch.object(build, 'check_uefi_checkout'), mock.patch.object(build, 'check_uefi_firmware'), mock.patch.object(build, 'check_firmware_unixnu'), mock.patch.object(build, 'verify_data_uuid') as verify_seed, mock.patch.object(build.subprocess, 'run', side_effect=run), \
                  mock.patch.object(sys, 'argv', command), contextlib.redirect_stdout(io.StringIO()):
                 build.main()
+                self.assertNotEqual(verify_seed.call_args.args[2],paths['data']);self.assertEqual(verify_seed.call_args.args[2].name,'data')
             # Generate input records from artifacts using the real recorder; it does not claim proof of origin.
             record_spec=importlib.util.spec_from_file_location('batch_record', ROOT/'scripts/a04br3-read-batch-record-inputs.py')
             recorder=importlib.util.module_from_spec(record_spec);record_spec.loader.exec_module(recorder)
@@ -127,7 +158,7 @@ class PairBuild(unittest.TestCase):
             recorded=json.loads((record_out/'inputs.json').read_text())
             self.assertEqual(recorded['files']['data']['sha256'], build.sha(paths['data']))
             self.assertEqual(recorded['pre_build_log'], str(root/'pre-build.log'))
-            result=json.loads((out/'pair.json').read_text())
+            result=json.loads((out/'pair.json').read_text());self.assertIs(result['signature_verified_by_builder'],False)
             assert result['variants']['batch']['kernel_args'] == result['variants']['baseline']['kernel_args']+' native-cs-read-batch=1'
             payloads=[cmd for cmd,_ in seen if cmd[1:3]==['build','payload']]
             assert len(payloads)==2 and payloads[0][payloads[0].index('--out')+1] != payloads[1][payloads[1].index('--out')+1]
@@ -136,6 +167,13 @@ class PairBuild(unittest.TestCase):
             assert len(identities)==2 and len(set(identities))==1
             assert (out/'software-identity.txt').stat().st_mode & 0o077 == 0
             assert all(str(paths[name]) not in result['identity_origin'] for name in paths)
+            iostat_out=root/'iostat-output'
+            iostat_command=command.copy();iostat_command[iostat_command.index('--out')+1]=str(iostat_out);iostat_command += ['--measurement','iostat']
+            with mock.patch.object(build, 'check_preparation_source', return_value='prep-commit'), mock.patch.object(build, 'check_repo'), mock.patch.object(build, 'git', side_effect=lambda path,*a: build.ARMCPU if str(path).endswith('ArmCpu') else build.MSDC), mock.patch.object(build, 'check_uefi_checkout'), mock.patch.object(build, 'check_uefi_firmware'), mock.patch.object(build, 'check_firmware_unixnu'), mock.patch.object(build, 'verify_data_uuid'), mock.patch.object(build.subprocess, 'run', side_effect=run), mock.patch.object(sys,'argv',iostat_command), contextlib.redirect_stdout(io.StringIO()):
+                build.main()
+            io_pair=json.loads((iostat_out/'pair.json').read_text());self.assertEqual(io_pair['measurement'],'iostat')
+            for variant in ('baseline','batch'):
+                self.assertEqual(io_pair['variants'][variant]['kernel_args'],result['variants'][variant]['kernel_args'].replace('native-root-timing=1','native-msdc-iostat=1'))
             baseline_adt=out/'baseline/kernel.macho.adt'; batch_adt=out/'batch/kernel.macho.adt'
             identity=int((out/'software-identity.txt').read_text(),16)
             self.assertEqual(build.adt_comparison(baseline_adt,identity), build.adt_comparison(batch_adt,identity))

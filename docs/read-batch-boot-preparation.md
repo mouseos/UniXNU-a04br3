@@ -32,7 +32,8 @@ UEFIは正本 `uefi-a04br3` の `d3d4f28a89b29553ede7d7523c6af86d7e2459e8` を�
 既存Dataやシステムの識別と一致する保証はないため、試験結果はこの構成に限定し、
 配布物にしない。生成値は組のローカル `software-identity.txt` に0600で保存。
 ADTは公式処理で各回新しい `random-seed` を生成する。両ADTはその乱数以外を
-比較し、署名済kernel・Data・trust・GPU addonは両者で同一とする。乱数による
+比較し、署名を前提とするkernel・Data・trust・GPU addonは両者で同一とする。
+生成器はそれらの署名の有効性を検証しない。乱数による
 起動時挙動への影響は排除できない。したがってbootはビット単位で再現しないし、
 単一変数の厳密な実機比較も証明しない。乱数を固定したり生成ADTを手修正したり
 して見かけの一致を作らない。計測と採否条件は `read-batch-matched-profile.md`。
@@ -68,3 +69,42 @@ python3 scripts/a04br3-read-batch-build.py \
 コンポーネントがない状態では通過させない。UIDはソフトウェア生成であるため、
 実機由来のUIDを引数・環境変数・入力へ指定しない。現時点でこの手順は
 macOS実環境で通し実行されておらず、準備コードとhost模擬のみである。
+
+## 物理転送集計用の別ペア
+
+`--measurement iostat` を上の `a04br3-read-batch-build.py` に追加すると、同じ
+固定kernel・Data・FDと既存の実行時署名検証経路を使い、baseline/batch間の差がbatchフラグだけの
+別ペアを生成する。引数長は署名計時ペアと同じ999/1022 bytes。両方で
+`native-root-timing=1` の代わりに `native-msdc-iostat=1` を使用し、既存の
+`a04br3-home-perf=1` と `pl=1` のreporter条件を必須にし、優先される
+`a04br3-proclog` との併用を拒否する。未指定なら従来の
+署名計時ペアを生成する。`pair.json` は `measurement` を記録する。生成元・
+sourceの確認と、公式CLI、入力検証、boot形式検証の手順は共通である。
+
+この別ペアではRSTの `bat` や署名準備bytes・時間を取得できない。取得できない
+情報をゼロとみなさず、署名計時ペアの解析器に入力しない。署名計時ペアとiostat
+ペアは診断負荷とADT乱数・起動条件が異なり、同一試行として直接対応付けられない。
+後者は完成したUARTフレームを `summarize-msdc-io.py` で解析する。報告値は装置
+全体の `transfer()` の累積値差分であり、PID・署名処理単独の値、媒体バス帯域、
+キャッシュの実効や待機・CPU時間は証明しない。DMA値はコピー等も含み、失敗件数と
+各前後サンプルの開始・終了時刻と非原子的な取得幅、ログ欠損を併記する。計測自体のCPU・UART負荷もある。
+両条件の計測順、同一seedとキャッシュ状態、初回panicと再起動、対象処理の完了、
+source・入力・boot hashを記録し、確認できなければ性能採否に使わない。
+
+このモードは計測用bootの生成準備であり、この追加により実機性能や改ざん拒否が
+証明されたわけではない。現行GPU試験中には端末操作をしない。
+
+既存SSH runner上の前回固定入力を再利用する増分用に
+`scripts/a04br3-read-batch-iostat-runner.sh` を用意する。新規専用task内へ
+source/device/UEFI/preparationのcheckoutとsubmodule・Git領域を用意し、
+前回記録の固定hashを照合して複写し、大きな入力もhashを確認した専用コピーへ
+固定する。UUID・出自照合はそのコピーを使い、builderのstageでもhashを再照合する。
+記録同梱と一致確認が済むまで完成名のpairを公開しない。`env -i` で子プロセスの環境を絞り、キャッシュ、
+一時ファイルと出力先もtask内にする。旧checkoutで公式CLIを実行しない。
+前回の公式pre-buildと記録が実行されたことはhashだけでは証明できないため、
+既存の独立監査記録と併せて判断する。失敗または中断時のtaskは保持し、
+同名taskの再利用はせずに原因と残存ファイル・マウントを確認する。
+SIGKILLなどでは一時領域やmacOSの検証用マウントが残る可能性がある。
+
+生成器は入力hashと出自記録の整合を確認するが、署名やtrust cacheの暗号学的な
+有効性は検証しない。host改ざん試験も実機での改ざん拒否の証明ではない。

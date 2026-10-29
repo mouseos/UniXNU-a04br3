@@ -40,6 +40,9 @@ with tempfile.TemporaryDirectory(prefix='iostat-summary-') as d:
  assert all(r['calls']==2 and r['bytes']==2048 and r['activity_observed'] for r in offer)
  assert q['kind']=='queue' and q['started']==2 and q['wait_ns']==40 and q['max_wait_ns_cumulative']==15 and q['activity_observed']
  assert all(r['source_sha256']==digest(good) and r['boot_segment_sha256']==digest(good[good.find(anchor):]) and r['boot_start_offset']==good.find(anchor) for r in rows)
+ assert all((r['from_sample_begin_ns'],r['from_sample_end_ns'],r['to_sample_begin_ns'],r['to_sample_end_ns'],r['sample_non_atomic'])==(100,102,1_000_000_100,1_000_000_102,True) for r in rows)
+ wider=good.replace(b'begin_ns=100 end_ns=102',b'begin_ns=100 end_ns=190');p=run(wider);assert p.returncode==0,p.stderr
+ assert all(json.loads(x)['from_sample_end_ns']==190 for x in p.stdout.splitlines())
  # A complete idle interval is valid and reports inactive, zero rates, and a cumulative queue maximum.
  p=run(prefix+sample(1,100,1)+sample(2,200,1));assert p.returncode==0,p.stderr
  idle=[json.loads(x) for x in p.stdout.splitlines()];assert len(idle)==16 and not any(r['activity_observed'] for r in idle)
