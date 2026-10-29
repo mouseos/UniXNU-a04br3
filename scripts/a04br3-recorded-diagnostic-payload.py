@@ -14,11 +14,13 @@ def sha(path):
  with path.open('rb') as f:
   for block in iter(lambda:f.read(1048576),b''):h.update(block)
  return h.hexdigest()
-def checked_args(line):
+def checked_args(line, runtime_window=False):
  args=line.split(); required=('sheng-smp=1','cc=1','gi=6','gs=1','native-io-trace=1','sheng-gpu-addon=1','a04br3-gpu-metal=1','sheng-fb-gpu=1')
  if len(line.encode())+1>1024 or any(args.count(x)!=1 for x in required):raise ValueError('required boot arguments or length invalid')
  forbidden=('armcpu-cycle-clock','armcpu-runtime-cycle','arc','a04br3-gpu-stage','a04br3-gio','a04br3-gpu-io-trace')
  if any(any(t.split('=',1)[0]==n for t in args) for n in forbidden):raise ValueError('conflicting long or runtime diagnostic argument')
+ window=[t for t in args if t.split('=',1)[0] in ('arw','armcpu-runtime-window')]
+ if window != (['arw=1'] if runtime_window else []):raise ValueError('unexpected runtime window argument')
  return len(line.encode())+1
 
 def main():
@@ -26,6 +28,7 @@ def main():
  parser.add_argument('--device',type=pathlib.Path,default=pathlib.Path(os.environ.get('DEVICE_DIR','.')))
  parser.add_argument('--output',type=pathlib.Path,default=None)
  parser.add_argument('--kernel-manifest',type=pathlib.Path,required=True)
+ parser.add_argument('--runtime-window',action='store_true',help='diagnostic only: runtime provider currently refuses all CPUs')
  args=parser.parse_args();root=pathlib.Path.cwd().resolve();device=args.device.resolve(strict=True)
  runner=pathlib.Path(os.environ['RUNNER_TEMP']).resolve(strict=True);out=(args.output or runner/'a04br3-recorded-diagnostic').resolve()
  if out.exists():raise ValueError('output already exists')
@@ -45,7 +48,7 @@ def main():
  if kernel_device!=revision:
   subprocess.run(['git','-C',str(device),'merge-base','--is-ancestor',kernel_device,revision],check=True)
   changed=set(git(device,'diff','--name-only',kernel_device,revision).splitlines())
-  allowed={'scripts/a04br3-verify-recorded-fd.py','scripts/tests/test_recorded_fd_validation.py','scripts/a04br3-recorded-diagnostic-payload.py','scripts/a04br3-prepare-diagnostic-gpu.py','scripts/tests/test_prepare_diagnostic_gpu.py','scripts/tests/test_recorded_diagnostic_payload.py'}
+  allowed={'scripts/a04br3-verify-recorded-fd.py','scripts/tests/test_recorded_fd_validation.py','scripts/a04br3-recorded-diagnostic-payload.py','scripts/a04br3-prepare-diagnostic-gpu.py','scripts/tests/test_prepare_diagnostic_gpu.py','scripts/tests/test_recorded_diagnostic_payload.py','scripts/a04br3-recorded-diagnostic-boot.py'}
   if not changed or not changed.issubset(allowed):raise ValueError('device changes since kernel build affect its source')
  for repo in (root,device,device/'drivers/ArmCpu'):
   if git(repo,'status','--porcelain','--untracked-files=no','--ignore-submodules=all'):raise ValueError('tracked source changes: '+str(repo))
@@ -55,6 +58,7 @@ def main():
  env=dict(os.environ,UNIXNU_UNIQUE_CHIP_ID=identity)
  cmd=[str(root/'unixnu'),'build','payload','-D',str(device),'--out',str(out),'--kernel',str(kernel),'--data-ramdisk',str(data),'--owner-trust-cache',str(trust),'--gpu-addon',str(addon)]
  for v in ('sheng-fb-gpu=1','a04br3-charger-owner=1','sheng-vsync=60','vm_compressor=2','a04br3-home-perf=1','pl=1','gi=6','gs=1','cc=1','native-msdc-irq=1','a04br3-gpu-clock=380','native-io-trace=1','debug=334','a04br3-autoreset=720'):cmd+=['--kernel-arg='+v]
+ if args.runtime_window:cmd+=['--kernel-arg=arw=1']
  for v in ('a04br3-stacklog','boot-ui-focus3','boot-ui-focus4','a04br3-gpu-packet','offline-hid-auto-home-count','offline-hid-auto-home','a04br3-powervrprobed','-no_corpses','-v','a04br3-proclog'):cmd+=['--omit-kernel-arg='+v]
  # UniXNU logs its ADT generator command. Keep the workflow identity out of
  # the build log as well as the public manifest.
@@ -64,7 +68,7 @@ def main():
    for secret in sorted(secrets,key=len,reverse=True):line=line.replace(secret,'<diagnostic-identity>')
    sys.stdout.write(line);sys.stdout.flush()
   if process.wait():raise RuntimeError('official payload build failed')
- p=out/'a04br3/payload';meta=json.loads((p/'payload.json').read_text());length=checked_args(meta['kernel_args'])
+ p=out/'a04br3/payload';meta=json.loads((p/'payload.json').read_text());length=checked_args(meta['kernel_args'],args.runtime_window)
  payload=p/'payload.img'
  for key,file in (('kernel_sha256',kernel),('data_ramdisk_sha256',data),('trust_cache_sha256',trust),('gpu_addon_sha256',addon),('payload_sha256',payload)):
   if meta[key]!=sha(file):raise ValueError('generated artifact hash mismatch: '+key)
@@ -77,6 +81,6 @@ def main():
   if sha(target)!=meta[key]:raise ValueError('FAT payload file hash mismatch: '+name)
  adt_sha=meta['adt_sha256']
  if git(root,'rev-parse','HEAD')!=source or git(device,'rev-parse','HEAD')!=revision:raise ValueError('source changed during payload build')
- record={'schema':1,'purpose':'device-diagnostic-only; not a distributable image','source_commit':source,'kernel_device_commit':kernel_device,'packaging_device_commit':revision,'kernel_provenance_sha256':sha(args.kernel_manifest),'armcpu_commit':arm,'generated_adt_sha256':adt_sha,'kernel_sha256':sha(kernel),'data_sha256':sha(data),'data_seed_manifest_sha256':sha(seed),'trust_sha256':sha(trust),'gpu':gpu_record,'payload_sha256':sha(payload),'kernel_args':meta['kernel_args'],'kernel_args_bytes_with_nul':length,'software_identity_source':'workflow secret, generated ADT; value omitted','hardware_tested':False}
+ record={'schema':1,'purpose':'device-diagnostic-only; not a distributable image','source_commit':source,'kernel_device_commit':kernel_device,'packaging_device_commit':revision,'kernel_provenance_sha256':sha(args.kernel_manifest),'armcpu_commit':arm,'generated_adt_sha256':adt_sha,'kernel_sha256':sha(kernel),'data_sha256':sha(data),'data_seed_manifest_sha256':sha(seed),'trust_sha256':sha(trust),'gpu':gpu_record,'payload_sha256':sha(payload),'kernel_args':meta['kernel_args'],'kernel_args_bytes_with_nul':length,'software_identity_source':'workflow secret, generated ADT; value omitted','runtime_window_requested':args.runtime_window,'runtime_pmu_owner_qualified':False,'hardware_tested':False}
  (out/'diagnostic-payload-manifest.json').write_text(json.dumps(record,indent=2)+'\n');print('Recorded diagnostic payload:',payload)
 if __name__=='__main__':main()
