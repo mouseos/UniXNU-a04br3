@@ -45,9 +45,9 @@ print('PASS opt-in context diagnostic arguments')
 config='CONFIG_XNU_ARMCPU_RUNTIME_WINDOW=y\nCONFIG_XNU_ARMCPU_IDLE_EPOCH=y\nCONFIG_XNU_PMUV3_ACTIVE=y\n'
 markers=b'ArmCpu: runtime-scope\0ArmCpu: runtime-context unavailable=board-hook\0a04br3 cpu-context round='
 names=('_a04br3_cpu_context_sample','_unixnu_pmuv3_active_start','_unixnu_pmuv3_active_stop','_unixnu_idle_epoch_observe')
-symbols='\n'.join('00000001 T '+n for n in names)
+symbols='\n'.join('00000001 (__TEXT_EXEC,__text) external '+n for n in names)
 m.checked_context_kernel(config,markers,symbols)
-for cfg,blob,nm in ((config.replace('CONFIG_XNU_PMUV3_ACTIVE=y',''),markers,symbols),(config,markers.replace(b'runtime-scope',b'missing'),symbols),(config,markers,symbols.replace(' T _a04br3_cpu_context_sample',' U _a04br3_cpu_context_sample'))):
+for cfg,blob,nm in ((config.replace('CONFIG_XNU_PMUV3_ACTIVE=y',''),markers,symbols),(config,markers.replace(b'runtime-scope',b'missing'),symbols),(config,markers,symbols.replace('(__TEXT_EXEC,__text) external _a04br3_cpu_context_sample','(undefined) external _a04br3_cpu_context_sample'))):
  try:m.checked_context_kernel(cfg,blob,nm)
  except ValueError:pass
  else:raise AssertionError('invalid context kernel accepted')
