@@ -52,7 +52,12 @@ def checked_near_kernel(kernel_bytes, symbols, worker, near):
  if len(re.findall(r'\bbl\b[^\n]*<_a04br3_cpu_clock_near>',worker,re.I))!=2:raise ValueError('near-clock worker calls missing')
  lines=near.splitlines();reads=[i for i,l in enumerate(lines) if re.search(r'\bmrs\s+x\d+,\s*CNTVCT_EL0\b',l,re.I)]
  if len(reads)!=2 or any(i==0 or not re.search(r'\bisb\b',lines[i-1],re.I) for i in reads):raise ValueError('near-clock timer instructions invalid')
- if len(re.findall(r'\bldr\s+w\d+,',near,re.I))<5 or not re.search(r'\bdmb\s+oshld\b',near,re.I) or re.search(r'\bbl\b',near,re.I):raise ValueError('near-clock load/barrier instructions invalid')
+ if re.search(r'\bblr?\b',near,re.I):raise ValueError('near-clock contains a call')
+ body='\n'.join(lines[reads[0]+1:reads[1]])
+ barrier=list(re.finditer(r'\bdmb\s+oshld\b',body,re.I))
+ loads=list(re.finditer(r'\bldr\s+w\d+,\s*\[x\d+(?:,\s*#(0x[0-9a-f]+|\d+))?\]',body,re.I))
+ offsets=[int(x.group(1),0) if x.group(1) else 0 for x in loads]
+ if len(barrier)!=1 or len(loads)!=5 or offsets!=[0,0x14,0x100,0x104,0x110] or loads[-1].end()>barrier[0].start():raise ValueError('near-clock load/barrier order invalid')
 
 
 def main():

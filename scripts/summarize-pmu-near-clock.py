@@ -11,9 +11,12 @@ PATTERN=re.compile(r'a04br3 cpu-near-clock round=(\d+) cpu=(\d+) phase=(\d+) ok=
 
 def summarize(raw, timeline):
     issues=[]; entries={}; rows=[]
-    if hashlib.sha256(raw).hexdigest()!=timeline.get('snapshot_sha256'): raise ValueError('raw/timeline hash mismatch')
+    size=timeline.get('snapshot_bytes'); first=timeline.get('first_boot_bytes')
+    if not isinstance(size,int) or not isinstance(first,int) or not 0<first<=size<=len(raw): raise ValueError('invalid snapshot/boot bounds')
+    snapshot=raw[:size]; first_raw=snapshot[:first]
+    if hashlib.sha256(snapshot).hexdigest()!=timeline.get('snapshot_sha256') or hashlib.sha256(first_raw).hexdigest()!=timeline.get('first_boot_sha256'): raise ValueError('raw/timeline hash mismatch')
     if timeline.get('issues'): raise ValueError('timeline has unresolved issues')
-    for line in raw.decode('utf-8','replace').splitlines():
+    for line in first_raw.decode('utf-8','replace').splitlines():
         if 'a04br3 cpu-near-clock ' not in line: continue
         m=PATTERN.search(line)
         if not m: issues.append('malformed near-clock record'); continue
@@ -28,10 +31,12 @@ def summarize(raw, timeline):
         b=entries.get(key+(0,)); e=entries.get(key+(1,))
         if not b or not e or b['ok']!=1 or e['ok']!=1 or b['safe']!=1 or e['safe']!=1: issues.append(f'missing/unavailable {key}'); continue
         if not (w['begin']<=b['begin']<=b['end']<=e['begin']<=e['end']<=w['end']): issues.append(f'outside/order {key}')
+        if not w.get('min_ticks'): issues.append(f'invalid active ticks {key}'); continue
         rows.append({'round':key[0],'cpu':key[1],'before':b,'after':e,'different':b['raw']!=e['raw'],'begin_duration_ticks':b['end']-b['begin'],'end_duration_ticks':e['end']-e['begin'],'overhead_fraction_upper':((b['end']-b['begin'])+(e['end']-e['begin']))/w['min_ticks']})
     for key in entries.keys()-expected:
         if not any(w['round']==key[0] and w['cpu']==key[1] for w in timeline['records']): issues.append(f'orphan {key}')
-    return {'source_sha256':hashlib.sha256(raw).hexdigest(),'boot_sha256':timeline.get('boot_sha256'),'records':rows,'issues':issues,'limits':['read-only MMIO perturbs the measured interval','timestamps use uncalibrated CNTVCT','snapshots non-atomic; no proof of intervening stability','higher EL and debug PMU ownership unverified']}
+    if not rows: issues.append('no successful near-clock pairs')
+    return {'source_sha256':hashlib.sha256(snapshot).hexdigest(),'boot_sha256':timeline.get('boot_sha256'),'records':rows,'issues':issues,'limits':['read-only MMIO perturbs the measured interval','timestamps use uncalibrated CNTVCT','snapshots non-atomic; no proof of intervening stability','higher EL and debug PMU ownership unverified']}
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('raw',type=Path);ap.add_argument('timeline',type=Path);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args()
