@@ -39,6 +39,45 @@ class NewKernelContracts(unittest.TestCase):
         with self.assertRaises(ValueError): BUILD.rewrite_args(line + ' native-cs-stream=0', stream=True)
         with self.assertRaises(ValueError): BUILD.rewrite_args('serial=1 a04br3-home-perf=1 pl=1')
 
+    def test_live_pc_requires_all_task_and_rejects_existing_flag(self):
+        line = 'serial=1 a04br3-home-perf=1 pl=1 native-msdc-iostat=1'
+        normal = BUILD.rewrite_args(line, all_task=True)
+        live = BUILD.rewrite_args(line, all_task=True, live_pc=True)
+        self.assertEqual(live, normal + ' a04br3-live-pc=1')
+        for kwargs in ({'live_pc':True}, {'live_pc':True, 'all_task':True, 'meter':True},
+                       {'live_pc':True, 'all_task':True, 'meter_route':True},
+                       {'live_pc':True, 'all_task':True, 'stream':True}):
+            with self.assertRaises(ValueError): BUILD.rewrite_args(line, **kwargs)
+        for existing in ('a04br3-live-pc=1', 'a04br3-live-pc=0', 'a04br3-live-pc', 'a04br3-live-pc=1 a04br3-live-pc=1'):
+            for kwargs in ({}, {'all_task':True}, {'all_task':True, 'live_pc':True}):
+                with self.assertRaises(ValueError): BUILD.rewrite_args(line+' '+existing, **kwargs)
+        with self.assertRaises(ValueError): BUILD.rewrite_args(line+' pl=1', all_task=True, live_pc=True)
+
+    def test_live_pc_pins_existing_kernel(self):
+        BUILD.check_live_pc_kernel({'sha256': BUILD.LIVE_PC_KERNEL_SHA256})
+        with self.assertRaisesRegex(ValueError, 'recorded f2dee95 kernel'):
+            BUILD.check_live_pc_kernel({'sha256': '0' * 64})
+        with self.assertRaises(ValueError): BUILD.check_live_pc_kernel({})
+
+    def test_live_pc_1023_byte_limit(self):
+        line = 'serial=1 a04br3-home-perf=1 pl=1 native-msdc-iostat=1 pad='
+        current = len(BUILD.rewrite_args(line+'x', all_task=True, live_pc=True).encode('ascii'))
+        boundary = line+'x'*(1024-current)
+        self.assertEqual(len(BUILD.rewrite_args(boundary, all_task=True, live_pc=True).encode('ascii')), 1023)
+        with self.assertRaisesRegex(ValueError, '1023'): BUILD.rewrite_args(boundary+'x', all_task=True, live_pc=True)
+
+    def test_cli_rejects_duplicate_or_incompatible_modes(self):
+        import subprocess, sys
+        script = ROOT/'scripts/a04br3-iostat-stack-new-kernel.py'
+        names = ('source', 'old-device', 'new-device', 'uefi', 'old-boot', 'old-pair', 'kernel', 'kernel-record', 'fd', 'out', 'seed-provenance')
+        required = [item for name in names for item in ('--'+name, '/nonexistent')]
+        for flags in (['--all-task','--all-task'], ['--all-task','--live-pc','--live-pc'],
+                      ['--live-pc'], ['--all-task','--live-pc','--meter'],
+                      ['--all-task','--live-pc','--stream']):
+            result = subprocess.run([sys.executable, str(script), *required, *flags], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertTrue(any(word in result.stderr for word in ('more than once', 'requires --all-task', 'conflicting diagnostic modes')))
+
     def test_adt_allows_only_seed_and_preserved_identity(self):
         identity = bytes.fromhex('0123456789abcdef')
         old = struct.pack('<II', 3, 0) + prop('name', b'a') + prop('random-seed', b'A' * 64) + prop('unique-chip-id', identity)
