@@ -365,7 +365,6 @@ void procLogThread(void *, wait_result_t)
       IOLog("a04br3 perf vm pagesize=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu throttled=%llu pageable_internal=%llu pageable_external=%llu mode=%d active_compressor=%u active_swap=%u\n",
             m[0],m[1],m[2],m[3],m[4],m[5],m[6],q.throttled,q.pageable_internal,q.pageable_external,q.compressor_mode,q.compressor_active,q.swap_active);
       boot_home_perf_sample();
-      cpuDiagnosticReport();
     }
     // iostat is an explicit diagnostic request, independent of home-perf, so
     // it can be combined with stacklog without enabling home diagnostics.
@@ -373,6 +372,7 @@ void procLogThread(void *, wait_result_t)
       msdcIrqReport(msdcPerf);
       msdcIoReport(msdcPerf);
     }
+    if (perf == 1) cpuDiagnosticReport();
     boot_home_irq_report();
     boot_live_pc_report();
     boot_ipi_reason_report();
