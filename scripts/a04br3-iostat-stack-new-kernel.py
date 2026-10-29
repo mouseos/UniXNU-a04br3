@@ -22,6 +22,7 @@ import tempfile
 import tomllib
 
 OLD_SOURCE = 'e8f5385e4cee02bb15efa2fb97c20bb59b98d72f'
+KERNEL_SOURCE = '6cd380b02942a90005bc36c60d325f655e5e8a2e'
 OLD_DEVICE = '8fde8ba87486338342f3be528823cb46394f2c5b'
 NEW_DEVICE = '78d2c29a2a8122df2b0ae4809619c96ade662f5a'
 UEFI = 'd3d4f28a89b29553ede7d7523c6af86d7e2459e8'
@@ -198,7 +199,7 @@ def load_kernel_record(path, kernel):
         raise ValueError('kernel build record lacks sha256, device_commit, source_commit, or run_id')
     digest = record['sha256']
     if digest != sha(kernel): raise ValueError('kernel build record hash mismatch')
-    if record['source_commit'] != OLD_SOURCE or not record['device_commit'].startswith(NEW_DEVICE):
+    if record['source_commit'] != KERNEL_SOURCE or record['device_commit'] != NEW_DEVICE:
         raise ValueError('kernel build record source/device mismatch')
     return record
 

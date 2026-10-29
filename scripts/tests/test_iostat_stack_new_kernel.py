@@ -35,11 +35,14 @@ class NewKernelContracts(unittest.TestCase):
     def test_kernel_record_is_required_and_cross_checked(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); kernel = root/'kernel'; kernel.write_bytes(b'new kernel native-msdc-iostat')
-            record = {'sha256': BUILD.sha(kernel), 'source_commit': BUILD.OLD_SOURCE, 'device_commit': BUILD.NEW_DEVICE, 'run_id': 'run-1'}
+            record = {'sha256': BUILD.sha(kernel), 'source_commit': BUILD.KERNEL_SOURCE, 'device_commit': BUILD.NEW_DEVICE, 'run_id': 'run-1'}
             self.assertEqual(BUILD.load_kernel_record(root/'missing', kernel) if False else record['run_id'], 'run-1')
             import json
             path = root/'record.json'; path.write_text(json.dumps(record))
             self.assertEqual(BUILD.load_kernel_record(path, kernel)['sha256'], BUILD.sha(kernel))
+            record['source_commit'] = BUILD.OLD_SOURCE; path.write_text(json.dumps(record))
+            with self.assertRaises(ValueError): BUILD.load_kernel_record(path, kernel)
+            record['source_commit'] = BUILD.KERNEL_SOURCE
             record.pop('run_id'); path.write_text(json.dumps(record))
             with self.assertRaises(ValueError): BUILD.load_kernel_record(path, kernel)
 
