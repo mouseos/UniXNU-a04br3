@@ -14,3 +14,12 @@ for bad in (good+' arw=1',good+' cc=1',good+' armcpu-cycle-clock=0',good+' arc=1
  except ValueError:pass
  else:raise AssertionError('bad boot args accepted')
 print('PASS bounded boot args, required options, duplicates and aliases')
+
+assert m.checked_args(good+' arw=1 aq=1',True,True)==len((good+' arw=1 aq=1').encode())+1
+for bad in (good+' arw=1',good+' arw=1 aq=0',good+' arw=1 aq=1 aq=1',good+' aq=1'):
+ try:m.checked_args(bad,True,True)
+ except ValueError:pass
+ else:raise AssertionError('invalid PMUv3 experiment args accepted')
+try:m.checked_args(good+' arw=1 aq=1',True,False)
+except ValueError:pass
+else:raise AssertionError('unexpected PMUv3 experiment accepted')
