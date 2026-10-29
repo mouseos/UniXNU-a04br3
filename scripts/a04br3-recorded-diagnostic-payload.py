@@ -45,6 +45,15 @@ def checked_context_disassembly(text):
  for i in reads:
   if i==0 or not re.search(r'\bisb\b',lines[i-1],re.I):raise ValueError('context timer read is not preceded by ISB')
 
+def checked_near_kernel(kernel_bytes, symbols, worker, near):
+ if b'a04br3 cpu-near-clock round=' not in kernel_bytes:raise ValueError('near-clock log marker missing')
+ rows=[line.split() for line in symbols.splitlines() if line.split() and line.split()[-1]=='_a04br3_cpu_clock_near']
+ if not any(len(r)>=4 and r[-3]=='(__TEXT_EXEC,__text)' and r[-2]=='external' for r in rows):raise ValueError('near-clock hook not defined')
+ if len(re.findall(r'\bbl\b[^\n]*<_a04br3_cpu_clock_near>',worker,re.I))!=2:raise ValueError('near-clock worker calls missing')
+ lines=near.splitlines();reads=[i for i,l in enumerate(lines) if re.search(r'\bmrs\s+x\d+,\s*CNTVCT_EL0\b',l,re.I)]
+ if len(reads)!=2 or any(i==0 or not re.search(r'\bisb\b',lines[i-1],re.I) for i in reads):raise ValueError('near-clock timer instructions invalid')
+ if len(re.findall(r'\bldr\s+w\d+,',near,re.I))<5 or not re.search(r'\bdmb\s+oshld\b',near,re.I) or re.search(r'\bbl\b',near,re.I):raise ValueError('near-clock load/barrier instructions invalid')
+
 
 def main():
  parser=argparse.ArgumentParser(description=__doc__)
@@ -53,12 +62,14 @@ def main():
  parser.add_argument('--kernel-manifest',type=pathlib.Path,required=True)
  parser.add_argument('--runtime-window',action='store_true',help='enable runtime window diagnostic')
  parser.add_argument('--runtime-context',action='store_true',help='record read-only clock and CPU load context around each repeated window')
+ parser.add_argument('--near-clock',action='store_true',help='require near-window clock hook and its linked instructions')
  parser.add_argument('--runtime-repeat',action='store_true',help='repeat experimental active sampling over time')
  parser.add_argument('--pmuv3-active',action='store_true',help='enable experimental PMUv3 active sampling; upper-EL ownership unverified')
  args=parser.parse_args();
  if args.pmuv3_active and not args.runtime_window:parser.error('--pmuv3-active requires --runtime-window')
  if args.runtime_repeat and not (args.runtime_window and args.pmuv3_active):parser.error('--runtime-repeat requires --runtime-window and --pmuv3-active')
  if args.runtime_context and not args.runtime_repeat:parser.error('--runtime-context requires --runtime-repeat')
+ if args.near_clock and not args.runtime_context:parser.error('--near-clock requires --runtime-context')
  root=pathlib.Path.cwd().resolve();device=args.device.resolve(strict=True)
  runner=pathlib.Path(os.environ['RUNNER_TEMP']).resolve(strict=True);out=(args.output or runner/'a04br3-recorded-diagnostic').resolve()
  if out.exists():raise ValueError('output already exists')
@@ -74,6 +85,10 @@ def main():
   checked_context_kernel(config,kernel.read_bytes(),symbols)
   disassembly=subprocess.check_output(['llvm-objdump','--disassemble-symbols=_a04br3_cpu_context_sample',str(kernel)],text=True)
   checked_context_disassembly(disassembly)
+  if args.near_clock:
+   worker=subprocess.check_output(['llvm-objdump','--disassemble-symbols=__ZL28armcpu_runtime_window_workerPvi',str(kernel)],text=True)
+   near=subprocess.check_output(['llvm-objdump','--disassemble-symbols=_a04br3_cpu_clock_near',str(kernel)],text=True)
+   checked_near_kernel(kernel.read_bytes(),symbols,worker,near)
  vol=str(uuid.UUID(json.loads(seed.read_text())['volume_uuid'])).upper()
  if not uuid.UUID(vol).int or kernel.read_bytes().count(vol.encode())!=1:raise ValueError('kernel and pre-build Data volume identity do not match')
  def git(path,*a):return subprocess.check_output(['git','-C',str(path),*a],text=True).strip()
@@ -118,6 +133,6 @@ def main():
   if sha(target)!=meta[key]:raise ValueError('FAT payload file hash mismatch: '+name)
  adt_sha=meta['adt_sha256']
  if git(root,'rev-parse','HEAD')!=source or git(device,'rev-parse','HEAD')!=revision:raise ValueError('source changed during payload build')
- record={'schema':1,'purpose':'device-diagnostic-only; not a distributable image','source_commit':source,'kernel_device_commit':kernel_device,'packaging_device_commit':revision,'kernel_provenance_sha256':sha(args.kernel_manifest),'armcpu_commit':arm,'generated_adt_sha256':adt_sha,'kernel_sha256':sha(kernel),'data_sha256':sha(data),'data_seed_manifest_sha256':sha(seed),'trust_sha256':sha(trust),'gpu':gpu_record,'payload_sha256':sha(payload),'kernel_args':meta['kernel_args'],'kernel_args_bytes_with_nul':length,'software_identity_source':'workflow secret, generated ADT; value omitted','runtime_window_requested':args.runtime_window,'runtime_repeat_requested':args.runtime_repeat,'runtime_context_requested':args.runtime_context,'pmuv3_active_requested':args.pmuv3_active,'pmuv3_experiment_assumption':'EL2/EL3/debug and recovery unverified','runtime_pmu_owner_qualified':False,'hardware_tested':False}
+ record={'schema':1,'purpose':'device-diagnostic-only; not a distributable image','source_commit':source,'kernel_device_commit':kernel_device,'packaging_device_commit':revision,'kernel_provenance_sha256':sha(args.kernel_manifest),'armcpu_commit':arm,'generated_adt_sha256':adt_sha,'kernel_sha256':sha(kernel),'data_sha256':sha(data),'data_seed_manifest_sha256':sha(seed),'trust_sha256':sha(trust),'gpu':gpu_record,'payload_sha256':sha(payload),'kernel_args':meta['kernel_args'],'kernel_args_bytes_with_nul':length,'software_identity_source':'workflow secret, generated ADT; value omitted','runtime_window_requested':args.runtime_window,'runtime_repeat_requested':args.runtime_repeat,'runtime_context_requested':args.runtime_context,'near_clock_required':args.near_clock,'pmuv3_active_requested':args.pmuv3_active,'pmuv3_experiment_assumption':'EL2/EL3/debug and recovery unverified','runtime_pmu_owner_qualified':False,'hardware_tested':False}
  (out/'diagnostic-payload-manifest.json').write_text(json.dumps(record,indent=2)+'\n');print('Recorded diagnostic payload:',payload)
 if __name__=='__main__':main()

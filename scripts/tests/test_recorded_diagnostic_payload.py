@@ -60,3 +60,12 @@ for bad in (asm.replace("mrs x0, CNTVCT_EL0","nop"),asm.replace("isb\n  mrs x1",
  except ValueError:pass
  else:raise AssertionError('invalid context disassembly accepted')
 print('PASS context timer instruction order')
+near_symbols=symbols+'\n00000002 (__TEXT_EXEC,__text) external _a04br3_cpu_clock_near'
+worker='bl 123 <_a04br3_cpu_clock_near>\nbl 123 <_a04br3_cpu_clock_near>\n'
+near='isb\nmrs x0, CNTVCT_EL0\n'+('ldr w1, [x2]\n'*5)+'dmb oshld\nisb\nmrs x1, CNTVCT_EL0\n'
+m.checked_near_kernel(b'a04br3 cpu-near-clock round=',near_symbols,worker,near)
+for blob,nm,code,body in ((b'',near_symbols,worker,near),(b'a04br3 cpu-near-clock round=',symbols,worker,near),(b'a04br3 cpu-near-clock round=',near_symbols,worker.replace('bl 123','b 123',1),near),(b'a04br3 cpu-near-clock round=',near_symbols,worker,near.replace('dmb oshld','nop'))):
+ try:m.checked_near_kernel(blob,nm,code,body)
+ except ValueError:pass
+ else:raise AssertionError('invalid near-clock kernel accepted')
+print('PASS near-clock linked hook, calls, timestamps, MMIO and barrier')

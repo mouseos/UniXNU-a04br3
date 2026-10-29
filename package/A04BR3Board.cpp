@@ -286,19 +286,38 @@ void msdcIoReport(unsigned enabled)
         (haveTransport ? 9u : 0u) + (haveOffer ? 6u : 0u) + (haveQueue ? 1u : 0u));
 }
 
+static volatile uint8_t *cpuContextInfra, *cpuContextApmixed;
+static bool cpuContextMapAttempted;
+
+// Only the context worker calls this after mapping, with preemption disabled,
+// on the target CPU. No mapping, allocation, logging or register writes here.
+// The two timestamp reads and five MMIO loads perturb the active window.
+extern "C" bool a04br3_cpu_clock_near(uint64_t out[7])
+{
+  if (!cpuContextInfra || !cpuContextApmixed) return false;
+  __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(out[0]) :: "memory");
+  out[2]=*reinterpret_cast<volatile uint32_t *>(cpuContextInfra);
+  out[3]=*reinterpret_cast<volatile uint32_t *>(cpuContextInfra+0x14);
+  out[4]=*reinterpret_cast<volatile uint32_t *>(cpuContextApmixed+0x100);
+  out[5]=*reinterpret_cast<volatile uint32_t *>(cpuContextApmixed+0x104);
+  out[6]=*reinterpret_cast<volatile uint32_t *>(cpuContextApmixed+0x110);
+  __asm__ volatile("dmb oshld\n\tisb\n\tmrs %0, cntvct_el0" : "=r"(out[1]) :: "memory");
+  return true;
+}
+
 // Called only by the opt-in PMU context worker, outside PMU lease and locks.
 // Maps and reads the same board clock registers used by the diagnostic below. It does
 // not use WACS: CPU rail voltage and temperature remain unavailable.
 extern "C" void a04br3_cpu_context_sample(unsigned round, unsigned cpu, unsigned phase)
 {
-  static volatile uint8_t *infra, *apmixed;
-  static bool attempted;
+  volatile uint8_t *infra=cpuContextInfra, *apmixed=cpuContextApmixed;
   uint64_t begin, end;
   __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(begin) :: "memory");
-  if (!attempted) {
-    attempted = true;
+  if (!cpuContextMapAttempted) {
+    cpuContextMapAttempted = true;
     infra = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10001000, 0x1000));
     apmixed = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10018000, 0x1000));
+    cpuContextInfra=infra; cpuContextApmixed=apmixed;
   }
   uint32_t mux=0, dcm=0, con0=0, con1=0, power=0, ticks[6]={};
   const bool clocks=infra && apmixed;
