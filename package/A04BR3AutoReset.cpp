@@ -24,6 +24,7 @@
 #include <IOKit/IOLib.h>
 #include "A04BR3RegisterLock.h"
 #include "A04BR3WatchdogGate.h"
+#include "A04BR3PmuLease.h"
 #include <IOKit/IOPlatformExpert.h>
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
@@ -325,13 +326,53 @@ void cycleThread(void *, wait_result_t)
 
 }  // namespace
 
+// This local lease serializes participating EL1 clients only. No evidence
+// provider currently establishes upper-EL/debug non-interference, so no
+// target may acquire it. This is deliberately not a boot-argument override.
+static A04BR3PmuLease gRuntimePmuLease = {};
+static bool a04br3_pmu_access_qualified(unsigned cpu) { (void)cpu; return false; }
+// Bound contention while retaining the watchdog gate; failure remains closed.
+static bool a04br3_pmu_gate_lock_bounded(void)
+{
+  for (unsigned i=0;i<4096;++i) if (gWatchdogGate.lock()) return true;
+  return false;
+}
+extern "C" bool a04br3_pmu_lease_acquire(unsigned cpu, uint64_t *generation)
+{
+  if (!a04br3_pmu_gate_lock_bounded()) return false;
+  bool ok=a04br3_pmu_try(gRuntimePmuLease,a04br3_pmu_access_qualified(cpu),
+    __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)!=0,cpu,generation);
+  gWatchdogGate.unlock();return ok;
+}
+extern "C" bool a04br3_pmu_lease_valid(unsigned cpu, uint64_t generation)
+{
+  if (!a04br3_pmu_gate_lock_bounded()) return false;
+  bool ok=a04br3_pmu_valid(gRuntimePmuLease,
+    __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)!=0,cpu,generation);
+  gWatchdogGate.unlock();return ok;
+}
+extern "C" bool a04br3_pmu_lease_release(unsigned cpu, uint64_t generation)
+{
+  if (!a04br3_pmu_gate_lock_bounded()) return false;
+  bool ok=a04br3_pmu_release(gRuntimePmuLease,
+    __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)!=0,cpu,generation);
+  gWatchdogGate.unlock();return ok;
+}
 extern "C" bool a04br3_runtime_probe_begin(void)
 {
   return gWatchdogGate.begin(&a04br3_runtime_probe_active);
 }
+extern "C" bool a04br3_runtime_probe_end_checked(void)
+{
+  if (!a04br3_pmu_gate_lock_bounded()) return false;
+  bool ok=__atomic_load_n(&gRuntimePmuLease.state,__ATOMIC_ACQUIRE)==0 &&
+          __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)!=0;
+  if (ok) __atomic_store_n(&a04br3_runtime_probe_active,0U,__ATOMIC_RELEASE);
+  gWatchdogGate.unlock();return ok;
+}
 extern "C" void a04br3_runtime_probe_end(void)
 {
-  __atomic_store_n(&a04br3_runtime_probe_active, 0U, __ATOMIC_RELEASE);
+  (void)a04br3_runtime_probe_end_checked();
 }
 
 // The lock coordinates known board WACS2 users, not EL2/EL3 or firmware.
