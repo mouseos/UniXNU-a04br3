@@ -23,4 +23,11 @@ class NearTests(unittest.TestCase):
  def test_incomplete_timeline_keeps_values_but_fails(self):
   b=(line(0,11,12)+line(1,90,91)).encode();t={'snapshot_sha256':hashlib.sha256(b).hexdigest(),'snapshot_bytes':len(b),'first_boot_bytes':len(b),'first_boot_sha256':hashlib.sha256(b).hexdigest(),'issues':['one skip'],'records':[{'round':0,'cpu':0,'status':0,'begin':10,'end':100,'min_ticks':80}]}
   result=m.summarize(b,t);self.assertEqual(len(result['records']),1);self.assertIn('timeline: one skip',result['issues'])
+ def test_failed_window_and_panic_are_not_pass(self):
+  b=(line(0,11,12)+line(1,90,91)).encode();t={'snapshot_sha256':hashlib.sha256(b).hexdigest(),'snapshot_bytes':len(b),'first_boot_bytes':len(b),'first_boot_sha256':hashlib.sha256(b).hexdigest(),'cpu_panic_or_trap_lines':['panic'],'records':[{'round':0,'cpu':0,'status':0,'begin':10,'end':100,'min_ticks':80},{'round':0,'cpu':1,'status':13}]}
+  result=m.summarize(b,t);self.assertEqual(len(result['records']),1);self.assertTrue(any('unsuccessful window' in x for x in result['issues']));self.assertTrue(any('panic' in x for x in result['issues']))
+ def test_missing_time_and_negative_ticks_fail(self):
+  b=(line(0,11,12)+line(1,90,91)).encode();base={'snapshot_sha256':hashlib.sha256(b).hexdigest(),'snapshot_bytes':len(b),'first_boot_bytes':len(b),'first_boot_sha256':hashlib.sha256(b).hexdigest()}
+  for w in ({'round':0,'cpu':0,'status':0,'min_ticks':80},{'round':0,'cpu':0,'status':0,'begin':10,'end':100,'min_ticks':-1}):
+   result=m.summarize(b,{**base,'records':[w]});self.assertTrue(result['issues']);self.assertEqual(result['records'],[])
 if __name__=='__main__':unittest.main()

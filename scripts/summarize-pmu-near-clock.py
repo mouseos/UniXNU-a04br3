@@ -18,6 +18,8 @@ def summarize(raw, timeline):
     # Preserve incomplete/unsafe timeline failures while still reporting the
     # individual successful windows; they must never become an overall pass.
     for problem in timeline.get('issues',[]): issues.append('timeline: '+str(problem))
+    if timeline.get('skips'): issues.append('timeline: skipped measurements')
+    if timeline.get('cpu_panic_or_trap_lines'): issues.append('timeline: panic or trap observed')
     for line in first_raw.decode('utf-8','replace').splitlines():
         if 'a04br3 cpu-near-clock ' not in line: continue
         m=PATTERN.search(line)
@@ -28,12 +30,13 @@ def summarize(raw, timeline):
         entries[key]={'ok':ok,'safe':safe,'begin':begin,'end':end,'raw':dict(zip(('infra','dcm','con0','con1','pwr'),values))}
     expected=set()
     for w in timeline['records']:
-        if w['status']!=0: continue
+        if w.get('status')!=0: issues.append(f"timeline: unsuccessful window {(w.get('round'),w.get('cpu'))}"); continue
         key=(w['round'],w['cpu']); expected.update((key+(0,),key+(1,)))
         b=entries.get(key+(0,)); e=entries.get(key+(1,))
         if not b or not e or b['ok']!=1 or e['ok']!=1 or b['safe']!=1 or e['safe']!=1: issues.append(f'missing/unavailable {key}'); continue
+        if not isinstance(w.get('begin'),int) or not isinstance(w.get('end'),int): issues.append(f'missing window time {key}'); continue
         if not (w['begin']<=b['begin']<=b['end']<=e['begin']<=e['end']<=w['end']): issues.append(f'outside/order {key}')
-        if not w.get('min_ticks'): issues.append(f'invalid active ticks {key}'); continue
+        if not isinstance(w.get('min_ticks'),int) or w['min_ticks']<=0: issues.append(f'invalid active ticks {key}'); continue
         rows.append({'round':key[0],'cpu':key[1],'before':b,'after':e,'different':b['raw']!=e['raw'],'begin_duration_ticks':b['end']-b['begin'],'end_duration_ticks':e['end']-e['begin'],'overhead_fraction_upper':((b['end']-b['begin'])+(e['end']-e['begin']))/w['min_ticks']})
     for key in entries.keys()-expected:
         if not any(w['round']==key[0] and w['cpu']==key[1] for w in timeline['records']): issues.append(f'orphan {key}')
