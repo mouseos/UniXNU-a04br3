@@ -63,6 +63,7 @@ extern volatile uint64_t native_msdc_transport_stats[36] __attribute__((weak_imp
 extern volatile uint64_t native_msdc_block_offer_stats[12] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_block_queue_stats[3] __attribute__((weak_import));
 void native_root_timing_snapshot(uint64_t out[6]) __attribute__((weak_import));
+void native_cs_trace_report(void) __attribute__((weak_import));
 extern volatile uint32_t native_keyevents_stage;
 extern volatile int native_keyevents_status;
 // Existing kern_exec.c addon installer and union-mount diagnostics.
@@ -332,8 +333,9 @@ void procLogOptions(unsigned &perf, unsigned &rootTiming, unsigned &msdcPerf)
 
 void procLogThread(void *, wait_result_t)
 {
-  unsigned perf, rootTiming, msdcPerf;
+  unsigned perf, rootTiming, msdcPerf, overlapTrace = 0;
   procLogOptions(perf, rootTiming, msdcPerf);
+  PE_parse_boot_argn("native-io-trace", &overlapTrace, sizeof(overlapTrace));
   uint64_t cacheReportSeconds = 0;
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
@@ -363,6 +365,7 @@ void procLogThread(void *, wait_result_t)
     native_powervr_submit_perf_report();
     native_powervr_io_trace_report();
     msdcRootTimingReport(rootTiming);
+    if (overlapTrace == 1 && native_cs_trace_report) native_cs_trace_report();
     cacheReportSeconds += gProcLogSeconds;
     if (cacheReportSeconds >= 60) {
       cacheReportSeconds %= 60;
