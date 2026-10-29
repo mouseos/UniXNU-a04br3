@@ -18,6 +18,7 @@
 // that start has no build-time stand-in and waits for the hook.
 #include <IOKit/IOLib.h>
 #include "A04BR3CpuClockMeter.h"
+#include "A04BR3CpuMeterRoute.h"
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include "BootMemoryQueueSnapshot.h"
@@ -301,6 +302,12 @@ struct A04BR3CpuMeterIO {
   uint32_t infra(unsigned o) { return get(i, o); }
   uint32_t pll(unsigned o) { return get(p, o); }
   void write(unsigned o, uint32_t v) { *reinterpret_cast<volatile uint32_t *>(t + o) = v; __asm__ volatile("dsb oshst" ::: "memory"); }
+  void writeDebug(uint32_t v) { *reinterpret_cast<volatile uint32_t *>(t + 0x38) = v; __asm__ volatile("dsb sy" ::: "memory"); }
+  void writePllTest(uint32_t v) { *reinterpret_cast<volatile uint32_t *>(p + 0x64) = v; __asm__ volatile("dsb sy" ::: "memory"); }
+  void beforeRoute(const A04BR3CpuMeterResult &r) {
+    IOLog("a04br3 cpu-fmeter route-snapshot ctrl=%08x debug=%08x test=%08x hop=%08x mux=%08x dcm=%08x pll0=%08x pll1=%08x pwr=%08x (uart-flush-unverified)\n", r.ctrl, r.debug, r.plltest, r.hopping, r.mux, r.dcm, r.pll0, r.pll1, r.power);
+  }
+  void delayRoute(unsigned us) { IODelay(us); }
   void delay(unsigned us) { IODelay(us); }
 };
 
@@ -331,17 +338,23 @@ void cpuDiagnosticReport()
     IOLog("a04br3 perf cpu-clk unknown map infra=%u apmixed=%u cntfrq=%llu\n",
           infra != nullptr, apmixed != nullptr, timerFrequency);
   }
-  if (gCpuMeterEnabled == 1 && !gCpuMeterQuarantined) {
+  static bool routedAttempted;
+  if ((gCpuMeterEnabled == 1 || (gCpuMeterEnabled == 2 && !routedAttempted)) && !gCpuMeterQuarantined) {
     static volatile uint8_t *top;
     if (!top) top = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x10000000, 0x1000));
     if (!top || !infra || !apmixed) IOLog("a04br3 cpu-fmeter status=map-failed\n");
     else if (!a04br3_runtime_recovery_recheck()) IOLog("a04br3 cpu-fmeter status=recovery-not-ready\n");
     else {
+      if (gCpuMeterEnabled == 2) {
+        routedAttempted = true;
+        A04BR3CpuMeterIO before{top, infra, apmixed};
+        IOLog("a04br3 cpu-fmeter route-before ctrl=%08x debug=%08x test=%08x hop=%08x mux=%08x dcm=%08x pll0=%08x pll1=%08x pwr=%08x (non-atomic; external-owner-unverified)\n", before.top(0x10), before.top(0x38), before.pll(0x64), before.pll(0x14), before.infra(0), before.infra(0x14), before.pll(0x100), before.pll(0x104), before.pll(0x110));
+      }
       // Stop this board's watchdog feed before touching the meter. A failed
       // write/readback leaves its state uncertain; do not probe it again.
       __atomic_store_n(&a04br3_runtime_probe_active, 1U, __ATOMIC_RELEASE);
       A04BR3CpuMeterIO io{top, infra, apmixed};
-      auto r = a04br3_cpu_meter(io);
+      auto r = gCpuMeterEnabled == 2 ? a04br3_cpu_meter_routed(io) : a04br3_cpu_meter(io);
       if (a04br3_cpu_meter_requires_recovery(r.status)) gCpuMeterQuarantined = true;
       else __atomic_store_n(&a04br3_runtime_probe_active, 0U, __ATOMIC_RELEASE);
       uint64_t at; absolutetime_to_nanoseconds(mach_absolute_time(), &at);
@@ -493,7 +506,7 @@ extern "C" void unixnu_board_init(void)
   unsigned runtimeCycle = 0;
   if (!PE_parse_boot_argn("armcpu-runtime-cycle", &runtimeCycle, sizeof(runtimeCycle)))
     PE_parse_boot_argn("arc", &runtimeCycle, sizeof(runtimeCycle));
-  if (gCpuMeterEnabled == 1 && runtimeCycle == 1) {
+  if ((gCpuMeterEnabled == 1 || gCpuMeterEnabled == 2) && runtimeCycle == 1) {
     gCpuMeterEnabled = 0;
     IOLog("a04br3 cpu-fmeter status=pmu-conflict-use-separate-boot\n");
   }

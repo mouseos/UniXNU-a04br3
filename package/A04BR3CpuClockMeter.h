@@ -15,7 +15,7 @@ struct A04BR3CpuMeterResult {
 
 // A write occurred and its resulting control state is not established.
 static inline bool a04br3_cpu_meter_requires_recovery(unsigned status)
-{ return status == 3 || status == 4 || status == 6; }
+{ return status == 3 || status == 4 || status == 6 || status == 9; }
 
 template<class IO> static A04BR3CpuMeterResult a04br3_cpu_meter(IO &io)
 {
