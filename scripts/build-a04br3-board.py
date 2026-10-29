@@ -21,6 +21,7 @@ import shutil
 import struct
 import subprocess
 import sys
+from a04br3_runtime_config import require_cpu_counters_disabled
 
 ROOT = Path(__file__).resolve().parents[1]
 KIT = ROOT / 'kits/a04br3'
@@ -102,8 +103,20 @@ C_FLAGS = ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror']
 
 objects = []
 cxx_record = record('iokit/DEVELOPMENT/IOPlatformExpert.cpo.json')
+pmuv3 = os.environ.get('XNU_PMUV3_ACTIVE', '0')
+if pmuv3 not in ('0', '1'):
+    raise SystemExit('XNU_PMUV3_ACTIVE must be 0 or 1')
+if pmuv3 == '1':
+    if os.environ.get('XNU_ARMCPU_RUNTIME_WINDOW') != '1' or os.environ.get('XNU_ARMCPU_IDLE_EPOCH') != '1':
+        raise SystemExit('PMUv3 experiment requires runtime window and idle epoch')
+    config = OBJ / 'osfmk/DEVELOPMENT/config_cpu_counters.h'
+    try:
+        require_cpu_counters_disabled(config)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 for name in CXX_SOURCES:
-    objects.append(compile_one(cxx_record, KIT / name, CXX_FLAGS))
+    extra = ['-DA04BR3_PMUV3_EXPERIMENT=1'] if pmuv3 == '1' and name == 'A04BR3AutoReset.cpp' else []
+    objects.append(compile_one(cxx_record, KIT / name, CXX_FLAGS + extra))
 c_record = record('bsd/DEVELOPMENT/kern_exec.o.json')
 for name in C_SOURCES:
     objects.append(compile_one(c_record, KIT / name, C_FLAGS))

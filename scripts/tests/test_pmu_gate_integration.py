@@ -4,11 +4,9 @@ from pathlib import Path
 import subprocess,tempfile
 root=Path(__file__).resolve().parents[2]
 s=(root/'package/A04BR3AutoReset.cpp').read_text();a=s.index('// This local lease serializes');b=s.index('// The lock coordinates known board WACS2 users',a);source=s[a:b]
-needle='static bool a04br3_pmu_access_qualified(unsigned cpu) { (void)cpu; return false; }'
+needle='static bool a04br3_pmu_access_qualified(unsigned cpu) {\n#if defined(A04BR3_PMUV3_EXPERIMENT) && A04BR3_PMUV3_EXPERIMENT\n  return cpu < 4 && __atomic_load_n(&gPmuExperiment,__ATOMIC_ACQUIRE)==1;\n#else\n  (void)cpu; return false;\n#endif\n}'
 assert source.count(needle)==1
-# The real provider remains false. A test-only switch exercises the otherwise
-# unreachable local lease/gate interlock without presenting it as evidence.
-source=source.replace(needle,'static bool a04br3_pmu_access_qualified(unsigned cpu) { (void)cpu; return testQualified; }')
+source=source.replace(needle,'static bool a04br3_pmu_access_qualified(unsigned cpu) { return cpu < 4 && testQualified; }')
 main='''
 int main(){uint64_t gen=0;assert(!a04br3_pmu_qualification_available(0));
  assert(a04br3_runtime_probe_begin());assert(!a04br3_pmu_lease_acquire(0,&gen));assert(a04br3_runtime_probe_end_checked());

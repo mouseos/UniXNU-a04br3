@@ -119,6 +119,8 @@ if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_A04BR3_RUNTIME') == '1':
         if os.environ.get('XNU_ARMCPU_IDLE_EPOCH') != '1':
             raise SystemExit('runtime window requires the XNU idle epoch')
         command += ['-DARMCPU_RUNTIME_WINDOW_A04BR3=1']
+        if os.environ.get('XNU_PMUV3_ACTIVE', '0') == '1':
+            command += ['-DARMCPU_RUNTIME_ACTIVE=1']
 if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_RUNTIME_WINDOW') == '1' and os.environ.get('XNU_ARMCPU_A04BR3_RUNTIME') != '1':
     raise SystemExit('runtime window requires a04br3 runtime support')
 # a04br3 eMMC (MSDC0, github.com/mouseos/NativeMsdc). CONFIG_XNU_NATIVE_MSDC_BLOCK=y builds the userdata windows as

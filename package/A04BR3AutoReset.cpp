@@ -330,7 +330,18 @@ void cycleThread(void *, wait_result_t)
 // provider currently establishes upper-EL/debug non-interference, so no
 // target may acquire it. This is deliberately not a boot-argument override.
 static A04BR3PmuLease gRuntimePmuLease = {};
-static bool a04br3_pmu_access_qualified(unsigned cpu) { (void)cpu; return false; }
+// This opt-in is an experimental assumption, not proof of EL2/EL3 or debugger
+// exclusion. It is compiled only with the PMUv3 backend and KPC disabled.
+#if defined(A04BR3_PMUV3_EXPERIMENT) && A04BR3_PMUV3_EXPERIMENT
+static unsigned gPmuExperiment;
+#endif
+static bool a04br3_pmu_access_qualified(unsigned cpu) {
+#if defined(A04BR3_PMUV3_EXPERIMENT) && A04BR3_PMUV3_EXPERIMENT
+  return cpu < 4 && __atomic_load_n(&gPmuExperiment,__ATOMIC_ACQUIRE)==1;
+#else
+  (void)cpu; return false;
+#endif
+}
 extern "C" bool a04br3_pmu_qualification_available(unsigned cpu)
 {
   return a04br3_pmu_access_qualified(cpu);
@@ -394,6 +405,13 @@ extern "C" void a04br3_autoreset_init(void)
 {
   unsigned seconds = 0;
   if (!PE_parse_boot_argn("a04br3-autoreset", &seconds, sizeof(seconds)) || seconds == 0) { return; }
+#if defined(A04BR3_PMUV3_EXPERIMENT) && A04BR3_PMUV3_EXPERIMENT
+  unsigned experiment=0;
+  if (PE_parse_boot_argn("aq", &experiment, sizeof(experiment)) && experiment==1) {
+    __atomic_store_n(&gPmuExperiment,1U,__ATOMIC_RELEASE);
+    IOLog("a04br3-pmu: EXPERIMENT enabled; EL2/EL3/debug ownership and WDT recovery unverified\n");
+  }
+#endif
   gResetSeconds = seconds;
   gPwrap = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPwrap, 0x1000));
   gToprgu = reinterpret_cast<volatile uint8_t *>(ml_io_map(kToprgu, 0x1000));
