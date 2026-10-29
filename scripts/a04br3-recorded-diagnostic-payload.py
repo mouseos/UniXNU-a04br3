@@ -73,7 +73,7 @@ def main():
  if kernel_device!=revision:
   subprocess.run(['git','-C',str(device),'merge-base','--is-ancestor',kernel_device,revision],check=True)
   changed=set(git(device,'diff','--name-only',kernel_device,revision).splitlines())
-  allowed={'scripts/a04br3-verify-recorded-fd.py','scripts/tests/test_recorded_fd_validation.py','scripts/a04br3-recorded-diagnostic-payload.py','scripts/a04br3-prepare-diagnostic-gpu.py','scripts/tests/test_prepare_diagnostic_gpu.py','scripts/tests/test_recorded_diagnostic_payload.py','scripts/a04br3-recorded-diagnostic-boot.py'}
+  allowed={'scripts/a04br3-verify-recorded-fd.py','scripts/tests/test_recorded_fd_validation.py','scripts/a04br3-recorded-diagnostic-payload.py','scripts/a04br3-prepare-diagnostic-gpu.py','scripts/tests/test_prepare_diagnostic_gpu.py','scripts/tests/test_recorded_diagnostic_payload.py','scripts/a04br3-recorded-diagnostic-boot.py','scripts/summarize-pmu-context.py','scripts/tests/test_pmu_context.py'}
   if not changed or not changed.issubset(allowed):raise ValueError('device changes since kernel build affect its source')
  for repo in (root,device,device/'drivers/ArmCpu'):
   if git(repo,'status','--porcelain','--untracked-files=no','--ignore-submodules=all'):raise ValueError('tracked source changes: '+str(repo))
