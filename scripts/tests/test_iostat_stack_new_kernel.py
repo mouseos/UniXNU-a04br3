@@ -18,6 +18,9 @@ class NewKernelContracts(unittest.TestCase):
         line = 'serial=1 a04br3-home-perf=1 pl=1 native-msdc-iostat=1'
         self.assertEqual(BUILD.rewrite_args(line), 'serial=1 pl=60 native-msdc-iostat=1 a04br3-stacklog=1')
         self.assertEqual(BUILD.rewrite_args(line, stream=True), 'serial=1 pl=60 native-msdc-iostat=1 a04br3-stacklog=1 native-cs-stream=1')
+        self.assertEqual(BUILD.rewrite_args(line, meter=True), 'serial=1 a04br3-home-perf=1 pl=60 native-msdc-iostat=1 cm=1')
+        with self.assertRaises(ValueError): BUILD.rewrite_args(line, stream=True, meter=True)
+        with self.assertRaises(ValueError): BUILD.rewrite_args(line + ' cm=0', meter=True)
         with self.assertRaises(ValueError): BUILD.rewrite_args(line + ' native-cs-stream=0', stream=True)
         with self.assertRaises(ValueError): BUILD.rewrite_args('serial=1 a04br3-home-perf=1 pl=1')
 

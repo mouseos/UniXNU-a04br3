@@ -25,7 +25,7 @@ OLD_SOURCE = 'e8f5385e4cee02bb15efa2fb97c20bb59b98d72f'
 KERNEL_SOURCE = '22146ccf1721db40f53e35f1afb1d745819f4735'
 SEED_PROVENANCE_SHA256 = '486b9a968e624145697966194c83de6bd782f6d6ce3c68257f0ec955f28e3756'
 OLD_DEVICE = '8fde8ba87486338342f3be528823cb46394f2c5b'
-NEW_DEVICE = '78d2c29a2a8122df2b0ae4809619c96ade662f5a'
+NEW_DEVICE = '2066e1832a770a7c64cda79f9b03d953bcd04752'
 UEFI = 'd3d4f28a89b29553ede7d7523c6af86d7e2459e8'
 FIXED = ('scratch-data.img', 'kernel.macho.trustcache', 'kernel.macho.gpuaddon')
 BOOT_MAGIC = b'ANDROID!'
@@ -224,16 +224,18 @@ def check_owner_seed(record, provenance, old_kernel, new_kernel, scratch_sha):
     return expected
 
 
-def rewrite_args(line, stream=False):
+def rewrite_args(line, stream=False, meter=False):
     words = line.split(); keys = [word.partition('=')[0] for word in words]
     if len(keys) != len(set(keys)): raise ValueError('duplicate kernel argument keys')
     values = {word.partition('=')[0]: word.partition('=')[2] for word in words if '=' in word}
     if values.get('pl') != '1' or 'a04br3-home-perf' not in values or values.get('native-msdc-iostat') != '1':
         raise ValueError('baseline arguments are not the expected iostat stack profile')
-    changed = [('pl=60' if word.startswith('pl=') else word) for word in words if not word.startswith('a04br3-home-perf=')]
+    if stream and meter: raise ValueError('meter and stream trials must be separate')
+    if meter and 'cm' in keys: raise ValueError('unexpected existing meter argument')
+    changed = [('pl=60' if word.startswith('pl=') else word) for word in words if meter or not word.startswith('a04br3-home-perf=')]
     if 'a04br3-stacklog' in keys:
         raise ValueError('unexpected existing stacklog argument')
-    changed.append('a04br3-stacklog=1')
+    changed.append('cm=1' if meter else 'a04br3-stacklog=1')
     if stream:
         if 'native-cs-stream' in keys: raise ValueError('unexpected existing stream argument')
         changed.append('native-cs-stream=1')
@@ -258,6 +260,7 @@ def main():
     for name in ('source', 'old-device', 'new-device', 'uefi', 'old-boot', 'old-pair', 'kernel', 'kernel-record', 'fd', 'out', 'seed-provenance'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--stream', action='store_true', help='enable the opt-in native4k streaming trial')
+    parser.add_argument('--meter', action='store_true', help='enable the separate opt-in clock meter trial')
     args = parser.parse_args(); source, old_device, new_device, uefi, old_boot, old_pair, kernel, record_path, fd, out, seed_provenance = (getattr(args, name.replace('-', '_')).resolve() for name in ('source','old_device','new_device','uefi','old_boot','old_pair','kernel','kernel_record','fd','out','seed_provenance'))
     check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, NEW_DEVICE); check_repo(uefi, UEFI)
     if out.exists(): raise ValueError('refuse to overwrite output')
@@ -269,7 +272,7 @@ def main():
     if sha(fd) != declared['fd'] or not dtb.is_file() or sha(dtb) != declared['dtb']: raise ValueError('FD/DTB pin mismatch with old pair')
     original_args = pair.get('variants', {}).get('baseline', {}).get('kernel_args')
     if not isinstance(original_args, str): raise ValueError('old pair lacks baseline kernel args')
-    rewritten = rewrite_args(original_args, stream=args.stream)
+    rewritten = rewrite_args(original_args, stream=args.stream, meter=args.meter)
     stage = Path(tempfile.mkdtemp(prefix='.' + out.name + '.', dir=out.parent))
     try:
         source_payload, old_dir, new_dir = stage/'old.img', stage/'old', stage/'new'
@@ -312,7 +315,7 @@ def main():
         boot_payload = stage/'boot-payload.img'; boot_ramdisk(output_boot, boot_payload)
         if sha(boot_payload) != sha(image): raise ValueError('output boot FAT differs from new payload')
         check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, NEW_DEVICE); check_repo(uefi, UEFI)
-        report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'native_cs_stream': bool(args.stream), 'owner_data_volume_uuid': data_uuid, 'seed_provenance_sha256': sha(seed_provenance), 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
+        report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'native_cs_stream': bool(args.stream), 'clock_meter': bool(args.meter), 'owner_data_volume_uuid': data_uuid, 'seed_provenance_sha256': sha(seed_provenance), 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
         shutil.copyfile(image, stage/'payload.img'); (stage/'manifest.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')
         for path in (stage/'work', stage/'boot-work', old_dir, new_dir): shutil.rmtree(path)
         source_payload.unlink(); boot_payload.unlink(); (stage/'old.toml').unlink(); (stage/'new.toml').unlink(); stage.rename(out)
