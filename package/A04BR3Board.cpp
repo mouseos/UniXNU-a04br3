@@ -38,6 +38,7 @@ void a04br3_registers_init(void);
 void a04br3_gpu_init(void);
 void boot_memory_snapshot(uint64_t out[7]);
 void boot_home_perf_sample(void);
+void boot_all_task_sample(void);
 void boot_home_irq_init(unsigned);
 void boot_live_pc_init(unsigned);
 void boot_live_pc_report(void);
@@ -166,6 +167,17 @@ constexpr unsigned kProcAll = 0x1;       // PROC_ALLPROCLIST
 constexpr int kProcReturned = 0;         // PROC_RETURNED
 struct ProcLine { char text[480]; unsigned used; unsigned count; };
 unsigned gProcLogSeconds;
+unsigned gAllTaskSeconds;
+
+// This worker alone owns the all-task sampler's static rows. A traversal can
+// block in proc_find even with PROC_NOWAITTRANS; never run it on the heartbeat.
+void allTaskThread(void *, wait_result_t)
+{
+  for (;;) {
+    IOSleep(gAllTaskSeconds * 1000u);
+    boot_all_task_sample();
+  }
+}
 
 void procFlush(ProcLine &line)
 {
@@ -449,6 +461,19 @@ static void a04br3_proclog_init(void)
   if (!gProcLogSeconds) return;
   thread_t thread;
   if (kernel_thread_start(procLogThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+  unsigned allTaskPerf = 0;
+  PE_parse_boot_argn("atp", &allTaskPerf, sizeof(allTaskPerf));
+  if (allTaskPerf == 1 && gProcLogSeconds > (~0u / 1000u)) {
+    IOLog("a04br3 alltask worker disabled: period too large (%u seconds)\n", gProcLogSeconds);
+    return;
+  }
+  static unsigned allTaskStarted;
+  unsigned expected = 0;
+  if (allTaskPerf == 1 && __atomic_compare_exchange_n(&allTaskStarted, &expected, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    gAllTaskSeconds = gProcLogSeconds;
+    if (kernel_thread_start(allTaskThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+    else { __atomic_store_n(&allTaskStarted, 0, __ATOMIC_RELEASE); IOLog("a04br3 alltask worker start failed\n"); }
+  }
 }
 
 static void a04br3_cpu_load_thread(void *, wait_result_t)

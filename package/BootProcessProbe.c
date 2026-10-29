@@ -291,6 +291,49 @@ void boot_home_perf_sample(void) {
  }
 }
 
+// One dedicated worker owns these rows. Capture only scalar counters in the
+// proc callout; formatting and UART output happen after traversal finishes.
+#define ALL_TASK_MAX 256u
+struct all_task_row {
+ char name[24]; int pid; unsigned available;
+ uint64_t uniqueid, cpu_ticks, cpu_at, resident, compressed, footprint;
+};
+static struct all_task_row all_task_rows[ALL_TASK_MAX];
+static unsigned all_task_count, all_task_overflow;
+static uint64_t all_task_epoch;
+static int all_task_capture(proc_t p, void *unused) {
+ (void)unused;
+ if (all_task_count == ALL_TASK_MAX) { ++all_task_overflow; return PROC_RETURNED; }
+ struct all_task_row *r=&all_task_rows[all_task_count++];
+ memset(r,0,sizeof(*r));
+ r->pid=proc_pid(p);r->uniqueid=proc_uniqueid(p);
+ strlcpy(r->name,proc_best_name(p),sizeof(r->name));
+ task_t task=proc_task(p);
+ if (!task) return PROC_RETURNED;
+ r->available=1;
+ r->cpu_ticks=get_task_cpu_time(task);r->cpu_at=mach_absolute_time();
+ r->resident=get_task_resident_size(task);
+ r->compressed=get_task_compressed(task);r->footprint=get_task_phys_footprint(task);
+ return PROC_RETURNED;
+}
+void boot_all_task_sample(void) {
+ all_task_count=all_task_overflow=0;
+ uint64_t start=mach_absolute_time(),end,epoch=++all_task_epoch,start_ns=0,end_ns=0;
+ proc_iterate(PROC_ALLPROCLIST|PROC_NOWAITTRANS,all_task_capture,NULL,NULL,NULL);
+ end=mach_absolute_time();
+ absolutetime_to_nanoseconds(start,&start_ns);absolutetime_to_nanoseconds(end,&end_ns);
+ printf("a04br3 alltask epoch=%llu start_ns=%llu end_ns=%llu rows=%u overflow=%u snapshot=nonatomic\n",
+  (unsigned long long)epoch,(unsigned long long)start_ns,(unsigned long long)end_ns,all_task_count,all_task_overflow);
+ for (unsigned i=0;i<all_task_count;++i) {
+  struct all_task_row *r=&all_task_rows[i];uint64_t cpu=0,at=0;
+  if (r->available) { absolutetime_to_nanoseconds(r->cpu_ticks,&cpu);absolutetime_to_nanoseconds(r->cpu_at,&at); }
+  printf("a04br3 alltask task epoch=%llu pid=%d uid=%llu name=%.23s available=%u cpu_ns=%llu cpu_at_ns=%llu resident=%llu compressed=%llu footprint=%llu\n",
+   (unsigned long long)epoch,r->pid,(unsigned long long)r->uniqueid,r->name,r->available,
+   (unsigned long long)cpu,(unsigned long long)at,(unsigned long long)r->resident,
+   (unsigned long long)r->compressed,(unsigned long long)r->footprint);
+ }
+}
+
 // Optional timer-IRQ PC histogram. Called by the generic, compile-gated XNU
 // timer hook with interrupts masked. Bounded atomics only: no allocation,
 // waiting, stack walk or logging. A single try-lock drops contended samples.

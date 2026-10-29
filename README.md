@@ -212,6 +212,22 @@ command require the physical Home mapping.
 
 `a04br3-proclog=60` gives a compact process/display heartbeat. Add `a04br3-stacklog=1`
 only when full UI thread stacks are needed; they are disabled during ordinary use.
+Add `atp=1` and a nonzero process-log period to start a separate, single
+all-process CPU and memory sampling worker. It sleeps for that period after
+each completed sample, so traversal and output time extend the interval. It
+rejects periods above 4,294,967 seconds to avoid millisecond overflow and logs
+that the worker was disabled; the existing heartbeat startup is unchanged. It
+captures at most 256 rows, reporting overflow and unavailable tasks. The
+`PROC_NOWAITTRANS` flag skips the transition wait; `proc_find` can still wait
+for an exec and block this worker. Processes in transitions may be skipped.
+This worker is independent of the heartbeat; existing heartbeat diagnostics
+can themselves wait on process traversal. Each row reports PID,
+unique ID, name, cumulative CPU time and its timestamp in nanoseconds, plus
+resident, compressed and footprint bytes. Match PID and unique ID across samples
+and divide CPU time differences by timestamp differences to estimate cores used;
+the snapshot and its counters are non-atomic. UART output and traversal add
+overhead, especially with many processes. Without a nonzero process-log period
+there is no sampling; values other than `atp=1` leave it disabled.
 `a04br3-input-selftest=<seconds>` enables one synthetic swipe for unattended input
 tests. It is disabled in the board defaults so it does not interfere with real fingers.
 The first 32 contacts log their HID report count and return code as well as coordinates.
