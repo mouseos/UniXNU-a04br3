@@ -20,6 +20,8 @@ class PanicWatchdogTest(unittest.TestCase):
 #include <cstdint>
 #include <vector>
 #include <utility>
+#include "A04BR3WatchdogGate.h"
+A04BR3WatchdogGate gWatchdogGate = {};
 struct ResetStopped {};
 enum { kPEHaltCPU=0, kPERestartCPU=1, kPEHangCPU=2,
  kPEUPSDelayHaltCPU=3, kPEPanicRestartCPU=4, kPEPanicSync=5,
@@ -94,6 +96,7 @@ int main() {
             binary = Path(tmp) / 'panic'
             cpp.write_text(prelude + block + tests)
             subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror',
+                            '-I', str(SOURCE.parent),
                             '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                             '-fno-pie', '-no-pie', str(cpp), '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True)

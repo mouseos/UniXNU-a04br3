@@ -23,6 +23,7 @@
 //    (iokit/Kernel/arm/A04BR3Restart.h), which ran on this tablet.
 #include <IOKit/IOLib.h>
 #include "A04BR3RegisterLock.h"
+#include "A04BR3WatchdogGate.h"
 #include <IOKit/IOPlatformExpert.h>
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
@@ -47,6 +48,8 @@ volatile uint32_t a04br3_runtime_probe_active = 0;
 }
 
 namespace {
+
+A04BR3WatchdogGate gWatchdogGate = {};
 
 constexpr uint64_t kPwrap = 0x1000F000, kToprgu = 0x10007000, kUart0 = 0x11005000;
 constexpr unsigned kUartRbr = 0x00, kUartLsr = 0x14;   // 32-bit register spacing
@@ -182,7 +185,7 @@ bool panicObserved(void)
 
 void watchdogKick(void)
 {
-  if (!panicObserved() && !__atomic_load_n(&a04br3_runtime_probe_active, __ATOMIC_ACQUIRE)) wr(gToprgu, kWdtRestart, 0x1971);
+  gWatchdogGate.feed(&a04br3_runtime_probe_active, !panicObserved(), [] { wr(gToprgu, kWdtRestart, 0x1971); });
 }
 
 void resetNow(void)
@@ -322,6 +325,15 @@ void cycleThread(void *, wait_result_t)
 
 }  // namespace
 
+extern "C" bool a04br3_runtime_probe_begin(void)
+{
+  return gWatchdogGate.begin(&a04br3_runtime_probe_active);
+}
+extern "C" void a04br3_runtime_probe_end(void)
+{
+  __atomic_store_n(&a04br3_runtime_probe_active, 0U, __ATOMIC_RELEASE);
+}
+
 // The lock coordinates known board WACS2 users, not EL2/EL3 or firmware.
 // This is a fresh observation, not a lease over the RTC or watchdog.
 extern "C" bool a04br3_runtime_recovery_recheck(void)
@@ -329,7 +341,8 @@ extern "C" bool a04br3_runtime_recovery_recheck(void)
   if (!gToprgu || !gPwrap || !__atomic_load_n(&a04br3_runtime_recovery_ready, __ATOMIC_ACQUIRE)) return false;
   uint32_t rtc = 0;
   if (!wacs(false, kRtcPdn1, 0, &rtc) || !(rtc & kRtcPdn1Fastboot)) return false;
-  return (rd(gToprgu, kWdtMode) & 0x5dU) == 0x15U;
+  return (rd(gToprgu, kWdtMode) & 0x5dU) == 0x15U &&
+         (rd(gToprgu, kWdtLength) & 0xffe0U) == ((kWatchdogSeconds << 11) & 0xffe0U);
 }
 
 extern "C" void a04br3_autoreset_init(void)
