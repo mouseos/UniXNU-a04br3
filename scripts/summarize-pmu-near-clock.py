@@ -15,7 +15,9 @@ def summarize(raw, timeline):
     if not isinstance(size,int) or not isinstance(first,int) or not 0<first<=size<=len(raw): raise ValueError('invalid snapshot/boot bounds')
     snapshot=raw[:size]; first_raw=snapshot[:first]
     if hashlib.sha256(snapshot).hexdigest()!=timeline.get('snapshot_sha256') or hashlib.sha256(first_raw).hexdigest()!=timeline.get('first_boot_sha256'): raise ValueError('raw/timeline hash mismatch')
-    if timeline.get('issues'): raise ValueError('timeline has unresolved issues')
+    # Preserve incomplete/unsafe timeline failures while still reporting the
+    # individual successful windows; they must never become an overall pass.
+    for problem in timeline.get('issues',[]): issues.append('timeline: '+str(problem))
     for line in first_raw.decode('utf-8','replace').splitlines():
         if 'a04br3 cpu-near-clock ' not in line: continue
         m=PATTERN.search(line)

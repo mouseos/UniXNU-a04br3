@@ -20,4 +20,7 @@ class NearTests(unittest.TestCase):
  def test_uart_append(self):
   b=(line(0,11,12)+line(1,90,91)).encode();t={'snapshot_sha256':hashlib.sha256(b).hexdigest(),'snapshot_bytes':len(b),'first_boot_bytes':len(b),'first_boot_sha256':hashlib.sha256(b).hexdigest(),'records':[{'round':0,'cpu':0,'status':0,'begin':10,'end':100,'min_ticks':80}]}
   self.assertFalse(m.summarize(b+b'new boot',t)['issues'])
+ def test_incomplete_timeline_keeps_values_but_fails(self):
+  b=(line(0,11,12)+line(1,90,91)).encode();t={'snapshot_sha256':hashlib.sha256(b).hexdigest(),'snapshot_bytes':len(b),'first_boot_bytes':len(b),'first_boot_sha256':hashlib.sha256(b).hexdigest(),'issues':['one skip'],'records':[{'round':0,'cpu':0,'status':0,'begin':10,'end':100,'min_ticks':80}]}
+  result=m.summarize(b,t);self.assertEqual(len(result['records']),1);self.assertIn('timeline: one skip',result['issues'])
 if __name__=='__main__':unittest.main()
