@@ -7,7 +7,7 @@ software identity secret, not an extracted device calibration value. Never
 use this diagnostic payload as a distribution image: runtime per-device
 identity acquisition remains a separate requirement.
 """
-import argparse,hashlib,json,os,pathlib,subprocess,sys,uuid
+import argparse,hashlib,importlib.util,json,os,pathlib,subprocess,sys,tempfile,uuid
 
 def sha(path):
  h=hashlib.sha256()
@@ -15,7 +15,7 @@ def sha(path):
   for block in iter(lambda:f.read(1048576),b''):h.update(block)
  return h.hexdigest()
 def checked_args(line):
- args=line.split(); required=('sheng-smp=1','cc=1','gi=6','gs=1','native-io-trace=1')
+ args=line.split(); required=('sheng-smp=1','cc=1','gi=6','gs=1','native-io-trace=1','sheng-gpu-addon=1','a04br3-gpu-metal=1','sheng-fb-gpu=1')
  if len(line.encode())+1>1024 or any(args.count(x)!=1 for x in required):raise ValueError('required boot arguments or length invalid')
  forbidden=('armcpu-cycle-clock','armcpu-runtime-cycle','arc','a04br3-gpu-stage','a04br3-gio','a04br3-gpu-io-trace')
  if any(any(t.split('=',1)[0]==n for t in args) for n in forbidden):raise ValueError('conflicting long or runtime diagnostic argument')
@@ -45,12 +45,15 @@ def main():
  if kernel_device!=revision:
   subprocess.run(['git','-C',str(device),'merge-base','--is-ancestor',kernel_device,revision],check=True)
   changed=set(git(device,'diff','--name-only',kernel_device,revision).splitlines())
-  allowed={'scripts/a04br3-verify-recorded-fd.py','scripts/tests/test_recorded_fd_validation.py','scripts/a04br3-recorded-diagnostic-payload.py'}
+  allowed={'scripts/a04br3-verify-recorded-fd.py','scripts/tests/test_recorded_fd_validation.py','scripts/a04br3-recorded-diagnostic-payload.py','scripts/a04br3-prepare-diagnostic-gpu.py','scripts/tests/test_prepare_diagnostic_gpu.py','scripts/tests/test_recorded_diagnostic_payload.py'}
   if not changed or not changed.issubset(allowed):raise ValueError('device changes since kernel build affect its source')
  for repo in (root,device,device/'drivers/ArmCpu'):
   if git(repo,'status','--porcelain','--untracked-files=no','--ignore-submodules=all'):raise ValueError('tracked source changes: '+str(repo))
+ scratch=tempfile.TemporaryDirectory(prefix='a04br3-recorded-gpu-')
+ spec=importlib.util.spec_from_file_location('diagnostic_gpu',device/'scripts/a04br3-prepare-diagnostic-gpu.py');gpu=importlib.util.module_from_spec(spec);spec.loader.exec_module(gpu)
+ addon=pathlib.Path(scratch.name)/'gpuaddon';gpu_record=gpu.prepare(root,runner,addon)
  env=dict(os.environ,UNIXNU_UNIQUE_CHIP_ID=identity)
- cmd=[str(root/'unixnu'),'build','payload','-D',str(device),'--out',str(out),'--kernel',str(kernel),'--data-ramdisk',str(data),'--owner-trust-cache',str(trust)]
+ cmd=[str(root/'unixnu'),'build','payload','-D',str(device),'--out',str(out),'--kernel',str(kernel),'--data-ramdisk',str(data),'--owner-trust-cache',str(trust),'--gpu-addon',str(addon)]
  for v in ('sheng-fb-gpu=1','a04br3-charger-owner=1','sheng-vsync=60','vm_compressor=2','a04br3-home-perf=1','pl=1','gi=6','gs=1','cc=1','native-msdc-irq=1','a04br3-gpu-clock=380','native-io-trace=1','debug=334','a04br3-autoreset=720'):cmd+=['--kernel-arg='+v]
  for v in ('a04br3-stacklog','boot-ui-focus3','boot-ui-focus4','a04br3-gpu-packet','offline-hid-auto-home-count','offline-hid-auto-home','a04br3-powervrprobed','-no_corpses','-v','a04br3-proclog'):cmd+=['--omit-kernel-arg='+v]
  # UniXNU logs its ADT generator command. Keep the workflow identity out of
@@ -62,10 +65,18 @@ def main():
    sys.stdout.write(line);sys.stdout.flush()
   if process.wait():raise RuntimeError('official payload build failed')
  p=out/'a04br3/payload';meta=json.loads((p/'payload.json').read_text());length=checked_args(meta['kernel_args'])
- adt=p/'stage/EFI/UniXNU/Payloads/kernel.macho.adt';payload=p/'payload.img'
- for key,file in (('kernel_sha256',kernel),('data_ramdisk_sha256',data),('trust_cache_sha256',trust),('adt_sha256',adt),('payload_sha256',payload)):
+ payload=p/'payload.img'
+ for key,file in (('kernel_sha256',kernel),('data_ramdisk_sha256',data),('trust_cache_sha256',trust),('gpu_addon_sha256',addon),('payload_sha256',payload)):
   if meta[key]!=sha(file):raise ValueError('generated artifact hash mismatch: '+key)
+ # The official builder removes stage after writing FAT. Verify what it wrote,
+ # rather than relying on files that no longer exist on disk.
+ extracted=pathlib.Path(scratch.name)/'extracted';extracted.mkdir()
+ for name,key in (('kernel.macho.adt','adt_sha256'),('kernel.macho','payload_kernel_sha256'),('kernel.macho.gpuaddon','gpu_addon_sha256'),('kernel.macho.trustcache','trust_cache_sha256'),('scratch-data.img','data_ramdisk_sha256')):
+  target=extracted/name
+  subprocess.run(['mcopy','-i',str(payload),'::/EFI/UniXNU/Payloads/'+name,str(target)],check=True,stdout=subprocess.DEVNULL)
+  if sha(target)!=meta[key]:raise ValueError('FAT payload file hash mismatch: '+name)
+ adt_sha=meta['adt_sha256']
  if git(root,'rev-parse','HEAD')!=source or git(device,'rev-parse','HEAD')!=revision:raise ValueError('source changed during payload build')
- record={'schema':1,'purpose':'device-diagnostic-only; not a distributable image','source_commit':source,'kernel_device_commit':kernel_device,'packaging_device_commit':revision,'kernel_provenance_sha256':sha(args.kernel_manifest),'armcpu_commit':arm,'generated_adt_sha256':sha(adt),'kernel_sha256':sha(kernel),'data_sha256':sha(data),'data_seed_manifest_sha256':sha(seed),'trust_sha256':sha(trust),'payload_sha256':sha(payload),'kernel_args':meta['kernel_args'],'kernel_args_bytes_with_nul':length,'software_identity_source':'workflow secret, generated ADT; value omitted','hardware_tested':False}
+ record={'schema':1,'purpose':'device-diagnostic-only; not a distributable image','source_commit':source,'kernel_device_commit':kernel_device,'packaging_device_commit':revision,'kernel_provenance_sha256':sha(args.kernel_manifest),'armcpu_commit':arm,'generated_adt_sha256':adt_sha,'kernel_sha256':sha(kernel),'data_sha256':sha(data),'data_seed_manifest_sha256':sha(seed),'trust_sha256':sha(trust),'gpu':gpu_record,'payload_sha256':sha(payload),'kernel_args':meta['kernel_args'],'kernel_args_bytes_with_nul':length,'software_identity_source':'workflow secret, generated ADT; value omitted','hardware_tested':False}
  (out/'diagnostic-payload-manifest.json').write_text(json.dumps(record,indent=2)+'\n');print('Recorded diagnostic payload:',payload)
 if __name__=='__main__':main()
