@@ -11,6 +11,17 @@ result = module.profiles(source)
 assert result['batch'] == result['baseline'] + ' native-cs-read-batch=1'
 assert result['baseline'].endswith(' native-root-timing=1')
 assert all(x not in result['baseline'].split() for x in module.OMIT)
+# The ARM64 command line has 1024 bytes including the terminating NUL.
+prefix = source+' x='
+length = len(module.profiles(prefix)['batch'])
+boundary = prefix + 'a' * (1023-length)
+assert len(module.profiles(boundary)['batch'].encode('ascii')) == 1023
+try:
+    module.profiles(boundary+'a')
+except ValueError:
+    pass
+else:
+    raise AssertionError('1024-byte string accepted')
 for invalid in (source.replace('mb=2', ''), source+' mb=2', source+' native-cs-coalesce=1',
                 source+' ecb=0', source+' mb=0', source+' native-io-trace=0', source+' a04br3-gio=0',
                 source+' native-cs-read-batch=0', source+' native-root-timing=1', source+' x='+('a'*1024)):
