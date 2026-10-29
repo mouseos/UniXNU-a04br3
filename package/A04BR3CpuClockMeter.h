@@ -9,7 +9,7 @@
 // A local lock cannot exclude firmware or an external debug agent.
 struct A04BR3CpuMeterResult {
   unsigned status; // 0 candidate, 1 busy, 2 precondition, 3 reset, 4 conflict, 5 zero, 6 restore, 7 changed, 8 unsettled
-  uint32_t ctrl, debug, hopping, mux, dcm, pll0, pll1, power, baseline, count;
+  uint32_t ctrl, debug, hopping, plltest, mux, dcm, pll0, pll1, power, baseline, count;
   uint64_t khz;
 };
 
@@ -22,12 +22,16 @@ template<class IO> static A04BR3CpuMeterResult a04br3_cpu_meter(IO &io)
   A04BR3CpuMeterResult r = {};
   if (!io.lock()) { r.status = 1; return r; }
   struct Release { IO &io; ~Release() { io.unlock(); } } release{io};
-  r.ctrl = io.top(0x10); r.debug = io.top(0x38); r.hopping = io.pll(0x14);
+  r.ctrl = io.top(0x10); r.debug = io.top(0x38); r.hopping = io.pll(0x14); r.plltest = io.pll(0x64);
   r.mux = io.infra(0); r.dcm = io.infra(0x14); r.pll0 = io.pll(0x100);
   r.pll1 = io.pll(0x104); r.power = io.pll(0x110);
   // Reject configured/busy meters and any condition under which the debug
   // signal or CPU parent may not correspond to the unmodified ARMPLL.
-  if (r.ctrl != 0 || (r.debug & 0xffU) != 0 || r.hopping != 0 ||
+  // MT8167 Linux maps ARMCA7 PLL to FHCTL bit 0; other bits are never written.
+  // Require the vendor clkdbg test-route setting; no test or PLL register writes.
+  // This condition is conservative: it does not establish the route or the
+  // core clock, and other owners remain unexcluded.
+  if (r.ctrl != 0 || (r.debug & 0xffU) != 0 || (r.hopping & 1U) != 0 || (r.plltest & 0x3ffU) != 0x287U ||
       ((r.mux >> 2) & 3U) != 1 || (r.dcm & 1U) || !(r.pll0 & 1U) ||
       !(r.power & 1U) || (r.power & 2U)) { r.status = 2; return r; }
   // Only write the meter control, and restore the known idle value 0. Refuse
@@ -52,7 +56,7 @@ template<class IO> static A04BR3CpuMeterResult a04br3_cpu_meter(IO &io)
   if (io.top(0x10) != (1U << 14)) { r.status = 6; return r; }
   io.write(0x10, 0);
   if (io.top(0x10) != 0) { r.status = 6; return r; }
-  if (io.top(0x38) != r.debug || io.pll(0x14) != r.hopping ||
+  if (io.top(0x38) != r.debug || io.pll(0x14) != r.hopping || io.pll(0x64) != r.plltest ||
       io.infra(0) != r.mux || io.infra(0x14) != r.dcm ||
       io.pll(0x100) != r.pll0 || io.pll(0x104) != r.pll1 ||
       io.pll(0x110) != r.power) { r.status = 7; return r; }

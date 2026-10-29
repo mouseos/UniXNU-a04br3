@@ -344,8 +344,8 @@ void cpuDiagnosticReport()
       if (a04br3_cpu_meter_requires_recovery(r.status)) gCpuMeterQuarantined = true;
       else __atomic_store_n(&a04br3_runtime_probe_active, 0U, __ATOMIC_RELEASE);
       uint64_t at; absolutetime_to_nanoseconds(mach_absolute_time(), &at);
-      IOLog("a04br3 cpu-fmeter at_ns=%llu status=%u count=%u armpll_khz=%llu ref_khz=26000 window=520 mux=%08x dcm=%08x debug=%08x hop=%08x ctrl=%08x baseline=%08x pll0=%08x pll1=%08x power=%08x core_hz_unverified=1 external_owner_unverified=1 completion_unverified=1 recovery_unverified=1\n",
-            at, r.status, r.count, r.khz, r.mux, r.dcm, r.debug, r.hopping, r.ctrl, r.baseline, r.pll0, r.pll1, r.power);
+      IOLog("a04br3 cpu-fmeter at_ns=%llu status=%u count=%u armpll_khz=%llu ref_khz=26000 window=520 mux=%08x dcm=%08x debug=%08x hop=%08x test=%08x ctrl=%08x baseline=%08x pll0=%08x pll1=%08x power=%08x core_hz_unverified=1 external_owner_unverified=1 completion_unverified=1 recovery_unverified=1\n",
+            at, r.status, r.count, r.khz, r.mux, r.dcm, r.debug, r.hopping, r.plltest, r.ctrl, r.baseline, r.pll0, r.pll1, r.power);
     }
   }
   IOLog("a04br3 perf irq counters timer=%u/%u/%u/%u ipi=%u/%u/%u/%u (per-core cumulative; non-atomic)\n",
