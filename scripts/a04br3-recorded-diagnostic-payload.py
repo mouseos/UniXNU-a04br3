@@ -16,7 +16,7 @@ def sha(path):
  return h.hexdigest()
 def checked_args(line, runtime_window=False, pmuv3_active=False, runtime_repeat=False):
  args=line.split(); required=('sheng-smp=1','cc=1','gi=6','gs=1','native-io-trace=1','sheng-gpu-addon=1','a04br3-gpu-metal=1','sheng-fb-gpu=1')
- if len(line.encode())+1>1024 or any(args.count(x)!=1 for x in required):raise ValueError('required boot arguments or length invalid')
+ if len(line.encode())+1>1024 or any(args.count(x)!=1 or sum(t.split('=',1)[0]==x.split('=',1)[0] for t in args)!=1 for x in required):raise ValueError('required boot arguments or length invalid')
  forbidden=('armcpu-cycle-clock','armcpu-runtime-cycle','arc','a04br3-gpu-stage','a04br3-gio','a04br3-gpu-io-trace')
  if any(any(t.split('=',1)[0]==n for t in args) for n in forbidden):raise ValueError('conflicting long or runtime diagnostic argument')
  window=[t for t in args if t.split('=',1)[0] in ('arw','armcpu-runtime-window')]

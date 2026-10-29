@@ -30,3 +30,7 @@ for line,window,active,repeat in ((good+' arw=1 aq=1',True,True,True),(good+' ar
  except ValueError:pass
  else:raise AssertionError('invalid repeat flags accepted')
 print('PASS explicit repeated active sampling arguments')
+
+try:m.checked_args(good+' gs=0 arw=2 aq=1',True,True,True)
+except ValueError:pass
+else:raise AssertionError('conflicting required boot key accepted')
