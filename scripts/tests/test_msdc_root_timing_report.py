@@ -18,6 +18,7 @@ options = src[src.index('void procLogOptions('):src.index('void procLogThread(')
 assert 'PE_parse_boot_argn("native-root-timing", &rootTiming, sizeof(rootTiming))' in options
 assert 'PE_parse_boot_argn("native-io-trace", &overlapTrace, sizeof(overlapTrace))' in thread
 assert 'if (overlapTrace == 1 && native_cs_trace_report) native_cs_trace_report();' in thread
+assert 'CS overlap unavailable: kernel trace not built' in thread
 assert 'msdcRootTimingReport(rootTiming)' in thread
 assert 'native_root_timing_snapshot' not in src[src.index('void unixnu_board_init('):]
 

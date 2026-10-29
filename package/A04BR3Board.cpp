@@ -336,6 +336,7 @@ void procLogThread(void *, wait_result_t)
   unsigned perf, rootTiming, msdcPerf, overlapTrace = 0;
   procLogOptions(perf, rootTiming, msdcPerf);
   PE_parse_boot_argn("native-io-trace", &overlapTrace, sizeof(overlapTrace));
+  if (overlapTrace == 1 && !native_cs_trace_report) IOLog("CS overlap unavailable: kernel trace not built\n");
   uint64_t cacheReportSeconds = 0;
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
