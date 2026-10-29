@@ -23,7 +23,11 @@ static int proc_pid(proc_t p) { return p->pid; }
 static uint64_t proc_uniqueid(proc_t p) { return 10000 + p->pid; }
 static const char *proc_best_name(proc_t p) { return p->name; }
 static task_t proc_task(proc_t p) { return p->task; }
-static unsigned strlcpy(char *d,const char *s,unsigned n) { snprintf(d,n,"%s",s); return strlen(s); }
+#ifdef strlcpy
+#undef strlcpy
+#endif
+#define strlcpy test_strlcpy
+static unsigned test_strlcpy(char *d,const char *s,unsigned n) { snprintf(d,n,"%s",s); return strlen(s); }
 static uint64_t get_task_cpu_time(task_t t) { return 100 + t->n; }
 static uint64_t get_task_resident_size(task_t t) { return 200 + t->n; }
 static uint64_t get_task_compressed(task_t t) { return 300 + t->n; }
