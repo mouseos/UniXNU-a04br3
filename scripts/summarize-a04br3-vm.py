@@ -3,7 +3,8 @@
 import argparse,hashlib,json,re,sys
 from pathlib import Path
 ANCHOR=b'[pmic6392_init] Preloader Start'
-REASON=re.compile(rb'(?im)^[ \t]*(?:\[[ \t]*[0-9]+[ \t]*\][ \t]*)?BOOT_REASON[ \t]*[:=][ \t]*(?:0[xX][0-9a-fA-F]{1,16}|[0-9]{1,20})[ \t\r]*\n')
+REASON_MARK=re.compile(rb'(?im)^[ \t]*(?:\[[ \t]*[0-9]+[ \t]*\][ \t]*)?BOOT_REASON[ \t]*[:=]')
+REASON=re.compile(rb'(?im)^[ \t]*(?:\[[ \t]*[0-9]+[ \t]*\][ \t]*)?BOOT_REASON[ \t]*[:=][ \t]*(0[xX][0-9a-fA-F]{1,16}|[0-9]{1,20})[ \t\r]*\n')
 VM=re.compile(rb'a04br3 perf vm pagesize=(\d+) free=(\d+) active=(\d+) inactive=(\d+) wired=(\d+) compressor=(\d+) speculative=(\d+) throttled=(\d+) pageable_internal=(\d+) pageable_external=(\d+) mode=(-?\d+) active_compressor=(\d+) active_swap=(\d+)')
 SAMPLE=re.compile(rb'a04br3 perf sample ns=(\d+) tasks=(\d+)')
 FIELDS=('pagesize','free','active','inactive','wired','compressor','speculative','throttled','pageable_internal','pageable_external','mode','active_compressor','active_swap')
@@ -11,10 +12,12 @@ def parse(data,expected):
  if not re.fullmatch(r'[0-9a-f]{64}',expected) or hashlib.sha256(data).hexdigest()!=expected:raise ValueError('source SHA-256 mismatch')
  if not data.startswith(ANCHOR) or data.count(ANCHOR)!=1 or data.count(b'[BLDR] Build Time:')!=1:raise ValueError('single preloader and BLDR required')
  lines=data.split(b'\n');pending=None;out=[];last_time=-1;first_vm=data.find(b'a04br3 perf vm')
- if first_vm<0 or not any(m.start()<first_vm for m in REASON.finditer(data)):raise ValueError('missing preloader reason before VM sample')
+ reasons=list(REASON.finditer(data));marks=list(REASON_MARK.finditer(data));bldr=data.find(b'[BLDR] Build Time:')
+ if first_vm<0 or bldr<0 or bldr>=first_vm or not reasons or len(reasons)!=len(marks) or any(m.start()<=bldr or m.start()>=first_vm for m in reasons) or len({int(m.group(1),0) if m.group(1).lower().startswith(b'0x') else int(m.group(1)) for m in reasons})!=1:raise ValueError('invalid preloader reason or BLDR ordering')
  offset=0
  for i,line in enumerate(lines):
   terminated=i<len(lines)-1;clean=line.rstrip(b'\r')
+  if pending is not None and not clean.startswith(b'a04br3 perf sample ns='):raise ValueError('VM and sample timestamp are not adjacent')
   if b'a04br3 perf vm' in line:
    if not terminated or pending is not None:raise ValueError('unterminated or unpaired VM row')
    match=VM.fullmatch(clean)

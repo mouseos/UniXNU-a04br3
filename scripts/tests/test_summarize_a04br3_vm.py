@@ -14,6 +14,6 @@ class Tests(unittest.TestCase):
   for raw in (data+m.ANCHOR,head.replace(b'BOOT_REASON: 4\n[18] BOOT_REASON: 4\n',b'')+vm+sample(10)):
    with self.assertRaises(ValueError):m.parse(raw,h(raw))
  def test_missing_duplicate_malformed_and_clock(self):
-  for raw in (head+vm,head+vm+vm+sample(1),head+sample(1),head+vm.replace(b'free=241896',b'free=oops')+sample(1),head+vm+sample(10)+vm+sample(9),head+vm+sample(10)[:-1]):
+  for raw in (head+vm,head+vm+vm+sample(1),head+sample(1),head+vm.replace(b'free=241896',b'free=oops')+sample(1),head+vm+sample(10)+vm+sample(9),head+vm+sample(10)[:-1],head+vm+b'other\n'+sample(10),head+b'BOOT_REASON: 9\n'+vm+sample(1),head+b'BOOT_REASON: broken\n'+vm+sample(1),head.replace(b'[BLDR] Build Time: fixture\n',b'')+vm+sample(1)+b'[BLDR] Build Time: late\n',head.replace(b'[BLDR] Build Time: fixture\n',b'')+b'[BLDR] Build Time: late\n'+vm+sample(1)):
    with self.subTest(raw=raw),self.assertRaises(ValueError):m.parse(raw,h(raw))
 if __name__=='__main__':unittest.main()
