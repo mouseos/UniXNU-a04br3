@@ -106,6 +106,16 @@ def redact_private_logs(root, secret):
         path.write_bytes(raw.replace(secret.encode('ascii'), b'[redacted]'))
 
 
+def run_payload(command, source, env, work, secret, log):
+    try:
+        result = subprocess.run(command, cwd=source, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, errors='replace')
+    finally:
+        if work.exists(): redact_private_logs(work, secret)
+    log.write_text(result.stdout.replace(secret, '[redacted]'), encoding='utf-8')
+    if result.returncode: raise ValueError('official payload generation failed')
+
+
 def compare_config(old, new, expected_args):
     old_entries, new_entries = old.get('entry'), new.get('entry')
     if not isinstance(old_entries, list) or not isinstance(new_entries, list):
@@ -255,12 +265,7 @@ def main():
         command.extend('--kernel-arg=' + word for word in rewritten.split()); validate_cli(source, new_device, command, rewritten)
         log = stage/'build.log'
         env = dict(os.environ, UNIXNU_UNIQUE_CHIP_ID=secret, PYTHONDONTWRITEBYTECODE='1')
-        try:
-            result = subprocess.run(command, cwd=source, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
-        finally:
-            if (stage/'work').exists(): redact_private_logs(stage/'work', secret)
-        log.write_text(result.stdout.replace(secret, '[redacted]'), encoding='utf-8')
-        if result.returncode: raise ValueError('official payload generation failed')
+        run_payload(command, source, env, stage/'work', secret, log)
         payload = stage/'work/a04br3/payload'; image = payload/'payload.img'; meta = json.loads((payload/'payload.json').read_text())
         expected = {'kernel_sha256': sha(kernel), 'data_ramdisk_sha256': old_files['scratch-data.img'], 'trust_cache_sha256': old_files['kernel.macho.trustcache'], 'gpu_addon_sha256': old_files['kernel.macho.gpuaddon']}
         if meta.get('kernel_args') != rewritten or any(meta.get(key) != value for key, value in expected.items()): raise ValueError('payload metadata mismatch')

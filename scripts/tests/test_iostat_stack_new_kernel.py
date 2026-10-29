@@ -64,4 +64,13 @@ class NewKernelContracts(unittest.TestCase):
             BUILD.redact_private_logs(root, 'abc123')
             self.assertEqual(path.read_text(), 'command --unique-chip-id [redacted]\n')
 
+    def test_payload_launch_failure_preserves_error_and_redacts(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); work=root/'work'; work.mkdir(); (work/'child.log').write_text('abc123')
+            with mock.patch.object(BUILD.subprocess, 'run', side_effect=OSError('launch failure')):
+                with self.assertRaisesRegex(OSError, 'launch failure'):
+                    BUILD.run_payload(['absent'], root, {}, work, 'abc123', root/'out.log')
+            self.assertEqual((work/'child.log').read_text(), '[redacted]')
+
 if __name__ == '__main__': unittest.main()
