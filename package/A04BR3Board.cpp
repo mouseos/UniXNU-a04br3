@@ -438,9 +438,11 @@ extern "C" void unixnu_board_init(void)
   if (!PE_parse_boot_argn("a04br3-gpu-submit-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf)))
     PE_parse_boot_argn("a04br3-home-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf));
   native_powervr_submit_perf_enable(gpuSubmitPerf);
-  unsigned gpuIoTrace = a04br3_diag_arg(PE_parse_boot_argn,"a04br3-gpu-io-trace","a04br3-gio");
-  unsigned gpuStage = 0;
-  PE_parse_boot_argn("a04br3-gpu-stage", &gpuStage, sizeof(gpuStage));
+  unsigned gpuIoTrace = 0;
+  if (!PE_parse_boot_argn("a04br3-gpu-io-trace", &gpuIoTrace, sizeof(gpuIoTrace)) &&
+      !PE_parse_boot_argn("a04br3-gio", &gpuIoTrace, sizeof(gpuIoTrace)))
+    PE_parse_boot_argn("gi", &gpuIoTrace, sizeof(gpuIoTrace));
+  unsigned gpuStage = a04br3_diag_arg(PE_parse_boot_argn,"a04br3-gpu-stage","gs");
   native_powervr_submit_stage_enable(gpuStage, gpuIoTrace);
   native_powervr_io_trace_enable(gpuIoTrace);
   a04br3_proclog_init();
