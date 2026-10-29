@@ -15,5 +15,9 @@ assert m.join_context('',[],[skip])['issues']
 assert not m.join_context('',[],[{'attempt':[2,1],'event':'unavailable=pmu-unqualified'}])['issues']
 assert m.join_context(before.replace('clock=1','clock=2'),[],[skip])['issues']
 assert m.join_context((before+after).replace('load=1','load=2'),rows)['issues']
+for status in (1,13):
+ failed=[{'round':2,'cpu':1,'status':status}]
+ assert m.join_context(before.replace('clock=1','clock=2'),failed)['issues']
+ assert m.join_context(clk(0)+load(0),failed)['issues']
 for bad in (base(0,90,80)+clk(0)+load(0),clk(0)+load(0),base(0,80,90)+load(0)):assert m.join_context(bad,[],[skip])['issues']
 print('PASS context join, pre/post order, duplicates, missing and availability')
