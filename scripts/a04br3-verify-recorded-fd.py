@@ -7,6 +7,11 @@ def check(record,fd,uefi,unixnu,git,patched_tree):
  if record.get('schema')!=1 or record.get('target')!='DEBUG' or record.get('toolchain')!='CLANGPDB':raise ValueError('unexpected FD build configuration')
  if record.get('command')!=['python3','build_uefi.py','-d','a04br3','-r','DEBUG','-c']:raise ValueError('unexpected FD build command')
  if record.get('defines')!={'A04BR3_TEST_CYCLE':'1','A04BR3_CPU_STAGE_DIAG':'1','A04BR3_CHARGER_OWNER':'1'}:raise ValueError('unexpected FD defines')
+ tools=record.get('tool_binaries',{});required_tools={'clang','lld-link','llvm-lib','llvm-rc','llvm-objcopy'}
+ if set(tools)!=required_tools:raise ValueError('FD toolchain record incomplete')
+ for name,entry in tools.items():
+  path=pathlib.Path(entry['path'])
+  if not path.is_file() or digest(path)!=entry['sha256']:raise ValueError('FD toolchain binary differs: '+name)
  if not fd.is_file() or fd.stat().st_size!=0x300000 or record.get('fd_bytes')!=0x300000 or digest(fd)!=record.get('fd_sha256'):raise ValueError('FD bytes do not match manifest')
  if git(uefi,'rev-parse','HEAD')!=record.get('uefi_commit'):raise ValueError('UEFI source commit differs')
  if git(uefi,'log','-1','--format=%ct')!=record.get('source_date_epoch'):raise ValueError('UEFI source timestamp differs')

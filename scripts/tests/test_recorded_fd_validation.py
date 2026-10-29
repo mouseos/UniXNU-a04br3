@@ -7,7 +7,10 @@ with tempfile.TemporaryDirectory() as tmp:
  patches=('AsmMacroLib.patch','Auth-Service.patch','Boot-Manager.patch','Timer.patch','Usb-Bus.patch')
  for n in patches:(uefi/'Resources/MuPatches'/n).write_text(n)
  refs={'Common/Mu':'a','Common/Mu_OEM_Sample':'b','Mu_Basecore':'c'}
- record={'schema':1,'target':'DEBUG','toolchain':'CLANGPDB','command':['python3','build_uefi.py','-d','a04br3','-r','DEBUG','-c'],'defines':{'A04BR3_TEST_CYCLE':'1','A04BR3_CPU_STAGE_DIAG':'1','A04BR3_CHARGER_OWNER':'1'},'fd_bytes':0x300000,'fd_sha256':m.digest(fd),'uefi_commit':'source','unixnu_commit':'unixnu','darwinboot_commit':'darwin','mu_basecore_patched_tree':'tree','source_date_epoch':'123','patch_sha256':{n:m.digest(uefi/'Resources/MuPatches'/n) for n in patches},'submodules':refs}
+ toolnames=('clang','lld-link','llvm-lib','llvm-rc','llvm-objcopy'); tools={}
+ for n in toolnames:
+  t=r/n;t.write_text(n);tools[n]={'path':str(t),'sha256':m.digest(t)}
+ record={'schema':1,'tool_binaries':tools,'target':'DEBUG','toolchain':'CLANGPDB','command':['python3','build_uefi.py','-d','a04br3','-r','DEBUG','-c'],'defines':{'A04BR3_TEST_CYCLE':'1','A04BR3_CPU_STAGE_DIAG':'1','A04BR3_CHARGER_OWNER':'1'},'fd_bytes':0x300000,'fd_sha256':m.digest(fd),'uefi_commit':'source','unixnu_commit':'unixnu','darwinboot_commit':'darwin','mu_basecore_patched_tree':'tree','source_date_epoch':'123','patch_sha256':{n:m.digest(uefi/'Resources/MuPatches'/n) for n in patches},'submodules':refs}
  def git(path,*args):
   if args[0]=='status':return ''
   if args[0]=='log':return '123'
