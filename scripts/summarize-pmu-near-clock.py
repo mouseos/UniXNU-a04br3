@@ -7,7 +7,7 @@ remained unchanged between reads. Timer and PMU ownership are not calibrated.
 import argparse, hashlib, json, re, sys
 from pathlib import Path
 
-PATTERN=re.compile(r'a04br3 cpu-near-clock round=(\d+) cpu=(\d+) phase=(\d+) ok=(\d+) safe=(\d+) begin=(\d+) end=(\d+) infra=([0-9a-f]+) dcm=([0-9a-f]+) con0=([0-9a-f]+) con1=([0-9a-f]+) pwr=([0-9a-f]+)(?!\S)')
+PATTERN=re.compile(r'a04br3 cpu-near-clock round=(\d+) cpu=(\d+) phase=(\d+) ok=(\d+) safe=(\d+) begin=(\d+) end=(\d+) infra=([0-9a-f]+) dcm=([0-9a-f]+) con0=([0-9a-f]+) con1=([0-9a-f]+) pwr=([0-9a-f]+)(?: fhctl_hp=([0-9a-f]+))?(?!\S)')
 
 def summarize(raw, timeline):
     issues=[]; entries={}; rows=[]
@@ -24,10 +24,11 @@ def summarize(raw, timeline):
         if 'a04br3 cpu-near-clock ' not in line: continue
         m=PATTERN.search(line)
         if not m: issues.append('malformed near-clock record'); continue
+        if line[m.end():].strip(): issues.append('unexpected near-clock suffix'); continue
         a=m.groups(); key=tuple(map(int,a[:3])); ok=int(a[3]); safe=int(a[4]); begin=int(a[5]); end=int(a[6]); values=a[7:]
         if key[2] not in (0,1) or ok not in (0,1) or safe not in (0,1): issues.append(f'invalid phase/availability {key}'); continue
         if key in entries: issues.append(f'duplicate {key}'); continue
-        entries[key]={'ok':ok,'safe':safe,'begin':begin,'end':end,'raw':dict(zip(('infra','dcm','con0','con1','pwr'),values))}
+        entries[key]={'ok':ok,'safe':safe,'begin':begin,'end':end,'raw':dict(zip(('infra','dcm','con0','con1','pwr','fhctl_hp'),values))}
     expected=set()
     for w in timeline['records']:
         if w.get('status')!=0: issues.append(f"timeline: unsuccessful window {(w.get('round'),w.get('cpu'))}"); continue

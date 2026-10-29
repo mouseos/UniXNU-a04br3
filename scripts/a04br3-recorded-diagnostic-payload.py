@@ -46,18 +46,21 @@ def checked_context_disassembly(text):
   if i==0 or not re.search(r'\bisb\b',lines[i-1],re.I):raise ValueError('context timer read is not preceded by ISB')
 
 def checked_near_kernel(kernel_bytes, symbols, worker, near):
- if b'a04br3 cpu-near-clock round=' not in kernel_bytes:raise ValueError('near-clock log marker missing')
- rows=[line.split() for line in symbols.splitlines() if line.split() and line.split()[-1]=='_a04br3_cpu_clock_near']
+ if b'fhctl_hp=%08llx' not in kernel_bytes:raise ValueError('near-clock log marker missing')
+ rows=[line.split() for line in symbols.splitlines() if line.split() and line.split()[-1]=='_a04br3_cpu_clock_near_v2']
  if not any(len(r)>=4 and r[-3]=='(__TEXT_EXEC,__text)' and r[-2]=='external' for r in rows):raise ValueError('near-clock hook not defined')
- if len(re.findall(r'\bbl\b[^\n]*<_a04br3_cpu_clock_near>',worker,re.I))!=2:raise ValueError('near-clock worker calls missing')
+ if len(re.findall(r'\bbl\b[^\n]*<_a04br3_cpu_clock_near_v2>',worker,re.I))!=2:raise ValueError('near-clock worker calls missing')
  lines=near.splitlines();reads=[i for i,l in enumerate(lines) if re.search(r'\bmrs\s+x\d+,\s*CNTVCT_EL0\b',l,re.I)]
  if len(reads)!=2 or any(i==0 or not re.search(r'\bisb\b',lines[i-1],re.I) for i in reads):raise ValueError('near-clock timer instructions invalid')
  if re.search(r'\bblr?\b',near,re.I):raise ValueError('near-clock contains a call')
  body='\n'.join(lines[reads[0]+1:reads[1]])
  barrier=list(re.finditer(r'\bdmb\s+oshld\b',body,re.I))
- loads=list(re.finditer(r'\bldr\s+w\d+,\s*\[x\d+(?:,\s*#(0x[0-9a-f]+|\d+))?\]',body,re.I))
- offsets=[int(x.group(1),0) if x.group(1) else 0 for x in loads]
- if len(barrier)!=1 or len(loads)!=5 or offsets!=[0,0x14,0x100,0x104,0x110] or loads[-1].end()>barrier[0].start():raise ValueError('near-clock load/barrier order invalid')
+ loads=list(re.finditer(r'\bldr\s+w\d+,\s*\[(x\d+)(?:,\s*#(0x[0-9a-f]+|\d+))?\]',body,re.I))
+ offsets=[int(x.group(2),0) if x.group(2) else 0 for x in loads];bases=[x.group(1).lower() for x in loads]
+ if len(barrier)!=1 or len(loads)!=6 or offsets!=[0,0x14,0x100,0x104,0x110,0x14] or loads[-1].end()>barrier[0].start():raise ValueError('near-clock load/barrier order invalid')
+ if bases[0]!=bases[1] or len(set(bases[2:]))!=1 or bases[0]==bases[2]:raise ValueError('near-clock MMIO bases inconsistent')
+ for line in lines:
+  if re.search(r'\b(?:str|stur|stp|stnp)\b',line,re.I) and not re.search(r'\bstr\s+x\d+,\s*\[x0(?:,\s*#(?:0x[0-9a-f]+|\d+))?\]',line,re.I):raise ValueError('near-clock unexpected store')
 
 
 def main():
@@ -92,7 +95,7 @@ def main():
   checked_context_disassembly(disassembly)
   if args.near_clock:
    worker=subprocess.check_output(['llvm-objdump','--disassemble-symbols=__ZL28armcpu_runtime_window_workerPvi',str(kernel)],text=True)
-   near=subprocess.check_output(['llvm-objdump','--disassemble-symbols=_a04br3_cpu_clock_near',str(kernel)],text=True)
+   near=subprocess.check_output(['llvm-objdump','--disassemble-symbols=_a04br3_cpu_clock_near_v2',str(kernel)],text=True)
    checked_near_kernel(kernel.read_bytes(),symbols,worker,near)
  vol=str(uuid.UUID(json.loads(seed.read_text())['volume_uuid'])).upper()
  if not uuid.UUID(vol).int or kernel.read_bytes().count(vol.encode())!=1:raise ValueError('kernel and pre-build Data volume identity do not match')

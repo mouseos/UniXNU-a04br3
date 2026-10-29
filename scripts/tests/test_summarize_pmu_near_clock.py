@@ -7,6 +7,14 @@ def run(raw):
  b=raw.encode();t={'snapshot_sha256':hashlib.sha256(b).hexdigest(),'snapshot_bytes':len(b),'first_boot_bytes':len(b),'first_boot_sha256':hashlib.sha256(b).hexdigest(),'records':[{'round':0,'cpu':0,'status':0,'begin':10,'end':100,'min_ticks':80}]};return m.summarize(b,t)
 class NearTests(unittest.TestCase):
  def test_valid(self):self.assertEqual(run(line(0,11,12)+line(1,90,91))['issues'],[])
+ def test_fhctl_and_legacy(self):
+  old=run(line(0,11,12)+line(1,90,91));self.assertIsNone(old['records'][0]['before']['raw']['fhctl_hp'])
+  new=run(line(0,11,12).replace('pwr=00000005','pwr=00000005 fhctl_hp=00000001')+line(1,90,91).replace('pwr=00000005','pwr=00000005 fhctl_hp=00000001'))
+  self.assertFalse(new['issues']);self.assertEqual(new['records'][0]['before']['raw']['fhctl_hp'],'00000001')
+ def test_malformed_fhctl_rejected(self):
+  for v in ('garbage','','00000001ZZ'):
+   broken=line(0,11,12).replace('pwr=00000005','pwr=00000005 fhctl_hp='+v)+line(1,90,91)
+   self.assertTrue(run(broken)['issues'])
  def test_missing(self):self.assertTrue(run(line(0,11,12))['issues'])
  def test_order(self):self.assertTrue(run(line(0,11,12)+line(1,101,102))['issues'])
  def test_duplicate(self):self.assertTrue(run(line(0,11,12)*2+line(1,90,91))['issues'])

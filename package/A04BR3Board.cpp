@@ -291,8 +291,10 @@ static bool cpuContextMapAttempted;
 
 // Only the context worker calls this after mapping, with preemption disabled,
 // on the target CPU. No mapping, allocation, logging or register writes here.
-// The two timestamp reads and five MMIO loads perturb the active window.
-extern "C" bool a04br3_cpu_clock_near(uint64_t out[7])
+// The two timestamp reads and six MMIO loads perturb the active window.
+// APMIXED+0x14 is FHCTL_HP_EN in the board's MT8167 Linux source; bit 0
+// indicates FHCTL control of ARMCA7 PLL only at the sampled instant.
+extern "C" bool a04br3_cpu_clock_near_v2(uint64_t out[8])
 {
   if (!cpuContextInfra || !cpuContextApmixed) return false;
   __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(out[0]) :: "memory");
@@ -301,6 +303,7 @@ extern "C" bool a04br3_cpu_clock_near(uint64_t out[7])
   out[4]=*reinterpret_cast<volatile uint32_t *>(cpuContextApmixed+0x100);
   out[5]=*reinterpret_cast<volatile uint32_t *>(cpuContextApmixed+0x104);
   out[6]=*reinterpret_cast<volatile uint32_t *>(cpuContextApmixed+0x110);
+  out[7]=*reinterpret_cast<volatile uint32_t *>(cpuContextApmixed+0x14);
   __asm__ volatile("dmb oshld\n\tisb\n\tmrs %0, cntvct_el0" : "=r"(out[1]) :: "memory");
   return true;
 }

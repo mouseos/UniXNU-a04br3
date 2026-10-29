@@ -60,12 +60,18 @@ for bad in (asm.replace("mrs x0, CNTVCT_EL0","nop"),asm.replace("isb\n  mrs x1",
  except ValueError:pass
  else:raise AssertionError('invalid context disassembly accepted')
 print('PASS context timer instruction order')
-near_symbols=symbols+'\n00000002 (__TEXT_EXEC,__text) external _a04br3_cpu_clock_near'
-worker='bl 123 <_a04br3_cpu_clock_near>\nbl 123 <_a04br3_cpu_clock_near>\n'
-near='isb\nmrs x0, CNTVCT_EL0\n'+('ldr w1, [x2]\nldr w1, [x2, #0x14]\nldr w1, [x3, #0x100]\nldr w1, [x3, #0x104]\nldr w1, [x3, #0x110]\n')+'dmb oshld\nisb\nmrs x1, CNTVCT_EL0\n'
-m.checked_near_kernel(b'a04br3 cpu-near-clock round=',near_symbols,worker,near)
-for blob,nm,code,body in ((b'',near_symbols,worker,near),(b'a04br3 cpu-near-clock round=',symbols,worker,near),(b'a04br3 cpu-near-clock round=',near_symbols,worker.replace('bl 123','b 123',1),near),(b'a04br3 cpu-near-clock round=',near_symbols,worker,near.replace('dmb oshld','nop')),(b'a04br3 cpu-near-clock round=',near_symbols,worker,near+'blr x0\n'),(b'a04br3 cpu-near-clock round=',near_symbols,worker,near.replace('ldr w1, [x2, #0x14]','ldr w1, [x2, #0x18]'))):
+near_symbols=symbols+'\n00000002 (__TEXT_EXEC,__text) external _a04br3_cpu_clock_near_v2'
+worker='bl 123 <_a04br3_cpu_clock_near_v2>\nbl 123 <_a04br3_cpu_clock_near_v2>\n'
+near='isb\nmrs x0, CNTVCT_EL0\n'+('ldr w1, [x2]\nldr w1, [x2, #0x14]\nldr w1, [x3, #0x100]\nldr w1, [x3, #0x104]\nldr w1, [x3, #0x110]\nldr w1, [x3, #0x14]\n')+'dmb oshld\nisb\nmrs x1, CNTVCT_EL0\n'
+m.checked_near_kernel(b'fhctl_hp=%08llx',near_symbols,worker,near)
+for blob,nm,code,body in ((b'',near_symbols,worker,near),(b'fhctl_hp=%08llx',symbols,worker,near),(b'fhctl_hp=%08llx',near_symbols,worker.replace('bl 123','b 123',1),near),(b'fhctl_hp=%08llx',near_symbols,worker,near.replace('dmb oshld','nop')),(b'fhctl_hp=%08llx',near_symbols,worker,near+'blr x0\n'),(b'fhctl_hp=%08llx',near_symbols,worker,near.replace('ldr w1, [x2, #0x14]','ldr w1, [x2, #0x18]'))):
  try:m.checked_near_kernel(blob,nm,code,body)
  except ValueError:pass
  else:raise AssertionError('invalid near-clock kernel accepted')
 print('PASS near-clock linked hook, calls, timestamps, MMIO and barrier')
+
+for altered in (near.replace('ldr w1, [x3, #0x14]','ldr w1, [x2, #0x14]'),near+'str w1, [x3, #0x14]\n'):
+ try:m.checked_near_kernel(b'fhctl_hp=%08llx',near_symbols,worker,altered)
+ except ValueError:pass
+ else:raise AssertionError('wrong base or unsafe store accepted')
+print('PASS near-clock base grouping and store guard')
