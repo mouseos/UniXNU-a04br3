@@ -90,6 +90,22 @@ def payload_config(payload, target):
     return tomllib.loads(target.read_text())
 
 
+def fat_listing(payload):
+    lines = subprocess.check_output(['mdir', '-b', '-s', '-i', str(payload), '::/'], text=True,
+                                    stderr=subprocess.DEVNULL).splitlines()
+    if not lines or len(lines) != len(set(lines)):
+        raise ValueError('invalid complete FAT listing')
+    return set(lines)
+
+
+def redact_private_logs(root, secret):
+    for path in root.rglob('*.log'):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('unsafe temporary log')
+        raw = path.read_bytes()
+        path.write_bytes(raw.replace(secret.encode('ascii'), b'[redacted]'))
+
+
 def compare_config(old, new, expected_args):
     old_entries, new_entries = old.get('entry'), new.get('entry')
     if not isinstance(old_entries, list) or not isinstance(new_entries, list):
@@ -116,10 +132,11 @@ def adt_tree(path):
         for _ in range(properties):
             if offset + 36 > len(raw): raise ValueError('truncated ADT property')
             key = raw[offset:offset + 32].split(b'\0', 1)[0].decode('ascii', 'strict')
-            size = struct.unpack_from('<I', raw, offset + 32)[0] & 0x7fffffff; offset += 36
+            size_field = struct.unpack_from('<I', raw, offset + 32)[0]
+            size = size_field & 0x7fffffff; offset += 36
             padded = (size + 3) & ~3
             if offset + padded > len(raw): raise ValueError('truncated ADT value')
-            props.append((key, raw[offset:offset + size])); offset += padded
+            props.append((key, size_field, raw[offset:offset + size])); offset += padded
         nodes.append((name, tuple(props)))
         for index in range(children): offset = node(offset, f'{name}/{index}', depth + 1)
         return offset
@@ -134,12 +151,12 @@ def compare_adt(old, new):
         identities = []
         for path, props in tree:
             row = []
-            for key, value in props:
+            for key, size_field, value in props:
                 if key == 'unique-chip-id':
                     if len(value) != 8 or value == bytes(8): raise ValueError('invalid ADT identity')
-                    identities.append(value); row.append((key, b'<identity>'))
-                elif key == 'random-seed': row.append((key, b'<random-seed>'))
-                else: row.append((key, value))
+                    identities.append(value); row.append((key, size_field, b'<identity>'))
+                elif key == 'random-seed': row.append((key, size_field, b'<random-seed>'))
+                else: row.append((key, size_field, value))
             result.append((path, tuple(row)))
         if len(identities) != 1: raise ValueError('ADT must contain exactly one identity')
         return tuple(result), identities[0]
@@ -227,7 +244,7 @@ def main():
             if old_files[name] != declared[name]: raise ValueError('old pair hash mismatch: ' + name)
         if old_files.get('kernel.macho') != declared['kernel.macho']:
             raise ValueError('old pair kernel hash mismatch')
-        identities = [value for _, props in adt_tree(old_dir/'kernel.macho.adt') for key, value in props if key == 'unique-chip-id']
+        identities = [value for _, props in adt_tree(old_dir/'kernel.macho.adt') for key, _, value in props if key == 'unique-chip-id']
         if len(identities) != 1 or len(identities[0]) != 8 or identities[0] == bytes(8):
             raise ValueError('invalid old ADT identity')
         secret = format(int.from_bytes(identities[0], 'little'), 'x')
@@ -238,7 +255,10 @@ def main():
         command.extend('--kernel-arg=' + word for word in rewritten.split()); validate_cli(source, new_device, command, rewritten)
         log = stage/'build.log'
         env = dict(os.environ, UNIXNU_UNIQUE_CHIP_ID=secret, PYTHONDONTWRITEBYTECODE='1')
-        result = subprocess.run(command, cwd=source, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
+        try:
+            result = subprocess.run(command, cwd=source, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
+        finally:
+            if (stage/'work').exists(): redact_private_logs(stage/'work', secret)
         log.write_text(result.stdout.replace(secret, '[redacted]'), encoding='utf-8')
         if result.returncode: raise ValueError('official payload generation failed')
         payload = stage/'work/a04br3/payload'; image = payload/'payload.img'; meta = json.loads((payload/'payload.json').read_text())
@@ -246,6 +266,7 @@ def main():
         if meta.get('kernel_args') != rewritten or any(meta.get(key) != value for key, value in expected.items()): raise ValueError('payload metadata mismatch')
         if meta.get('payload_sha256') != sha(image): raise ValueError('payload hash mismatch')
         new_files = fat_files(image, new_dir)
+        if fat_listing(source_payload) != fat_listing(image): raise ValueError('complete FAT listing mismatch')
         if new_files.get('kernel.macho') != sha(kernel): raise ValueError('new FAT kernel hash mismatch')
         compare_config(payload_config(source_payload, stage/'old.toml'), payload_config(image, stage/'new.toml'), rewritten)
         if set(old_files) != set(new_files) or any(old_files[name] != new_files[name] for name in FIXED): raise ValueError('fixed payload files changed')

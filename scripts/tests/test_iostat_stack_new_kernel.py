@@ -28,6 +28,9 @@ class NewKernelContracts(unittest.TestCase):
             self.assertEqual(BUILD.compare_adt(old_path, new_path), BUILD.hashlib.sha256(identity).hexdigest())
             new_path.write_bytes(new.replace(b'name', b'nope'))
             with self.assertRaises(ValueError): BUILD.compare_adt(old_path, new_path)
+            changed = bytearray(new); struct.pack_into('<I', changed, 8 + 32, 0x80000001)
+            new_path.write_bytes(changed)
+            with self.assertRaises(ValueError): BUILD.compare_adt(old_path, new_path)
 
     def test_kernel_record_is_required_and_cross_checked(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -53,5 +56,12 @@ class NewKernelContracts(unittest.TestCase):
         BUILD.compare_config(copy.deepcopy(old), copy.deepcopy(new), 'new')
         new['entry'][0]['path'] = 'other'
         with self.assertRaises(ValueError): BUILD.compare_config(copy.deepcopy(old), new, 'new')
+
+    def test_private_log_redaction(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); nested=root/'logs'; nested.mkdir(); path=nested/'child.log'
+            path.write_text('command --unique-chip-id abc123\n')
+            BUILD.redact_private_logs(root, 'abc123')
+            self.assertEqual(path.read_text(), 'command --unique-chip-id [redacted]\n')
 
 if __name__ == '__main__': unittest.main()
