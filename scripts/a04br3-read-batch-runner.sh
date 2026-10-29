@@ -1,23 +1,25 @@
 #!/bin/bash
 # Run inside a unique SSH-runner directory; launcher redirects full output to
-# "$task/io-batch-e8f-run.log". Never access or operate a device.
+# "$task/io-batch-${BATCH_ATTEMPT}-run.log". Never access or operate a device.
 set -euo pipefail
-: "${RUNNER_TEMP:?}" "${GITHUB_REPOSITORY:?}" "${BATCH_PREP_COMMIT:?}" "${1:?isolated task directory required}"
+: "${RUNNER_TEMP:?}" "${GITHUB_REPOSITORY:?}" "${BATCH_PREP_COMMIT:?}" "${BATCH_ATTEMPT:?}" "${1:?isolated task directory required}"
 original_runner_temp=$RUNNER_TEMP
 task=$1
 case "$BATCH_PREP_COMMIT" in *[!0-9a-f]*|'') echo 'Invalid preparation commit' >&2; exit 2 ;; esac
 [ "${#BATCH_PREP_COMMIT}" -eq 40 ] || exit 2
+case "$BATCH_ATTEMPT" in *[!a-zA-Z0-9-]*|'') echo 'Invalid attempt identifier' >&2; exit 2 ;; esac
 case "$(basename "$task")" in io-read-batch-e8f-*) ;; *) echo 'Unexpected task directory' >&2; exit 2 ;; esac
 [ "$(dirname "$task")" = "$original_runner_temp" ] || { echo 'Task must be a direct child of runner temp' >&2; exit 2; }
 [ -d "$task" ] || { echo 'Task directory is missing' >&2; exit 2; }
 : "${RELEASE:?launcher must supply release environment}"
 [ "$RELEASE" = a04br3-ssh-40876182851 ] || exit 3
-status="$task/io-batch-e8f-status.txt"
+status="$task/io-batch-${BATCH_ATTEMPT}-status.txt"
+runlog="$task/io-batch-${BATCH_ATTEMPT}-run.log"
 finish() {
   rc=$?
   trap - EXIT
   printf 'exit=%s\n' "$rc" > "$status"
-  if ! gh release upload "$RELEASE" "$status" "$task/io-batch-e8f-run.log" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+  if ! gh release upload "$RELEASE" "$status" "$runlog" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
     echo 'Status/log release upload failed; local runner files retained' >&2
   fi
 }
@@ -38,6 +40,11 @@ git -C "$task/uefi" checkout --quiet --detach d3d4f28a89b29553ede7d7523c6af86d7e
 # submodules to audit its recorded FD; none of the source worktrees is shared.
 git -C "$task/source" submodule update --init --recursive
 git -C "$task/device" submodule update --init --recursive
+[ "$(git -C "$task/source" rev-parse HEAD)" = e8f5385e4cee02bb15efa2fb97c20bb59b98d72f ] || exit 4
+[ "$(git -C "$task/device" rev-parse HEAD)" = 8fde8ba87486338342f3be528823cb46394f2c5b ] || exit 4
+[ "$(git -C "$task/source/drivers/NativeMsdc" rev-parse HEAD)" = 66d40654ae43ef27090a6d6e1f552be6ea10d24b ] || exit 4
+[ "$(git -C "$task/device/drivers/ArmCpu" rev-parse HEAD)" = 85d06a5248a4516c777763d195866a2362e5d7b0 ] || exit 4
+[ "$(git -C "$task/uefi" rev-parse HEAD)" = d3d4f28a89b29553ede7d7523c6af86d7e2459e8 ] || exit 4
 git -C "$task/uefi" submodule update --init Common/Mu Common/Mu_OEM_Sample Mu_Basecore
 mkdir -p "$task/firmware" "$task/official" "$task/tmp" "$task/logs" "$task/rustup" "$task/cargo" "$task/cache"
 gh release download "$RELEASE" -R "$GITHUB_REPOSITORY" -D "$task/firmware" -p 'io-batch-fixed-d3d4.fd' -p 'io-batch-fixed-d3d4-manifest.json'
@@ -65,8 +72,8 @@ PYUUID
 )
 export XNU_OWNER_DATA_VOLUME_UUID
 ./unixnu build kernel -D "$DEVICE_DIR"
-python3 "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$task/source" --out "$task/trust-base"
-python3 "$DEVICE_DIR/scripts/make-a04br3-gpu-addon.py" --probe-dir "$RUNNER_TEMP/powervr-probe" --metal-plugin "$RUNNER_TEMP/powervr-metal" --trust-base "$task/trust-base" --trust-out "$task/trust-owner" --out "$task/gpu-addon"
+python3 -I "$DEVICE_DIR/scripts/build-a04br3-trust-cache.py" --tree "$task/source" --out "$task/trust-base"
+python3 -I "$DEVICE_DIR/scripts/make-a04br3-gpu-addon.py" --probe-dir "$RUNNER_TEMP/powervr-probe" --metal-plugin "$RUNNER_TEMP/powervr-metal" --trust-base "$task/trust-base" --trust-out "$task/trust-owner" --out "$task/gpu-addon"
 python3 -I - "$task" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 r=pathlib.Path(sys.argv[1]);source=r/'source';device=r/'device';out=r/'unixnu-out/a04br3';k=out/'kernel';b=out/'tree/build'
@@ -91,11 +98,14 @@ PY
 python3 -I "$task/preparation/scripts/a04br3-read-batch-record-inputs.py" --source "$task/source" --device "$task/device" --uefi "$task/uefi" --kernel "$UNIXNU_OUT/a04br3/kernel/kernel.macho" --data "$RUNNER_TEMP/data.dbr" --trust "$task/trust-owner" --gpu "$task/gpu-addon" --fd "$task/firmware/io-batch-fixed-d3d4.fd" --dtb "$task/uefi/Resources/DTBs/a04br3.dtb" --kernel-provenance "$task/kernel-provenance.json" --firmware-provenance "$task/firmware/io-batch-fixed-d3d4-manifest.json" --seed-provenance "$RUNNER_TEMP/owner-data/seed.json" --pre-build-log "$task/logs/pre-build.log" --out "$task/input-records"
 python3 -I "$task/preparation/scripts/a04br3-read-batch-build.py" --source "$task/source" --device "$task/device" --uefi "$task/uefi" --inputs "$task/input-records/inputs.json" --out "$task/pair" --log-dir "$task/logs"
 # Include enough first-party records for independent local provenance review.
-mkdir "$task/pair/source-records"
+[ -f "$task/pair/pair.json" ] || { echo 'Completed pair missing' >&2; exit 8; }
+mkdir -p "$task/pair/source-records"
 lock="$UNIXNU_OUT/a04br3/tree/build/native-metal-bridge/Cargo.lock"
 [ -s "$lock" ] || { echo 'Resolved Rust lockfile missing' >&2; exit 8; }
 cp "$lock" "$task/pair/source-records/Cargo.lock"
+shasum -a 256 "$task/pair/source-records/Cargo.lock" > "$task/pair/source-records/Cargo.lock.sha256"
 cp "$task/kernel-provenance.json" "$task/firmware/io-batch-fixed-d3d4-manifest.json" "$RUNNER_TEMP/owner-data/seed.json" "$task/input-records/inputs.json" "$task/input-records/data-provenance.json" "$task/logs/pre-build.log" "$task/pair/source-records/"
-tar -C "$task" -czf "$task/io-batch-e8f-artifacts.tgz" pair
-gh release upload "$RELEASE" "$task/io-batch-e8f-artifacts.tgz" -R "$GITHUB_REPOSITORY"
+archive="$task/io-batch-${BATCH_ATTEMPT}-artifacts.tgz"
+tar -C "$task" -czf "$archive" pair
+gh release upload "$RELEASE" "$archive" -R "$GITHUB_REPOSITORY"
 echo IO_BATCH_E8F_COMPLETE
