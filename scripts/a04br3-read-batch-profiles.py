@@ -10,7 +10,8 @@ ADDED = ('native-root-timing=1', 'native-cs-read-batch=1')
 def profiles(line):
     line.encode('ascii')
     args = line.split()
-    if any(args.count(arg) != 1 for arg in OMIT):
+    keys = [arg.split('=', 1)[0] for arg in args]
+    if any(args.count(arg) != 1 or keys.count(arg.split('=', 1)[0]) != 1 for arg in OMIT):
         raise ValueError('expected exactly one of each recorded diagnostic argument')
     forbidden = ('native-root-timing', 'native-cs-read-batch', 'native-cs-coalesce')
     if any(arg.split('=', 1)[0] in forbidden for arg in args):

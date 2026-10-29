@@ -12,6 +12,7 @@ assert result['batch'] == result['baseline'] + ' native-cs-read-batch=1'
 assert result['baseline'].endswith(' native-root-timing=1')
 assert all(x not in result['baseline'].split() for x in module.OMIT)
 for invalid in (source.replace('mb=2', ''), source+' mb=2', source+' native-cs-coalesce=1',
+                source+' ecb=0', source+' mb=0', source+' native-io-trace=0', source+' a04br3-gio=0',
                 source+' native-cs-read-batch=0', source+' native-root-timing=1', source+' x='+('a'*1024)):
     try:
         module.profiles(invalid)
