@@ -36,6 +36,7 @@ def join_context(raw, timeline, skips=()):
    if not item['before'] or 'base' not in item['before']:issues.append('missing context '+str((*key,0)))
    safe=(entry.get('cleanup') in (1,2) and entry.get('recovery')==1 and entry.get('lease_released')==1 and entry.get('gate_released')==1 and entry.get('quarantine')==0)
    if safe and (not item['after'] or 'base' not in item['after']):issues.append('missing context '+str((*key,1)))
+   if not safe and item['after']:issues.append('post context on unsafe result '+str(key))
   if entry['status']==0:
    for phase in (0,1):
     snap=snaps.get((*key,phase));label=str((*key,phase))
