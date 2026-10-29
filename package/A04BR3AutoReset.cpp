@@ -326,9 +326,9 @@ void cycleThread(void *, wait_result_t)
 
 }  // namespace
 
-// This local lease serializes participating EL1 clients only. No evidence
-// provider currently establishes upper-EL/debug non-interference, so no
-// target may acquire it. This is deliberately not a boot-argument override.
+// This local lease serializes participating EL1 clients only. Upper-EL and
+// debugger non-interference remains unverified. The separately compiled
+// diagnostic permits an explicit experimental boot argument, not proof of ownership.
 static A04BR3PmuLease gRuntimePmuLease = {};
 // This opt-in is an experimental assumption, not proof of EL2/EL3 or debugger
 // exclusion. It is compiled only with the PMUv3 backend and KPC disabled.
