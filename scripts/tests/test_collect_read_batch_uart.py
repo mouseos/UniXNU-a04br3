@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import importlib.util,json,tempfile,unittest
+import importlib.util,json,os,tempfile,unittest
 from pathlib import Path
 P=Path(__file__).resolve().parents[1]/'collect-read-batch-uart.py'
 s=importlib.util.spec_from_file_location('capture',P);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
@@ -43,5 +43,39 @@ class Capture(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d);(p/'uart').write_bytes(m.ANCHOR+b'\n');(p/'f').write_text(json.dumps({'uart_offset':0,'boot_sha256':'c'*64}))
    r=m.collect(p/'uart',p/'f',p/'out');self.assertFalse(r['flash_success_claimed']);self.assertFalse(r['boots'][0]['closed_by_next_preloader']);self.assertEqual(r['boots'][0]['panics'],[])
+
+ def test_unterminated_corrupt_and_oversized_reasons_are_preserved(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d);u=p/'u';f=p/'f'
+   raw=m.ANCHOR+b'\nBOOT_REASON=4_9\nBOOT_REASON='+b'9'*5000+b'\nBOOT_REASON=4'
+   u.write_bytes(raw);f.write_text(json.dumps({'uart_offset':0,'boot_sha256':'a'*64}))
+   r=m.collect(u,f,p/'out');self.assertEqual(r['boots'][0]['boot_reason_markers'],3);self.assertEqual(r['boots'][0]['boot_reasons'],[]);self.assertEqual((p/'out/post-flash.raw').read_bytes(),raw)
+ def test_fifo_rejected_without_opening_and_duplicate_keys(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d);u=p/'fifo';os.mkfifo(u)
+   with self.assertRaisesRegex(ValueError,'regular file'):m.checkpoint(u,p/'cp')
+   with self.assertRaisesRegex(ValueError,'duplicate JSON'):m.strict_json(b'{"a":1,"a":2}')
+ def test_partial_anchor_and_bounded_events(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d);u=p/'u';u.write_bytes(m.ANCHOR[:10]);cp=p/'cp';m.checkpoint(u,cp)
+   u.write_bytes(m.ANCHOR+b'\n'+m.ANCHOR+b'\nBOOT_REASON=4\n')
+   f=p/'f';f.write_text(json.dumps({'uart_offset':10,'boot_sha256':'a'*64,'uart_checkpoint':str(cp),'flash_completed_uart_offset':10}))
+   r=m.collect(u,f,p/'out');self.assertTrue(r['offset_crosses_preloader_anchor'])
+   events=m.event_lines(b'panic('*5000,m.PANIC,0);self.assertEqual(len(events),m.EVENT_LIMIT+1);self.assertEqual(events[-1],{'truncated':True})
+ def test_event_budget_is_shared_across_boots(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d);u=p/'u';raw=m.ANCHOR+b'\nBOOT_REASON=4\npanic: one\n'+m.ANCHOR+b'\nBOOT_REASON=9\n';u.write_bytes(raw)
+   f=p/'f';f.write_text(json.dumps({'uart_offset':0,'boot_sha256':'a'*64}));old=m.EVENT_LIMIT
+   try:
+    m.EVENT_LIMIT=2;r=m.collect(u,f,p/'out')
+   finally:m.EVENT_LIMIT=old
+   self.assertEqual(r['boots'][1]['boot_reasons'],[{'truncated':True}]);self.assertEqual((p/'out/post-flash.raw').read_bytes(),raw)
+ def test_boot_limit_retains_raw(self):
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d);u=p/'u';raw=(m.ANCHOR+b'\n')*3;u.write_bytes(raw);f=p/'f';f.write_text(json.dumps({'uart_offset':0,'boot_sha256':'a'*64}));old=m.BOOT_LIMIT
+   try:
+    m.BOOT_LIMIT=2;r=m.collect(u,f,p/'out')
+   finally:m.BOOT_LIMIT=old
+   self.assertTrue(r['boots_truncated']);self.assertEqual(len(r['boots']),2);self.assertEqual((p/'out/post-flash.raw').read_bytes(),raw)
 
 if __name__=='__main__':unittest.main()
