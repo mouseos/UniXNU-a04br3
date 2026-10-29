@@ -27,6 +27,16 @@ def checked_args(line, runtime_window=False, pmuv3_active=False, runtime_repeat=
  if experiment != (['aq=1'] if pmuv3_active else []) or (pmuv3_active and not runtime_window):raise ValueError('unexpected PMUv3 experimental argument')
  return len(line.encode())+1
 
+def checked_context_kernel(config, kernel_bytes, symbols):
+ required=('CONFIG_XNU_ARMCPU_RUNTIME_WINDOW=y','CONFIG_XNU_ARMCPU_IDLE_EPOCH=y','CONFIG_XNU_PMUV3_ACTIVE=y')
+ if any(config.splitlines().count(flag)!=1 for flag in required):raise ValueError('context kernel config missing active PMU options')
+ for marker in (b'ArmCpu: runtime-scope',b'ArmCpu: runtime-context unavailable=board-hook',b'a04br3 cpu-context round='):
+  if marker not in kernel_bytes:raise ValueError('context kernel marker missing')
+ for sym in ('_a04br3_cpu_context_sample','_unixnu_pmuv3_active_start','_unixnu_pmuv3_active_stop','_unixnu_idle_epoch_observe'):
+  rows=[line.split() for line in symbols.splitlines() if line.split() and line.split()[-1]==sym]
+  if not any(len(row)>=3 and row[-2] in ('T','t') for row in rows):raise ValueError('context kernel symbol not defined: '+sym)
+
+
 def main():
  parser=argparse.ArgumentParser(description=__doc__)
  parser.add_argument('--device',type=pathlib.Path,default=pathlib.Path(os.environ.get('DEVICE_DIR','.')))
@@ -49,6 +59,10 @@ def main():
   if not p.is_file():raise ValueError('missing official build input: '+str(p))
  identity=os.environ.get('UNIQUE_CHIP_ID') or os.environ.get('UNIXNU_UNIQUE_CHIP_ID')
  if not identity:raise ValueError('workflow identity seed missing')
+ if args.runtime_context:
+  config=(root/'out/a04br3/.config').read_text()
+  symbols=subprocess.check_output(['xcrun','nm',str(kernel)],text=True)
+  checked_context_kernel(config,kernel.read_bytes(),symbols)
  vol=str(uuid.UUID(json.loads(seed.read_text())['volume_uuid'])).upper()
  if not uuid.UUID(vol).int or kernel.read_bytes().count(vol.encode())!=1:raise ValueError('kernel and pre-build Data volume identity do not match')
  def git(path,*a):return subprocess.check_output(['git','-C',str(path),*a],text=True).strip()

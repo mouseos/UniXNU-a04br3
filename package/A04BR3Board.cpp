@@ -287,7 +287,7 @@ void msdcIoReport(unsigned enabled)
 }
 
 // Called only by the opt-in PMU context worker, outside PMU lease and locks.
-// Reads only the same already-mapped board clock registers used below. It does
+// Maps and reads the same board clock registers used by the diagnostic below. It does
 // not use WACS: CPU rail voltage and temperature remain unavailable.
 extern "C" void a04br3_cpu_context_sample(unsigned round, unsigned cpu, unsigned phase)
 {
