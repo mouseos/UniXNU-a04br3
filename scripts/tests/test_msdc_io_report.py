@@ -7,7 +7,8 @@ s=(root/'package/A04BR3Board.cpp').read_text()
 a=s.index('void msdcIoReport(unsigned enabled)');b=s.index('\n// Diagnostic sampling only.',a)
 body=s[a:b]
 worker=s[s.index('void procLogThread('):s.index('\nstatic void a04br3_proclog_init')]
-assert worker.index('if (perf == 1)') < worker.index('msdcIoReport(msdcPerf)') < worker.index('cpuDiagnosticReport()')
+assert worker.index('if (perf == 1 || procLogMsdcIostatRequested())') < worker.index('msdcIoReport(msdcPerf)')
+assert worker.count('msdcIoReport(msdcPerf)') == 1
 pre=r'''
 #include <cassert>
 #include <cstdarg>

@@ -331,6 +331,16 @@ void procLogOptions(unsigned &perf, unsigned &rootTiming, unsigned &msdcPerf)
   if (ioStats == 1) msdcPerf = 1;
 }
 
+// The explicit iostat switch enables the existing MSDC reports without also
+// enabling unrelated home-performance diagnostics.  Keep this exact-value
+// opt-in separate from msdcPerf, which retains its home-perf behavior.
+bool procLogMsdcIostatRequested()
+{
+  unsigned ioStats = 0;
+  PE_parse_boot_argn("native-msdc-iostat", &ioStats, sizeof(ioStats));
+  return ioStats == 1;
+}
+
 void procLogThread(void *, wait_result_t)
 {
   unsigned perf, rootTiming, msdcPerf, overlapTrace = 0;
@@ -355,9 +365,13 @@ void procLogThread(void *, wait_result_t)
       IOLog("a04br3 perf vm pagesize=%llu free=%llu active=%llu inactive=%llu wired=%llu compressor=%llu speculative=%llu throttled=%llu pageable_internal=%llu pageable_external=%llu mode=%d active_compressor=%u active_swap=%u\n",
             m[0],m[1],m[2],m[3],m[4],m[5],m[6],q.throttled,q.pageable_internal,q.pageable_external,q.compressor_mode,q.compressor_active,q.swap_active);
       boot_home_perf_sample();
+      cpuDiagnosticReport();
+    }
+    // iostat is an explicit diagnostic request, independent of home-perf, so
+    // it can be combined with stacklog without enabling home diagnostics.
+    if (perf == 1 || procLogMsdcIostatRequested()) {
       msdcIrqReport(msdcPerf);
       msdcIoReport(msdcPerf);
-      cpuDiagnosticReport();
     }
     boot_home_irq_report();
     boot_live_pc_report();

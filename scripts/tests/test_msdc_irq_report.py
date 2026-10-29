@@ -14,7 +14,8 @@ assert 'procLogOptions(perf, rootTiming, msdcPerf)' in worker
 options = s[s.index('void procLogOptions('):s.index('void procLogThread(')]
 assert 'PE_parse_boot_argn("a04br3-msdc-perf", &msdcPerf, sizeof(msdcPerf))' in options
 assert 'PE_parse_boot_argn("native-msdc-iostat", &ioStats, sizeof(ioStats))' in options
-assert worker.index('if (perf == 1)') < worker.index('msdcIrqReport(msdcPerf)') < worker.index('cpuDiagnosticReport()')
+assert worker.index('if (perf == 1 || procLogMsdcIostatRequested())') < worker.index('msdcIrqReport(msdcPerf)')
+assert worker.count('msdcIrqReport(msdcPerf)') == 1
 for name in ('native_msdc_irq_stats[4]', 'native_msdc_worker_stats[4]', 'native_msdc_irq_mask_failures'):
     assert name + ' __attribute__((weak_import))' in s
 pre = r'''
