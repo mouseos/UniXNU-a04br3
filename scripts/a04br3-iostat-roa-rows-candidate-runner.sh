@@ -75,6 +75,7 @@ copy(iostat/'inputs/trust','original-trustcache')
 copy(rows/'powervr-metal/trust.json','roa-plugin-trust.json')
 for source,name in ((iostat/'records/kernel_provenance.json','kernel_provenance.json'),(iostat/'records/firmware_provenance.json','firmware_provenance.json'),(iostat/'records/seed_provenance.json','official-pre-build-seed.json'),(iostat/'records/pre_build.log','official-pre-build.log'),(iostat/'records/data_provenance.json','official-data-provenance.json'),(iostat/'inputs/data','original-data'),(iostat/'inputs/trust','original-trust'),(iostat/'inputs/gpu','original-gpu')):
  copy(source,name)
+(task/'source/build').mkdir(exist_ok=True)
 grow=[sys.executable,'-I',str(task/'source/scripts/seed-data-grow.py'),'--gib','4',str(baseline),str(fresh/'data-grown.dbr')]
 subprocess.run(grow,check=True)
 if not (fresh/'data-grown.dbr').is_file(): raise SystemExit('fresh Data grow produced no output')
