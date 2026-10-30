@@ -322,8 +322,8 @@ static void rtcCaptureThread(void *, wait_result_t)
 {
   RtcCaptureIO io; A04BR3RtcReference state={}; RtcCaptureRow rows[64]={};
   unsigned n=0, stopReason=0; bool allOk=true;
-  // Reuse the feeder/probe gate as an exclusive lease across the entire capture.
-  // A stuck worker leaves feeding disabled; hardware reset remains unverified.
+  // Use the probe gate for exclusion while allowing the normal watchdog feeder.
+  // A stuck worker is not itself proof of any watchdog or software recovery.
   bool gateLocked=false;
   for (unsigned i=0; i<100 && !gateLocked && !panic_active(); ++i) {
     gateLocked=gWatchdogGate.lock();
@@ -333,10 +333,10 @@ static void rtcCaptureThread(void *, wait_result_t)
     if (!panic_active()) IOLog("a04br3 rtc-ref unavailable=gate-busy\n");
     thread_terminate(current_thread()); return;
   }
-  const bool acquired = !panic_active() && !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE);
+  const bool acquired = !panic_active() && !__atomic_load_n(&gRtcCaptureActive,__ATOMIC_ACQUIRE) &&
+      !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE);
   if (acquired) {
     __atomic_store_n(&gRtcCaptureActive,1U,__ATOMIC_RELEASE);
-    __atomic_store_n(&a04br3_runtime_probe_active,1U,__ATOMIC_RELEASE);
   }
   gWatchdogGate.unlock();
   if (!acquired) { if (!panic_active()) IOLog("a04br3 rtc-ref unavailable=probe-active\n"); thread_terminate(current_thread()); return; }
@@ -356,20 +356,17 @@ static void rtcCaptureThread(void *, wait_result_t)
   if (!stopReason && !__atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) stopReason=3;
   const auto b=a04br3_rtc_bounds(state);
   const bool complete = n==64 && allOk && !state.invalid &&
-      __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE) &&
+      __atomic_load_n(&gRtcCaptureActive,__ATOMIC_ACQUIRE) &&
       __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE);
   // WACS quarantine is independent of this gate. A returned transaction can
   // release the gate even if the separate WACS lock remains quarantined.
   bool released=false;
-  if (__atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) {
-    for (unsigned retry=0; retry<1000 && !panic_active() &&
-         __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE); ++retry) {
+  {
+    for (unsigned retry=0; retry<1000 && !panic_active(); ++retry) {
       if (!gWatchdogGate.lock()) { IOSleep(1); continue; }
-      if (!panic_active() && __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE) &&
-          __atomic_load_n(&gRtcCaptureActive,__ATOMIC_ACQUIRE) &&
-          __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)) {
+      if (!panic_active() && __atomic_load_n(&gRtcCaptureActive,__ATOMIC_ACQUIRE) &&
+          !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)) {
         __atomic_store_n(&gRtcCaptureActive,0U,__ATOMIC_RELEASE);
-        __atomic_store_n(&a04br3_runtime_probe_active,0U,__ATOMIC_RELEASE);
         released=true;
       }
       gWatchdogGate.unlock();
@@ -455,7 +452,12 @@ extern "C" bool a04br3_pmu_lease_release(unsigned cpu, uint64_t generation)
 }
 extern "C" bool a04br3_runtime_probe_begin(void)
 {
-  return gWatchdogGate.begin(&a04br3_runtime_probe_active);
+  if (!gWatchdogGate.lock()) return false;
+  const bool ok=!__atomic_load_n(&gRtcCaptureActive,__ATOMIC_ACQUIRE) &&
+      !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE);
+  if (ok) __atomic_store_n(&a04br3_runtime_probe_active,1U,__ATOMIC_RELEASE);
+  gWatchdogGate.unlock();
+  return ok;
 }
 extern "C" bool a04br3_runtime_probe_end_checked(void)
 {

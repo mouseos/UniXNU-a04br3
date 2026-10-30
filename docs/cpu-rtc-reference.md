@@ -23,9 +23,13 @@ and GPU WACS2 command paths also retain that lock on uncertain completion;
 AutoReset no longer clears an unknown response and waits for write idle. That quarantine prevents
 known local users from touching a possibly pending transaction, but may disable
 touch, GPU power or recovery paths which use WACS2. The RTC worker reserves the existing board probe/watchdog gate over the entire
-capture, blocking cooperating runtime probes and normal watchdog feeding. It
-releases the gate when the transaction returns, including inconclusive or rejected data. Recovery loss, panic or a stuck worker leaves normal feeding disabled. A returned quarantined WACS transaction retains its WACS lock but releases the separate watchdog gate. Release retries yield to the scheduler and are count-bounded. Exhausting them leaves the gate active and reports a failed release; neither the retry count nor sleeps guarantee the worker will run before watchdog expiry. This is a recovery attempt, not proof of
-a watchdog reset. The periodic software-reset thread and external watchdog
+capture, blocking cooperating runtime probes while allowing normal watchdog
+feeding. The worker releases its own capture state after returned transactions,
+including rejected data and lost recovery readiness. A stuck worker may leave
+capture exclusion active; periodic feeding continues, so watchdog recovery is
+not established. Release retries yield to the scheduler and are count-bounded.
+Exhaustion reports failed release and can leave capture exclusion active. Neither
+the retry count nor sleeps guarantee a wall-time bound. The periodic software-reset thread and external watchdog
 agents are separate; actual reset/recovery is unverified. The poll bound is not a
 wall-time guarantee and an MMIO trap or hang may never return. There is no
 exclusive lease against secure firmware, EL2/EL3 or debug agents. An opt-in

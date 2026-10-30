@@ -10,6 +10,7 @@ actual_source=source
 source=source.replace(needle,'static bool a04br3_pmu_access_qualified(unsigned cpu) { return cpu < 4 && testQualified; }')
 main='''
 int main(){uint64_t gen=0;assert(!a04br3_pmu_qualification_available(0));
+ gRtcCaptureActive=1;assert(!a04br3_runtime_probe_begin());gRtcCaptureActive=0;
  assert(a04br3_runtime_probe_begin());assert(!a04br3_pmu_lease_acquire(0,&gen));
  gRtcCaptureActive=1;assert(!a04br3_runtime_probe_end_checked());assert(a04br3_runtime_probe_active);gRtcCaptureActive=0;assert(a04br3_runtime_probe_end_checked());
  testQualified=true;assert(a04br3_pmu_qualification_available(0));assert(a04br3_runtime_probe_begin());assert(a04br3_pmu_lease_acquire(0,&gen)&&gen);
