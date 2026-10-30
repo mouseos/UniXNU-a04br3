@@ -11,10 +11,12 @@ test -s "$RUNNER_TEMP/data.dbr"
 test -s "$RUNNER_TEMP/owner-data/owner-data-32.cdr"
 python3 "$DEVICE_DIR/scripts/a04br3-verify-workflow-seed.py"
 test "$(git rev-parse HEAD)" = 22e49b19f9651e8b0e81c3fb3764d8d3a72c7ff4
+test -z "$(git status --porcelain --untracked-files=all --ignore-submodules=all)"
 test "$(git -C "$DEVICE_DIR" rev-parse HEAD)" = "$A04BR3_DEVICE_COMMIT"
-test -z "$(git -C "$DEVICE_DIR" status --porcelain --untracked-files=no --ignore-submodules=all)"
+test -z "$(git -C "$DEVICE_DIR" status --porcelain --untracked-files=all --ignore-submodules=all)"
 test "$(git ls-tree HEAD drivers/NativeMsdc | awk '{print $3}')" = 66d40654ae43ef27090a6d6e1f552be6ea10d24b
 test "$(git -C drivers/NativeMsdc rev-parse HEAD)" = 66d40654ae43ef27090a6d6e1f552be6ea10d24b
+test -z "$(git -C drivers/NativeMsdc status --porcelain --untracked-files=all)"
 export XNU_IRQ_PC_STATS=1 XNU_MSDC_IRQ_WAIT=1 XNU_MSDC_IRQ_WORKER=1 XNU_MSDC_GIC_NS=1
 export XNU_PROCESS_EXIT_DIAG=1 XNU_ROOT_TIMING=1 XNU_IO_OVERLAP_TRACE=1
 ./unixnu defconfig a04br3_rtc_ref_defconfig -D "$DEVICE_DIR"

@@ -10,7 +10,7 @@ with tempfile.TemporaryDirectory(prefix='rtc-build-wrapper-') as d:
  (temp/'data.dbr').write_bytes(b'data');(temp/'owner-data/owner-data-32.cdr').write_bytes(b'seed')
  uid='12345678-1234-4234-8234-123456789abc';(temp/'owner-data/seed.json').write_text(json.dumps({'volume_uuid':uid}))
  (bin/'git').write_text('''#!/bin/bash
-if [[ "$*" == *"ls-tree"* ]]; then echo "160000 commit 66d40654ae43ef27090a6d6e1f552be6ea10d24b drivers/NativeMsdc"; elif [[ "$*" == *"status"* ]]; then :; elif [[ "$*" == *"drivers/NativeMsdc"* ]]; then echo 66d40654ae43ef27090a6d6e1f552be6ea10d24b; elif [[ "$*" == *"-C"* ]]; then echo device-commit; else echo 22e49b19f9651e8b0e81c3fb3764d8d3a72c7ff4; fi
+if [[ "$*" == *"ls-tree"* ]]; then echo "160000 commit 66d40654ae43ef27090a6d6e1f552be6ea10d24b drivers/NativeMsdc"; elif [[ "$*" == *"status"* ]]; then if [[ "${DIRTY_MSDC:-0}" = 1 && "$*" == *"drivers/NativeMsdc"* ]]; then echo " M NativeMsdc.cpp"; fi; elif [[ "$*" == *"drivers/NativeMsdc"* ]]; then echo 66d40654ae43ef27090a6d6e1f552be6ea10d24b; elif [[ "$*" == *"-C"* ]]; then echo device-commit; else echo 22e49b19f9651e8b0e81c3fb3764d8d3a72c7ff4; fi
 ''')
  (bin/'nm').write_text('''#!/bin/bash
 for s in native_msdc_irq_mask_failures native_msdc_irq_stats native_msdc_worker_stats native_cs_trace_report; do echo "00000000 T _$s"; done
@@ -32,6 +32,8 @@ fi
  assert (out/'a04br3/kernel/kernel.macho').is_file()
  env['XNU_OWNER_DATA_VOLUME_UUID']='12345678-1234-4234-8234-123456789abd'
  assert subprocess.run(['bash',script],cwd=p,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode!=0
- (temp/'data.dbr').unlink();env['XNU_OWNER_DATA_VOLUME_UUID']=uid
+ env['XNU_OWNER_DATA_VOLUME_UUID']=uid;env['DIRTY_MSDC']='1'
+ assert subprocess.run(['bash',script],cwd=p,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode!=0
+ env.pop('DIRTY_MSDC');(temp/'data.dbr').unlink()
  assert subprocess.run(['bash',script],cwd=p,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode!=0
 print('PASS RTC build wrapper: explicit root, custom output, flags, seed mismatch and missing seed')
