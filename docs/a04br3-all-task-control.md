@@ -2,9 +2,9 @@
 
 `scripts/a04br3-iostat-stack-new-kernel.py` の `--all-task-control` は、同じ入力から作る `--all-task` の起動引数と比較して、末尾の `atp=1` のみを除く。GPU・Metal・`pl=60`・`a04br3-home-perf=1`・`native-msdc-iostat=1` を維持する。live PC、全タスク、meter、stream は同時に指定できない。既存モードの既定動作は変更しない。
 
-この比較モードは device f2dee958a180ae6fee7b84a44baf9d74dcd22aff と記録済み kernel SHA-256 17904eca68b4c7e5f99350f4ddc57a671efc0357a93c984db9bb7f799336a4d1 を要求する。`--comparison-boot` と `--comparison-manifest` には既存 alltask 基準を明示する。基準 boot は SHA-256 00e2adb5cbd58f0d01384a807336a0eb99f92c84c3dd514e3c4bb7ab65bab881 に固定される。基準 boot の実FATファイル・引数と manifest を照合し、source・device・kernel record・FD・DTB・sidecar・Data UUID・ADT identity・seed・旧boot/pairを比較する。出力 manifest に基準 boot と基準 manifest のハッシュも記録する。
+この比較モードは device f2dee958a180ae6fee7b84a44baf9d74dcd22aff と記録済み kernel SHA-256 17904eca68b4c7e5f99350f4ddc57a671efc0357a93c984db9bb7f799336a4d1 を要求する。`--comparison-boot` と `--comparison-manifest` には既存 alltask 基準を明示する。基準 boot、基準 manifest、旧 pair は既知の SHA-256 に固定される。基準 boot の実FATファイル・引数と manifest を照合し、source・device・kernel record・FD・DTB・sidecar・Data UUID・ADT identity・seed・旧boot/pairを比較する。出力 manifest に基準 boot と基準 manifest のハッシュも記録する。
 
-既存の f2 構築手順における `--all-task` を `--all-task-control --comparison-boot <基準boot.img> --comparison-manifest <基準manifest.json>` に置き換え、新しい出力ディレクトリを指定する。`--live-pc` は併用しない。旧 boot の実FAT設定は pair の引数と完全一致し、必須 GPU・自動復帰引数を含む必要がある。公式 UniXNU CLI の payload / bootimg 生成、引数マージ、ADT、boot image validator の検査も維持する。既存成果物や ADT を手編集しない。
+既存の f2 構築手順における `--all-task` を `--all-task-control --comparison-boot <基準boot.img> --comparison-manifest <基準manifest.json>` に置き換え、新しい出力ディレクトリを指定する。`--live-pc` は併用しない。旧 boot の実FAT設定は全モードで pair の引数と完全一致する必要があり、比較モードではさらに必須 GPU・自動復帰引数を要求する。公式 UniXNU CLI の payload / bootimg 生成、引数マージ、ADT、boot image validator の検査も維持する。既存成果物や ADT を手編集しない。
 
 ## 監査時の注意
 

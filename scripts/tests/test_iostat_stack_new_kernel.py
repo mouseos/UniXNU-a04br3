@@ -20,17 +20,38 @@ class NewKernelContracts(unittest.TestCase):
                 'a04br3-gpu-bo-wc=1 a04br3-gpu-bo-map=1 a04br3-gpu-tq-low=1 '
                 'sheng-fb-gpu=1 a04br3-gpu-clock=380 a04br3-autoreset=720')
         config = {'entry': [{'id':'xnu', 'args':args}]}
-        BUILD.validate_source_config(config, args)
+        BUILD.validate_source_config(config, args, require_control=True)
         for word in args.split()[1:]:
             changed = ' '.join(w for w in args.split() if w != word)
             with self.subTest(word=word), self.assertRaises(ValueError):
-                BUILD.validate_source_config(config, changed)
+                BUILD.validate_source_config(config, changed, require_control=True)
             bad = {'entry': [{'id':'xnu', 'args':changed}]}
             with self.subTest(missing=word), self.assertRaises(ValueError):
-                BUILD.validate_source_config(bad, changed)
+                BUILD.validate_source_config(bad, changed, require_control=True)
         duplicated = copy.deepcopy(config); duplicated['entry'].append(copy.deepcopy(config['entry'][0]))
         with self.assertRaises(ValueError): BUILD.validate_source_config(duplicated, args)
         with self.assertRaises(ValueError): BUILD.validate_source_config(config, None)
+
+    def test_existing_modes_do_not_require_control_gpu_or_recovery(self):
+        args = 'serial=1 a04br3-home-perf=1 pl=1 native-msdc-iostat=1'
+        config = {'entry':[{'id':'xnu', 'args':args}]}
+        for flags in ({}, {'stream':True}, {'meter':True}, {'meter_route':True}, {'all_task':True},
+                      {'all_task':True,'live_pc':True}):
+            with self.subTest(flags=flags):
+                BUILD.validate_source_config(config, args)
+                BUILD.rewrite_args(args, **flags)
+                with self.assertRaises(ValueError): BUILD.validate_source_config(config, args+' extra=1')
+        with self.assertRaises(ValueError): BUILD.validate_source_config(config, args, require_control=True)
+
+    def test_control_pinned_metadata_rejects_mutation(self):
+        import json
+        original = b'{"profile":"all-task","run_id":"1"}'
+        digest = BUILD.hashlib.sha256(original).hexdigest()
+        self.assertEqual(BUILD.pinned_json(original, digest, 'pair'), json.loads(original))
+        for label in ('comparison old pair', 'comparison baseline manifest'):
+            for mutated in (original+b' ', original.replace(b'"run_id":"1"', b'"run_id":"2"')):
+                with self.subTest(label=label, mutated=mutated), self.assertRaisesRegex(ValueError, 'hash mismatch'):
+                    BUILD.pinned_json(mutated, digest, label)
 
     def test_control_pair_rejects_each_changed_fixed_input(self):
         import copy
