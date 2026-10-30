@@ -11,7 +11,7 @@ SAFE=ROOT/'port/xnu/out/iostat-ui-stack-stream-20261030/boot.img'
 UART=ROOT/'port/gsi/logs/uart-ttyUSB0-921600.log'
 DEVICE_COMMIT='ce66352db798560ac8c4f380d66bf78876d6c7e2'
 PARSER_COMMIT='ed98bfa1c429e26de66bc42b88859eb923dbda98'
-SUPPORT_COMMIT='ae83ee8afe5b98424032979ede3fdc16b60dbc9f'
+SUPPORT_COMMIT='1919bcb5fba43f1d8eaa41d426cb84598ad291b4'
 REPO=ROOT/'unixnu/UniXNU-a04br3-memory-low-impact'
 REVIEW=REPO/'configs/memory-ce66352-trial-review.json'
 PARSER='scripts/summarize-memory-observation.py'
@@ -34,6 +34,8 @@ def start_guardian():
  subprocess.run(['loginctl','enable-linger',str(os.getuid())],check=True)
  subprocess.run(['systemctl','--user','daemon-reload'],check=True)
  subprocess.run(['systemctl','--user','enable','--now',GUARDIAN_UNIT],check=True)
+ # Always restart so a resident guardian runs the code verified by check().
+ subprocess.run(['systemctl','--user','restart',GUARDIAN_UNIT],check=True)
  need(subprocess.run(['systemctl','--user','is-active','--quiet',GUARDIAN_UNIT]).returncode==0,'復旧サービスが起動していません')
  state=WORK/'recovery-state.json'
  if state.exists(): need(json.loads(state.read_text()).get('state')=='restored','以前の復旧処理が未完了')
