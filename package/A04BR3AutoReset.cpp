@@ -45,6 +45,10 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" unsigned panic_active(void);
 // The first bootstrap kernel links a display stub without NativeHidInput.
 extern "C" volatile uint32_t native_hid_input_command __attribute__((weak));
+// LegacyDisplayProbe.cpp and A04BR3Input.cpp (a04br3-input-latency=1): the timed host inputs. Weak: the bootstrap kernel has neither.
+extern "C" unsigned a04br3_latency_input(unsigned kind) __attribute__((weak));
+extern "C" void a04br3_latency_poll(void) __attribute__((weak));
+extern "C" volatile uint32_t a04br3_swipe_request __attribute__((weak));
 // Exported for the opt-in CPU PMU experiment. While a probe is in progress,
 // periodic WDT feeding stops so an upper-EL hang can return to fastboot.
 extern "C" {
@@ -62,6 +66,7 @@ constexpr unsigned kUartRbr = 0x00, kUartLsr = 0x14;   // 32-bit register spacin
 constexpr char kResetRequest[] = "A04BR3!RST";
 constexpr char kShotRequest[] = "A04BR3!SHOT";
 constexpr char kHomeRequest[] = "A04BR3!HOME";
+constexpr char kSwipeRequest[] = "A04BR3!SWR";   // a04br3-input-latency=1: one rightward swipe (A04BR3Input.cpp)
 // The LK frame buffer that NativeLegacyDisplay presents into (the GOP base the UART report of LegacyDisplayProbe.cpp prints,
 // "gop be9c0000+3e8000 800x1280"); mapped as device memory like the presenter's own mapping: 800x1280, 32 bpp, stride 3200.
 constexpr uint64_t kFrameBuffer = 0xBE9C0000;
@@ -74,7 +79,7 @@ constexpr unsigned kWatchdogSeconds = 31;   // TOPRGU LENGTH holds at most 31 s 
 
 uint32_t rd(volatile uint8_t *base, unsigned offset);
 volatile uint8_t *gPwrap, *gToprgu, *gUart;
-unsigned gRequestMatched, gShotMatched, gHomeMatched;
+unsigned gRequestMatched, gShotMatched, gHomeMatched, gSwipeMatched;
 volatile uint8_t *gFb;
 bool gShotWanted;
 
@@ -88,12 +93,24 @@ bool resetRequested(void)
     // complete press/release pair; this can wake iPadOS without resetting it.
     if (c == kHomeRequest[gHomeMatched]) {
       if (++gHomeMatched == sizeof(kHomeRequest) - 1) {
+        // Open the latency sample before the mailbox is visible to NativeHidInput (no work unless a04br3-input-latency=1).
+        if (unsigned (*opened)(unsigned) = a04br3_latency_input) opened(1);
         if (&native_hid_input_command) native_hid_input_command = 1;
         gHomeMatched = 0;
         IOLog("a04br3 input: UART Home %s\n", &native_hid_input_command ? "requested" : "unavailable in bootstrap kernel");
       }
     } else {
       gHomeMatched = (c == kHomeRequest[0]) ? 1 : 0;
+    }
+    if (c == kSwipeRequest[gSwipeMatched]) {
+      if (++gSwipeMatched == sizeof(kSwipeRequest) - 1) {
+        gSwipeMatched = 0;
+        unsigned (*opened)(unsigned) = a04br3_latency_input;
+        if (opened && &a04br3_swipe_request && opened(2)) a04br3_swipe_request = 1;
+        IOLog("a04br3 input: UART swipe %s\n", opened && &a04br3_swipe_request ? "requested" : "unavailable (a04br3-input-latency=1)");
+      }
+    } else {
+      gSwipeMatched = (c == kSwipeRequest[0]) ? 1 : 0;
     }
     if (c == kShotRequest[gShotMatched]) {
       if (++gShotMatched == sizeof(kShotRequest) - 1) { gShotWanted = true; gShotMatched = 0; }
@@ -385,6 +402,7 @@ void cycleThread(void *, wait_result_t)
       resetNow();
     }
     const bool reset = resetRequested();
+    if (void (*poll)(void) = a04br3_latency_poll) poll();
     if (gShotWanted && gFb) { gShotWanted = false; sendShot(); }
     if (reset) {
       IOLog("a04br3-autoreset: reset requested on UART, resetting into fastboot\n");
