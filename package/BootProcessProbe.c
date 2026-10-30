@@ -19,6 +19,9 @@
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
+#include <vm/vm_kern.h>
+#include <kern/kalloc.h>
+#include <mach_debug/zone_info.h>
 #include "BootMemoryQueueSnapshot.h"
 
 // Nontransactional page counters, as in host_statistics64. Called only by
@@ -289,6 +292,106 @@ void boot_home_perf_sample(void) {
    }
   }
  }
+}
+
+// Opt-in accounting over processes (not a system-wide memory total).
+// The ledger work is bounded, but proc_iterate allocates and fills a PID list
+// for the whole process population before callouts; it may wait. Run only
+// in the heartbeat worker, where it can delay later heartbeat reports.
+#define MEM_TOP_LIMIT 256u
+#define MEM_TOP_ROWS 8u
+struct mem_top_row { char name[24]; int pid; uint64_t uniqueid, resident, compressed, footprint; };
+static struct mem_top_row mem_top_rows[MEM_TOP_ROWS];
+static unsigned mem_top_seen, mem_top_count, mem_top_no_task, mem_top_truncated;
+static int mem_top_capture(proc_t p, void *unused) {
+ (void)unused;
+ if (mem_top_seen >= MEM_TOP_LIMIT) { mem_top_truncated=1; return PROC_RETURNED_DONE; }
+ ++mem_top_seen;
+ task_t task=proc_task(p); if(!task) { ++mem_top_no_task; return PROC_RETURNED; }
+ uint64_t footprint=get_task_phys_footprint(task);
+ unsigned pos=0;
+ while(pos<mem_top_count && mem_top_rows[pos].footprint>=footprint) ++pos;
+ if(pos>=MEM_TOP_ROWS) return PROC_RETURNED;
+ unsigned end=mem_top_count<MEM_TOP_ROWS ? mem_top_count++ : MEM_TOP_ROWS-1;
+ for(unsigned i=end;i>pos;--i) mem_top_rows[i]=mem_top_rows[i-1];
+ struct mem_top_row *r=&mem_top_rows[pos];
+ memset(r,0,sizeof(*r));strlcpy(r->name,proc_best_name(p),sizeof(r->name));
+ r->pid=proc_pid(p);r->uniqueid=proc_uniqueid(p);r->footprint=footprint;
+ r->resident=get_task_resident_size(task);r->compressed=get_task_compressed(task);
+ return PROC_RETURNED;
+}
+void boot_memory_top_sample(void) {
+ mem_top_seen=mem_top_count=mem_top_no_task=mem_top_truncated=0;
+ uint64_t begin=0,end=0;
+ absolutetime_to_nanoseconds(mach_absolute_time(),&begin);
+ proc_iterate(PROC_ALLPROCLIST|PROC_NOWAITTRANS,mem_top_capture,NULL,NULL,NULL);
+ absolutetime_to_nanoseconds(mach_absolute_time(),&end);
+ printf("a04br3 memtop begin_ns=%llu end_ns=%llu seen=%u rows=%u no_task=%u truncated=%u non_atomic=1 pid_snapshot_unbounded=1 omissions_possible=1\n",
+  begin,end,mem_top_seen,mem_top_count,mem_top_no_task,mem_top_truncated);
+ for(unsigned i=0;i<mem_top_count;++i) {
+  struct mem_top_row *r=&mem_top_rows[i];
+  printf("a04br3 memtop rank=%u pid=%d name=%.23s uid=%llu footprint=%llu resident=%llu compressed=%llu\n",
+   i+1,r->pid,r->name,r->uniqueid,r->footprint,r->resident,r->compressed);
+ }
+}
+
+// Optional wired-memory breakdown (kernel argument a04br3-wiredtag=N, default off): the rows of zprint -t, taken from
+// vm_page_diagnose as mach_memory_info does. Raw tags/sites are printed and named on the host. Called only from the
+// a04br3-proclog thread with no lock held; one wired buffer per call, released before return.
+#define WIRED_TAG_TOP 24u
+#define WIRED_ZONE_TOP 12u
+static void wired_tag_pick(const mach_memory_info_t *info, uint32_t n, uint64_t mask, uint64_t want, uint32_t *rows, uint32_t limit, uint32_t *count)
+{
+ *count=0;
+ for(uint32_t i=0;i<n;++i){
+  const mach_memory_info_t *e=&info[i];
+  if(!e->size || (e->flags & mask)!=want) continue;
+  uint32_t at=*count < limit ? (*count)++ : limit;
+  if(at==limit){ if(e->size<=info[rows[limit-1]].size) continue; at=limit-1; }
+  while(at>0 && info[rows[at-1]].size<e->size){ rows[at]=rows[at-1]; --at; }
+  rows[at]=i;
+ }
+}
+void boot_memory_tag_sample(void) {
+ uint64_t begin=0,end=0;
+ absolutetime_to_nanoseconds(mach_absolute_time(),&begin);
+ uint32_t n=vm_page_diagnose_estimate();
+ if(!n || n>16384){ printf("a04br3 wiredtag error=estimate count=%u\n",n); return; }
+ vm_size_t bytes=(vm_size_t)n*sizeof(mach_memory_info_t);
+ mach_memory_info_t *info=kalloc_data(bytes,Z_WAITOK|Z_ZERO);
+ if(!info){ printf("a04br3 wiredtag error=alloc bytes=%llu\n",(unsigned long long)bytes); return; }
+ kern_return_t kr=vm_page_diagnose(info,n,0,false);
+ absolutetime_to_nanoseconds(mach_absolute_time(),&end);
+ if(kr!=KERN_SUCCESS){ printf("a04br3 wiredtag error=diagnose kr=%d\n",kr); kfree_data(info,bytes); return; }
+ uint64_t zone_total=0,tag_total=0; uint32_t zones=0,tags=0;
+ for(uint32_t i=0;i<n;++i){
+  uint64_t type=info[i].flags & VM_KERN_SITE_TYPE;
+  if(info[i].flags & VM_KERN_SITE_ZONE){ zone_total+=info[i].size; ++zones; }
+  else if(type!=VM_KERN_SITE_COUNTER && info[i].size){ tag_total+=info[i].size; ++tags; }
+ }
+ printf("a04br3 wiredtag begin_ns=%llu end_ns=%llu entries=%u tags=%u tag_bytes=%llu zones=%u zone_bytes=%llu wire_pages=%u non_atomic=1\n",
+  begin,end,n,tags,tag_total,zones,zone_total,vm_page_wire_count);
+ for(uint32_t i=0;i<n;++i){
+  if((info[i].flags & VM_KERN_SITE_TYPE)!=VM_KERN_SITE_COUNTER || (info[i].flags & VM_KERN_SITE_ZONE)) continue;
+  printf("a04br3 wiredtag counter=%llu size=%llu free=%llu largest=%llu\n",info[i].site,info[i].size,info[i].free,info[i].largest);
+ }
+ uint32_t rows[WIRED_TAG_TOP],count=0;
+ // Tag, kext and kernel-site rows (not zones, not counters), largest first.
+ for(uint64_t type=VM_KERN_SITE_TAG;type<=VM_KERN_SITE_KERNEL;++type){
+  wired_tag_pick(info,n,VM_KERN_SITE_TYPE|VM_KERN_SITE_ZONE,type,rows,WIRED_TAG_TOP,&count);
+  for(uint32_t r=0;r<count;++r){
+   const mach_memory_info_t *e=&info[rows[r]];
+   printf("a04br3 wiredtag type=%llu rank=%u tag=%u site=0x%llx flags=0x%llx size=%llu peak=%llu collectable=%llu name=%.40s\n",
+    type,r+1,e->tag,e->site,e->flags,e->size,e->peak,e->collectable_bytes,(e->flags & VM_KERN_SITE_NAMED)?e->name:"-");
+  }
+ }
+ uint32_t zrows[WIRED_ZONE_TOP];
+ wired_tag_pick(info,n,VM_KERN_SITE_ZONE,VM_KERN_SITE_ZONE,zrows,WIRED_ZONE_TOP,&count);
+ for(uint32_t r=0;r<count;++r){
+  const mach_memory_info_t *e=&info[zrows[r]];
+  printf("a04br3 wiredtag zone rank=%u size=%llu collectable=%llu name=%.60s\n",r+1,e->size,e->collectable_bytes,e->name);
+ }
+ kfree_data(info,bytes);
 }
 
 // Optional timer-IRQ PC histogram. Called by the generic, compile-gated XNU

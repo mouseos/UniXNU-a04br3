@@ -59,6 +59,16 @@ class RamLayoutTest(unittest.TestCase):
                          (0x52000000, 0x0E000000, 'Conv'))
         self.assertLess(lower_size, request)
 
+    def test_opt_in_window_override_stays_in_ddr_high(self):
+        # make-a04br3-adt.py A04BR3_OWNED_MEMORY_SIZE: the largest accepted value with an offset up to 0x1C0000.
+        base, size, _ = self.regions['DDR High']
+        display, _, _ = self.regions['Display Reserved']
+        self.assertEqual(base + size, display)
+        largest = 0x56800000
+        self.assertLessEqual(base + 0x1C0000 + largest, display)
+        self.assertGreater(base + 0x1C0000 + largest + 0x200000, display)
+        self.assertLessEqual(base + 0x7C000 + largest, display)  # current kernels: VA low bits 0x7C000
+
 
 if __name__ == '__main__':
     unittest.main()
