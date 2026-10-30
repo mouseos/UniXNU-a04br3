@@ -59,6 +59,7 @@ namespace latency {
 struct LatencySample {
     uint32_t seq,kind,framesAfter;bool open;
     uint64_t rx,hid,swap,present,idle;
+    uint64_t last;uint32_t timeCount;uint64_t times[24];   // tap samples: every frame (up to 24) and the last one
 };
 LatencySample gLatency;
 IOSimpleLock *gLatencyLock;
@@ -72,12 +73,14 @@ uint64_t latencyMs1000(uint64_t from,uint64_t to) {   // microseconds between tw
     if(!to || to<from)return 0;
     uint64_t ns=0;absolutetime_to_nanoseconds(to-from,&ns);return ns/1000;
 }
-const char *latencyKind(uint32_t kind) {return kind==1?"home":kind==2?"swipe":"other";}
+const char *latencyKind(uint32_t kind) {return kind==1?"home":kind==2?"swipe":kind==3?"tap":"other";}
 }  // namespace latency
 using namespace latency;
 extern "C" {
 // A04BR3Input.cpp sends one swipe when this is 1 (A04BR3!SWR); only it clears it.
 volatile uint32_t a04br3_swipe_request;
+// A04BR3Input.cpp taps once at (a04br3_tap_x, a04br3_tap_y) when a04br3_tap_request is 1 (A04BR3!TAP); only it clears it.
+volatile uint32_t a04br3_tap_request,a04br3_tap_x,a04br3_tap_y;
 volatile uint32_t a04br3_latency_samples,a04br3_latency_skipped;
 // Opens a sample for a host input of the given kind (1 Home, 2 swipe). Returns its sequence number, 0 when not measured.
 unsigned a04br3_latency_input(unsigned kind) {
@@ -90,7 +93,7 @@ unsigned a04br3_latency_input(unsigned kind) {
     if(!gLatency.open) {
         const uint64_t last=gLatencyLastPresent;
         a04br3_latency_samples=a04br3_latency_samples+1;
-        gLatency=LatencySample{a04br3_latency_samples,kind,0,true,now,0,0,0,last?now-last:0};
+        gLatency=LatencySample{a04br3_latency_samples,kind,0,true,now,0,0,0,last?now-last:0,0,0,{}};
         seq=gLatency.seq;
     } else a04br3_latency_skipped=a04br3_latency_skipped+1;
     IOSimpleLockUnlock(gLatencyLock);
@@ -125,18 +128,25 @@ void a04br3_latency_present(void) {
     if(gLatency.open && gLatency.swap) {
         if(!gLatency.present)gLatency.present=now;
         else gLatency.framesAfter++;
+        gLatency.last=now;
+        if(gLatency.timeCount<24)gLatency.times[gLatency.timeCount++]=now;
     }
     IOSimpleLockUnlock(gLatencyLock);
 }
 // Called every 100 ms by the UART thread: closes and prints the open sample when it is complete or has timed out.
 void a04br3_latency_poll(void) {
     if(!gLatencyLock)return;
-    uint64_t twoSeconds=0,minute=0;
+    // Home and swipe: 2 s after the first frame, or 60 s. Tap (an app launch): 15 s without a frame after the first one, or 90 s,
+    // since the launch animation and the app's own first frame can be seconds apart.
+    uint64_t twoSeconds=0,minute=0,quiet=0,launch=0;
     nanoseconds_to_absolutetime(2ull*NSEC_PER_SEC,&twoSeconds);nanoseconds_to_absolutetime(60ull*NSEC_PER_SEC,&minute);
+    nanoseconds_to_absolutetime(15ull*NSEC_PER_SEC,&quiet);nanoseconds_to_absolutetime(90ull*NSEC_PER_SEC,&launch);
     const uint64_t now=mach_absolute_time();
     LatencySample done{};bool report=false;
     IOSimpleLockLock(gLatencyLock);
-    if(gLatency.open && ((gLatency.present && now-gLatency.present>=twoSeconds) || now-gLatency.rx>=minute)) {
+    const bool tap=gLatency.kind==3;
+    if(gLatency.open && (tap ? ((gLatency.last && now-gLatency.last>=quiet) || now-gLatency.rx>=launch)
+                             : ((gLatency.present && now-gLatency.present>=twoSeconds) || now-gLatency.rx>=minute))) {
         gLatency.open=false;done=gLatency;report=true;
     }
     IOSimpleLockUnlock(gLatencyLock);
@@ -149,6 +159,16 @@ void a04br3_latency_poll(void) {
           (unsigned long long)(hid/1000),(unsigned long long)(hid%1000),(unsigned long long)(swap/1000),(unsigned long long)(swap%1000),
           (unsigned long long)(present/1000),(unsigned long long)(present%1000),done.present?done.framesAfter+1:0,
           (unsigned long long)(idle/1000));
+    if(done.kind==3 && done.present) {   // frame times of the launch, ms after rx, in one line
+        char list[24*8+1]={};size_t used=0;
+        for(uint32_t i=0;i<done.timeCount && used<sizeof(list)-8;i++) {
+            const int n=snprintf(list+used,sizeof(list)-used,i?",%llu":"%llu",(unsigned long long)(latencyMs1000(done.rx,done.times[i])/1000));
+            if(n>0)used+=size_t(n);
+        }
+        const uint64_t last=latencyMs1000(done.rx,done.last);
+        IOLog("a04br3 latency: seq=%u tap frames=%u last_ms=%llu.%03llu times_ms=%s\n",done.seq,done.framesAfter+1,
+              (unsigned long long)(last/1000),(unsigned long long)(last%1000),list);
+    }
 }
 }
 
@@ -170,6 +190,7 @@ constexpr char kResetRequest[] = "A04BR3!RST";
 constexpr char kShotRequest[] = "A04BR3!SHOT";
 constexpr char kHomeRequest[] = "A04BR3!HOME";
 constexpr char kSwipeRequest[] = "A04BR3!SWR";   // a04br3-input-latency=1: one rightward swipe (A04BR3Input.cpp)
+constexpr char kTapRequest[] = "A04BR3!TAP";   // a04br3-input-latency=1: "A04BR3!TAP<x>,<y>" + newline, portrait pixels
 // The LK frame buffer that NativeLegacyDisplay presents into (the GOP base the UART report of LegacyDisplayProbe.cpp prints,
 // "gop be9c0000+3e8000 800x1280"); mapped as device memory like the presenter's own mapping: 800x1280, 32 bpp, stride 3200.
 constexpr uint64_t kFrameBuffer = 0xBE9C0000;
@@ -182,7 +203,7 @@ constexpr unsigned kWatchdogSeconds = 31;   // TOPRGU LENGTH holds at most 31 s 
 
 uint32_t rd(volatile uint8_t *base, unsigned offset);
 volatile uint8_t *gPwrap, *gToprgu, *gUart;
-unsigned gRequestMatched, gShotMatched, gHomeMatched, gSwipeMatched;
+unsigned gRequestMatched, gShotMatched, gHomeMatched, gSwipeMatched, gTapMatched, gTapPhase, gTapX, gTapY;
 volatile uint8_t *gFb;
 bool gShotWanted;
 
@@ -204,6 +225,25 @@ bool resetRequested(void)
       }
     } else {
       gHomeMatched = (c == kHomeRequest[0]) ? 1 : 0;
+    }
+    // Tap: the prefix, then decimal x, a comma, decimal y and a line end. Anything else abandons the request.
+    if (gTapPhase) {
+      unsigned &v = gTapPhase == 1 ? gTapX : gTapY;
+      if (c >= '0' && c <= '9' && v < 10000) v = v * 10 + unsigned(c - '0');
+      else if (c == ',' && gTapPhase == 1) gTapPhase = 2;
+      else {
+        if ((c == '\n' || c == '\r') && gTapPhase == 2 && gTapX < 800 && gTapY < 1280) {
+          const bool timed = a04br3_latency_input(3) != 0;
+          if (timed) { a04br3_tap_x = gTapX; a04br3_tap_y = gTapY; a04br3_tap_request = 1; }
+          IOLog("a04br3 input: UART tap %u,%u %s\n", gTapX, gTapY, timed ? "requested" : "not sent (needs a04br3-input-latency=1 and no open sample)");
+        }
+        gTapPhase = 0;
+      }
+    }
+    if (c == kTapRequest[gTapMatched]) {
+      if (++gTapMatched == sizeof(kTapRequest) - 1) { gTapMatched = 0; gTapPhase = 1; gTapX = gTapY = 0; }
+    } else {
+      gTapMatched = (c == kTapRequest[0]) ? 1 : 0;
     }
     if (c == kSwipeRequest[gSwipeMatched]) {
       if (++gSwipeMatched == sizeof(kSwipeRequest) - 1) {

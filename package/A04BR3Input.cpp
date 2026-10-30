@@ -40,6 +40,7 @@ volatile uint32_t a04br3_input_stage, a04br3_touch_contacts, a04br3_key_presses;
 volatile int a04br3_touch_error = -1;
 // A04BR3AutoReset.cpp sets 1 for one swipe (a04br3-input-latency=1) and times it.
 extern volatile uint32_t a04br3_swipe_request;
+extern volatile uint32_t a04br3_tap_request, a04br3_tap_x, a04br3_tap_y;
 void a04br3_latency_hid(void);
 }
 
@@ -340,7 +341,8 @@ void start(void (*fn)(void *, wait_result_t))
   if (kernel_thread_start(fn, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 
-// a04br3-input-latency=1 (default off): the host's "A04BR3!SWR" (A04BR3AutoReset.cpp) sets a04br3_swipe_request; this thread then
+// a04br3-input-latency=1 (default off): the host's "A04BR3!SWR" and "A04BR3!TAPx,y" (A04BR3AutoReset.cpp) set a04br3_swipe_request or
+// a04br3_tap_request. For a swipe this thread then
 // sends the same rightward swipe as the selftest above (41 points 20 ms apart across the middle of the panel) and stamps the
 // sample's hand-off time at its first point. On the first home screen page it opens the widget view; Home returns from it.
 void swipeThread(void *, wait_result_t)
@@ -354,6 +356,14 @@ void swipeThread(void *, wait_result_t)
         IOSleep(20);
       }
       publish(false, 700, 640);
+    }
+    if (a04br3_tap_request) {   // one tap: down at the point for 80 ms, then up (as a finger on the panel reports it)
+      const unsigned x = a04br3_tap_x, y = a04br3_tap_y;
+      a04br3_tap_request = 0;
+      a04br3_latency_hid();
+      publish(true, x, y);
+      IOSleep(80);
+      publish(false, x, y);
     }
     IOSleep(20);
   }
