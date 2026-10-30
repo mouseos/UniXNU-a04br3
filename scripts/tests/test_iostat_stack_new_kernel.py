@@ -20,6 +20,10 @@ class NewKernelContracts(unittest.TestCase):
         self.assertEqual(BUILD.rewrite_args(line, stream=True), 'serial=1 pl=60 native-msdc-iostat=1 a04br3-stacklog=1 native-cs-stream=1')
         self.assertEqual(BUILD.rewrite_args(line, meter=True), 'serial=1 a04br3-home-perf=1 pl=60 native-msdc-iostat=1 cm=1')
         self.assertEqual(BUILD.rewrite_args(line, meter_route=True), 'serial=1 a04br3-home-perf=1 pl=60 native-msdc-iostat=1 cm=2')
+        self.assertEqual(BUILD.rewrite_args(line, meter_cross=True), 'serial=1 a04br3-home-perf=1 pl=60 native-msdc-iostat=1 cm=3')
+        for kw in ({'meter_cross':True, 'meter':True}, {'meter_cross':True, 'meter_route':True}, {'meter_cross':True, 'all_task':True}, {'meter_cross':True, 'stream':True}):
+            with self.assertRaises(ValueError): BUILD.rewrite_args(line, **kw)
+        with self.assertRaises(ValueError): BUILD.rewrite_args(line + ' cm=1', meter_cross=True)
         self.assertEqual(BUILD.rewrite_args(line, all_task=True), 'serial=1 a04br3-home-perf=1 pl=60 native-msdc-iostat=1 atp=1')
         for kw in ({'all_task':True, 'meter_route':True}, {'all_task':True, 'meter':True}, {'all_task':True, 'stream':True}):
             with self.assertRaises(ValueError): BUILD.rewrite_args(line, **kw)
@@ -62,6 +66,9 @@ class NewKernelContracts(unittest.TestCase):
             self.assertEqual(BUILD.load_kernel_record(path, kernel)['sha256'], BUILD.sha(kernel))
             record['device_commit'] = BUILD.ALLTASK_DEVICE; path.write_text(json.dumps(record))
             self.assertEqual(BUILD.load_kernel_record(path, kernel, BUILD.ALLTASK_DEVICE)['device_commit'], BUILD.ALLTASK_DEVICE)
+            with self.assertRaises(ValueError): BUILD.load_kernel_record(path, kernel)
+            record['device_commit'] = BUILD.CROSS_DEVICE; path.write_text(json.dumps(record))
+            self.assertEqual(BUILD.load_kernel_record(path, kernel, BUILD.CROSS_DEVICE)['device_commit'], BUILD.CROSS_DEVICE)
             with self.assertRaises(ValueError): BUILD.load_kernel_record(path, kernel)
             record['device_commit'] = BUILD.ROUTE_DEVICE; path.write_text(json.dumps(record))
             self.assertEqual(BUILD.load_kernel_record(path, kernel, BUILD.ROUTE_DEVICE)['device_commit'], BUILD.ROUTE_DEVICE)
