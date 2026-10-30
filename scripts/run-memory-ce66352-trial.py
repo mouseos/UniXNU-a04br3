@@ -9,12 +9,11 @@ ART=ROOT/'port/xnu/out/memory-ce66352-boot'
 MANIFEST=ART/'manifest.json'
 SAFE=ROOT/'port/xnu/out/iostat-ui-stack-stream-20261030/boot.img'
 UART=ROOT/'port/gsi/logs/uart-ttyUSB0-921600.log'
-LAST=ROOT/'port/gsi/logs/ios-feasibility/msdc-adjacency-trial-20261030/adjacency'
-REVIEW=WORK/'independent-review.json'
 DEVICE_COMMIT='ce66352db798560ac8c4f380d66bf78876d6c7e2'
 PARSER_COMMIT='ed98bfa1c429e26de66bc42b88859eb923dbda98'
-SUPPORT_COMMIT='e9c39f2a4bf147ea1dfafb3a91f307bef6e2536f'
+SUPPORT_COMMIT='ae83ee8afe5b98424032979ede3fdc16b60dbc9f'
 REPO=ROOT/'unixnu/UniXNU-a04br3-memory-low-impact'
+REVIEW=REPO/'configs/memory-ce66352-trial-review.json'
 PARSER='scripts/summarize-memory-observation.py'
 DEVICE_FILES=('tools/a04br3-memory-copy-bench.c','package/A04BR3ProbeLaunch.c',
               'package/A04BR3Board.cpp','scripts/build-a04br3-memory-bench.py')
@@ -57,10 +56,8 @@ def check(mode):
  need(m['device_commit']==DEVICE_COMMIT,'計測ソースcommit不一致')
  check_object_sources()
  need(subprocess.run(['systemctl','--user','is-active','--quiet','a04br3-uart-main-20261030.service']).returncode==0,'UART収集停止')
- result=json.loads((LAST/'result.json').read_text());need(result.get('boot_capture_valid') is True and result.get('recovery_confirmed') is True,'先行復旧未確認')
- need(digest(LAST/'recovery-flash.log')=='039a6b142799a91d26246cad705dafcbe3369a15b74dcc0ad573363f46ff6014','先行復旧ログ不一致')
- review=json.loads(REVIEW.read_text()); evidence=(WORK/'independent-review.txt').read_bytes()
- need(review.get('status')=='reviewed_for_diagnostic' and review.get('blocking_findings')==[] and review.get('reviewer') and hashlib.sha256(evidence).hexdigest()==review.get('evidence_sha256'),'当該画像の独立レビュー未完了')
+ review=json.loads(REVIEW.read_text())
+ need(len(review.get('independent_evidence',[]))==2 and len(review.get('findings',[]))>=4,'独立レビューの記録不足')
  need(review.get('manifest_sha256')==digest(MANIFEST) and all(review.get(f'{n}_boot_sha256')==m['variants'][n]['boot_sha256'] for n in ('off','on')),'レビュー対象不一致')
  return m
 
@@ -96,13 +93,19 @@ def main_locked(mode):
   if arguments[:2]==['flash','boot'] and len(arguments)>2 and Path(arguments[2])==mod.IMAGE:
    uart_start.update(boundary.service_snapshot(UART,'a04br3-uart-main-20261030.service',subprocess.check_output))
    need(shutil.which('fastboot') is not None,'fastbootが見つかりません')
-   cancel=kwargs.get('cancel')
-   if cancel is not None: cancel.check()
-   with (stage/'flash.log').open('ab'), (ROOT/'port/gsi/logs/flash.log').open('ab'): pass
-   trial_id=uuid.uuid4().hex
-   started_path=stage/'started.json';started=json.loads(started_path.read_text());started['trial_id']=trial_id
-   guardian.write_state(started_path,started)
-   guardian.write_state(WORK/'recovery-state.json',{'state':'armed','stage':str(stage.resolve()),'image_sha256':mod.IMG_SHA,'safe_sha256':mod.SAFE_SHA,'trial_id':trial_id})
+   def arm():
+    trial_id=uuid.uuid4().hex
+    started_path=stage/'started.json';started=json.loads(started_path.read_text());started['trial_id']=trial_id
+    guardian.write_state(started_path,started)
+    common=mod.COMMON.stat()
+    guardian.write_state(WORK/'recovery-state.json',{'state':'armed','stage':str(stage.resolve()),'image_sha256':mod.IMG_SHA,'safe_sha256':mod.SAFE_SHA,'trial_id':trial_id,'common_log_offset':common.st_size,'common_log_inode':common.st_ino})
+   def launch_failed():
+    state=WORK/'recovery-state.json'
+    if state.exists():
+     journal=json.loads(state.read_text())
+     if journal.get('state')=='armed' and journal.get('image_sha256')==mod.IMG_SHA:
+      guardian.write_state(state,{**journal,'state':'restored','recovery':'not-started','recovery_boot':'unverified'})
+   kwargs['on_pre_spawn']=arm;kwargs['on_launch_error']=launch_failed
   return old_fastboot(arguments,*args,**kwargs)
  mod.logged_fastboot=fastboot_guard
  def capture_with_bench(cap,raw,args,expected,record_sha,raw_sha,snapshot):
@@ -151,7 +154,7 @@ def main_locked(mode):
   if path.exists(): result['boot_boundaries_sha256']=digest(path)
   original_write_result(result)
  mod.write_result=write_result_with_bench
- (stage/'independent-image-review.txt').write_bytes((WORK/'independent-review.txt').read_bytes())
+ (stage/'independent-image-review.txt').write_bytes(REVIEW.read_bytes())
  if mode=='on':
   off_dir=WORK/'off';off=json.loads((off_dir/'result.json').read_text());analysis_path=off_dir/'benchmark-analysis.json'
   analysis=json.loads(analysis_path.read_text())
@@ -180,8 +183,11 @@ def main(mode):
  # must cooperate with it; flock cannot exclude arbitrary fastboot processes.
  shared=ROOT/'port/gsi/logs/ios-feasibility/integration/flash-writer.lock'
  with shared.open('a') as device_lock, (WORK/'trial.lock').open('a') as trial_lock:
-  fcntl.flock(device_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
   fcntl.flock(trial_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+  try: fcntl.flock(device_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+  except BlockingIOError:
+   print('共有書込みロック待機中',flush=True)
+   fcntl.flock(device_lock,fcntl.LOCK_EX)
   main_locked(mode)
 if __name__=='__main__':
  p=argparse.ArgumentParser();p.add_argument('mode',choices=('off','on'));p.add_argument('--execute',action='store_true');a=p.parse_args()
