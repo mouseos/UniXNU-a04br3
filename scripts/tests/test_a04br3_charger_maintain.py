@@ -82,6 +82,25 @@ int main(){
   assert(st.latest.raw[3]==0xa4&&st.latest.raw[5]==0x51&&(st.latest.raw[7]&0xe9)==0x28&&(st.latest.raw[2]&0x7f)==0x0c);
   assert(st.sampled.raw[3]==0x00);
   bus.bq[0]=0x30;size_t k=bus.bqWrites.size();assert(step(st,bus,w,&n)==Kept&&n==0&&bus.bqWrites.size()==k+1);}
+ // DDET_EN is preserved while VBREG/IINLIMIT are restored.
+ {Snapshot s;memcpy(s.raw,LK,8);s.valid=255;s.raw[3]=0x15;Write w[4];assert(plan(s,w)==1&&w[0].reg==3&&w[0].value==0xa5);
+  s.raw[3]=0xa5;assert(plan(s,w)==0);}
+ // The kick is written right after registers 00 and 04, before any later read can fail.
+ // Reads are numbered from 1 in issue order (00, 04, then 01,02,03,05,06,07).
+ {Write w[4];unsigned n;
+  for(unsigned failAt=3;failAt<=8;++failAt){Bus b;unsigned count=0;
+   struct Wrap{Bus &b;unsigned failAt;unsigned &count;
+    uint16_t rd(unsigned o){return b.rd(o);}
+    void wr(unsigned o,uint16_t v){ if(o==0x24&&b.regs[0x6c/2]){ if(++count==failAt){b.nack=true;} } b.wr(o,v); b.nack=false; }
+    uint64_t now(){return b.now();} void delay(){b.delay();}};
+   Wrap io{b,failAt,count};State s2;assert(step(s2,io,w,&n)==ReadError&&s2.kicks==1);
+   assert(b.bqWrites.size()==1&&b.bqWrites[0].first==0);}
+  Bus b;unsigned count=0;
+  struct Wrap2{Bus &b;unsigned &count;
+   uint16_t rd(unsigned o){return b.rd(o);}
+   void wr(unsigned o,uint16_t v){ if(o==0x24&&b.regs[0x6c/2]&&++count==2)b.nack=true; b.wr(o,v); b.nack=false; }
+   uint64_t now(){return b.now();} void delay(){b.delay();}};
+  Wrap2 io{b,count};State s3;assert(step(s3,io,w,&n)==ReadError&&s3.kicks==0&&b.bqWrites.empty());}
  // Every single-register perturbation: planned writes never exceed stock and are whitelisted.
  for(unsigned reg:{2U,3U,5U,7U})for(unsigned v=0;v<256;++v){Snapshot s;memcpy(s.raw,LK,8);s.raw[reg]=uint8_t(v);s.valid=255;
   Write w[4];unsigned n=plan(s,w);for(unsigned i=0;i<n;++i)checkCeiling(w[i]);

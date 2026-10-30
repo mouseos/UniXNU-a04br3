@@ -142,33 +142,46 @@ void maintainService(void *, wait_result_t) {
   for (;;) {
     cm::Write w[4] = {}; unsigned n = 0;
     cm::StepResult r = cm::ReadError;
-    bool logNow = false, periodic = false, gaugeOk = false;
+    bool logNow = false, periodic = false, gaugeOk = false, logInit = false;
+    unsigned initStatus = 0, attempts = 0, resets = 0;
     uint16_t g[4] = {};
     IOLockLock(bus);
-    if (!ready || !stillOwned()) {
-      inheritedReady(); // logs inherited GPIO/controller state; EN/detect pins are never driven
-      IO setup;
-      // I2C2 carries only this thread's charger/gauge traffic, so a transfer this
-      // thread abandoned on timeout may be cleared with the controller's own
-      // SOFTRESET (i2c-mt65xx init_hw does the same). Never at first init.
-      if (st.cycles && (setup.rd(0x24) & 1)) { setup.wr(0x50, 1); IOLog("a04br3 charger: maintain soft-reset stuck I2C2\n"); }
-      auto status = a04charger::initialize(setup);
-      IOLog("a04br3 charger: maintain I2C2 initialize result=%u (0 ready)\n", unsigned(status));
-      ready = status == a04charger::BoardReady;
+    // Up to three attempts per 10 s cycle so one failed transfer never delays the kick a whole cycle.
+    for (; attempts < 3; ++attempts) {
+      IO io;
+      bool stuck = (io.rd(0x24) & 1) != 0;
+      if (!ready || stuck || !stillOwned()) {
+        if (!st.cycles && !ready) inheritedReady(); // first time only: logs inherited GPIO/controller state
+        // I2C2 carries only this thread's charger/gauge traffic, so a transfer this
+        // thread abandoned on timeout is cleared with the controller's own SOFTRESET
+        // (i2c-mt65xx init_hw does the same). Never before this thread's first transfer.
+        if (st.cycles && stuck) { io.wr(0x50, 1); IODelay(50); ++resets; }
+        auto status = a04charger::initialize(io);
+        ready = status == a04charger::BoardReady;
+        if (!ready || !st.cycles) { logInit = true; initStatus = unsigned(status); }
+        if (!ready) continue;
+      }
+      r = cm::step(st, io, w, &n);
+      if (r != cm::ReadError && r != cm::WriteError) break;
+      ready = false; // re-initialize before the next attempt
     }
     if (ready) {
-      IO io; r = cm::step(st, io, w, &n);
-      if (r == cm::ReadError || r == cm::WriteError) ready = false; // re-initialize next cycle
+      IO io;
       unsigned key = (unsigned(st.latest.raw[0]) << 8) | unsigned(r);
       periodic = ++sinceLog >= logEvery;
       logNow = periodic || n || key != lastKey;
       lastKey = key;
-      if (logNow) {
+      if (logNow && (r == cm::Kept || r == cm::Repaired)) {
+        // Telemetry only after the kick; a gauge timeout is recovered at the next attempt's start.
         gaugeOk = cm::gaugeRead(io, 0x09, &g[0]) && cm::gaugeRead(io, 0x0d, &g[1]) &&
                   cm::gaugeRead(io, 0x0f, &g[2]) && cm::gaugeRead(io, 0x08, &g[3]);
       }
+    } else {
+      logNow = true;
     }
     IOLockUnlock(bus);
+    if (logInit) IOLog("a04br3 charger: maintain I2C2 initialize result=%u (0 ready)\n", initStatus);
+    if (resets || attempts) IOLog("a04br3 charger: maintain retried attempts=%u softresets=%u\n", attempts, resets);
     if (logNow) {
       maintainReport(periodic ? "periodic" : "change", r, st, w, n, gaugeOk, g);
       sinceLog = 0;
@@ -208,8 +221,10 @@ extern "C" void a04br3_charger_init(void) {
           logEvery * 10, PE_parse_boot_argn("a04br3-charger-owner", &enabled, sizeof enabled) ? "; a04br3-charger-owner ignored" : "");
     if (!mapAll()) return;
     thread_t thread = nullptr;
-    // Above default kernel priority so boot-time I/O cannot starve the 30 s watchdog.
-    if (kernel_thread_start_priority(maintainService, nullptr, 81, &thread) != KERN_SUCCESS) {
+    // kernel_thread_start uses BASEPRI_KERNEL (81, osfmk/kern/sched.h). 91 sits just
+    // below BASEPRI_PREEMPT (92); the thread runs < 10 ms per 10 s, and boot-time
+    // work starved the default-priority owner for > 2 s.
+    if (kernel_thread_start_priority(maintainService, nullptr, 91, &thread) != KERN_SUCCESS) {
       IOLog("a04br3 charger: maintain thread unavailable; no I2C access\n"); return;
     }
     thread_deallocate(thread);

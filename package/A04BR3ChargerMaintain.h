@@ -17,7 +17,7 @@ constexpr uint8_t StockVbreg = 0x29;   // 3.5 V + 41 * 20 mV = 4.32 V
 constexpr uint8_t StockIchrg = 0x0a;   // 550 + 10 * 75 mA = 1300 mA
 constexpr uint8_t StockIterm = 0x01;   // 100 mA
 constexpr uint8_t StockIusbMax = 0x02; // 500 mA (stock only when a host is connected)
-constexpr uint8_t Reg3 = uint8_t(StockVbreg << 2);          // IINLIMIT=0 (1.5 A), DDET_EN=0
+constexpr uint8_t Reg3 = uint8_t(StockVbreg << 2);          // IINLIMIT=0 (1.5 A); DDET_EN preserved
 constexpr uint8_t Reg5 = uint8_t((StockIchrg << 3) | StockIterm);
 static_assert(Reg3 == 0xa4 && Reg5 == 0x51, "stock register image");
 static_assert(StockVbreg <= 0x29 && StockIchrg <= 0x0a && StockIusbMax <= 0x02, "never above stock");
@@ -34,6 +34,8 @@ inline uint8_t target2(uint8_t raw2) {
   return uint8_t((iusb << 4) | 0x0c); // RESET=0, EN_STAT=1, TE=1, CE=0, HZ=0
 }
 inline uint8_t target7(uint8_t raw7) { return uint8_t((raw7 & 0x16) | 0x28); } // 2XTMR=0, TMR=6h, TS_EN=1, LOW_CHG=0
+// DDET_EN (bit0) is written 1 once by stock init and self-clears; keep its current value.
+inline uint8_t target3(uint8_t raw3) { return uint8_t(Reg3 | (raw3 & 1)); }
 
 struct Write { uint8_t reg, value; };
 // Returns the number of configuration writes needed (0..4). Writes are only
@@ -45,7 +47,7 @@ inline unsigned plan(const Snapshot &s, Write out[4]) {
   unsigned fault = s.raw[0] & 7;
   if (fault != FaultNone && fault != FaultWatchdog) return 0;
   unsigned n = 0;
-  if ((s.raw[3] & 0xfe) != Reg3) out[n++] = {3, Reg3};
+  if ((s.raw[3] & 0xfe) != Reg3) out[n++] = {3, target3(s.raw[3])};
   if (s.raw[5] != Reg5) out[n++] = {5, Reg5};
   if ((s.raw[7] & 0xe9) != 0x28) out[n++] = {7, target7(s.raw[7])};
   if ((s.raw[2] & 0x7f) != target2(s.raw[2])) out[n++] = {2, target2(s.raw[2])};
@@ -56,7 +58,7 @@ inline bool allowedWrite(uint8_t reg, uint8_t value) {
   switch (reg) {
   case 0: return (value & ~0x88) == 0 && (value & 0x80);
   case 2: return (value & 0x8f) == 0x0c && ((value >> 4) & 7) <= StockIusbMax;
-  case 3: return value == Reg3;
+  case 3: return (value & 0xfe) == Reg3;
   case 5: return value == Reg5;
   case 7: return (value & 0xe9) == 0x28;
   default: return false;
@@ -124,22 +126,26 @@ struct State {
   uint64_t lastKick = 0, worstGap = 0;
 };
 enum StepResult { Kept, Repaired, NotCharger, ReadError, WriteError };
-// One 10 s cycle: full snapshot, TMR_RST, then stock-image repair if needed and a
-// verifying re-read. Failures are counted and retried next cycle; never latched.
+// One attempt: read 00 and the 04 ID, write TMR_RST immediately (so a later read
+// failure cannot delay the kick), read the rest, then repair to the stock image
+// if needed and re-read. Failures are counted and retried by the caller; never latched.
 template<class IO> StepResult step(State &st, IO &io, Write *done, unsigned *doneCount) {
   *doneCount = 0; ++st.cycles;
   Snapshot s; s.at = io.now();
-  for (unsigned reg = 0; reg < 8; ++reg) {
-    if (!chargerRead(io, uint8_t(reg), &s.raw[reg])) { ++st.readErrors; st.latest = s; return ReadError; }
+  static const uint8_t order[8] = {0, 4, 1, 2, 3, 5, 6, 7};
+  for (unsigned i = 0; i < 8; ++i) {
+    unsigned reg = order[i];
+    if (!chargerRead(io, uint8_t(reg), &s.raw[reg])) { ++st.readErrors; st.sampled = s; st.latest = s; return ReadError; }
     s.valid |= 1U << reg;
+    if (reg != 4) continue;
+    st.faultHistory |= 1U << (s.raw[0] & 7);
+    if ((s.raw[4] & 0xf8) != 0x40) { st.sampled = s; st.latest = s; return NotCharger; }
+    if (!chargerWrite(io, 0, uint8_t(0x80 | (s.raw[0] & 8)))) { ++st.writeErrors; st.sampled = s; st.latest = s; return WriteError; }
+    uint64_t now = io.now();
+    if (st.kicks && now > st.lastKick && now - st.lastKick > st.worstGap) st.worstGap = now - st.lastKick;
+    st.lastKick = now; ++st.kicks;
   }
-  st.faultHistory |= 1U << (s.raw[0] & 7);
   st.sampled = s; st.latest = s;
-  if ((s.raw[4] & 0xf8) != 0x40) return NotCharger;
-  if (!chargerWrite(io, 0, uint8_t(0x80 | (s.raw[0] & 8)))) { ++st.writeErrors; return WriteError; }
-  uint64_t now = io.now();
-  if (st.kicks && now > st.lastKick && now - st.lastKick > st.worstGap) st.worstGap = now - st.lastKick;
-  st.lastKick = now; ++st.kicks;
   Write w[4]; unsigned n = plan(s, w);
   if (!n) return Kept;
   for (unsigned i = 0; i < n; ++i) {
