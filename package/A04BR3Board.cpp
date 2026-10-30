@@ -38,6 +38,7 @@ void boot_memory_snapshot(uint64_t out[7]);
 void boot_home_perf_sample(void);
 void boot_memory_top_sample(void);
 void boot_memory_tag_sample(void);
+void native_powervr_bo_owner_report(void) __attribute__((weak_import));   // package/powervr (a04br3-bo-owner=1, mp 0x200)
 void boot_home_irq_init(unsigned);
 void boot_live_pc_init(unsigned);
 void boot_live_pc_report(void);
@@ -382,7 +383,10 @@ void procLogThread(void *, wait_result_t)
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
     a04br3_free_data_seed();
-    if (wiredTag && (round == 1 || round % wiredTag == 0)) boot_memory_tag_sample();
+    if (wiredTag && (round == 1 || round % wiredTag == 0)) {
+      boot_memory_tag_sample();
+      if (&native_powervr_bo_owner_report) native_powervr_bo_owner_report();
+    }
     if (perf != 1) {
       static ProcLine line;
       line = {};

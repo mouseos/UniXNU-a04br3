@@ -550,6 +550,7 @@ class NativePowerVRBoView : public IOGeneralMemoryDescriptor {
   OSDeclareDefaultStructors(NativePowerVRBoView)
   IOBufferMemoryDescriptor *backing_;
 public:
+  uint64_t orphanBytes_;   // a04br3 BO owner accounting: pages kept by user mappings after their BO went
   static NativePowerVRBoView *withBacking(IOBufferMemoryDescriptor *backing, const native_powervr_sg *sg, uint32_t nents, uint64_t size);
   void free() APPLE_KEXT_OVERRIDE;
 };
@@ -581,8 +582,11 @@ NativePowerVRBoView *NativePowerVRBoView::withBacking(IOBufferMemoryDescriptor *
   view->backing_ = backing;
   return view;
 }
+namespace { void boOwnerOrphanGone(uint64_t bytes); }
 void NativePowerVRBoView::free()
 {
+  boOwnerOrphanGone(orphanBytes_);   // the last user mapping of a BO that already went
+  orphanBytes_ = 0;
   if (backing_) {
     backing_->release();
     backing_ = nullptr;
@@ -605,6 +609,7 @@ struct native_powervr_bo {
   IOMemoryDescriptor *host;
   bool hostPrepared;
   bool liveAccounted, liveHostImport; // immutable category once successfully accounted
+  uint8_t ownerSlot;               // a04br3 BO owner accounting: 1 + slot, 0 when not accounted
   IOMemoryMap *hostMap;            // existing, uncached firmware scanout mapping; never wired as normal RAM
 };
 
@@ -685,9 +690,84 @@ void boLiveCopy(native_powervr_bo_live_class *out, const native_powervr_bo_live_
   out->peak_bytes = __atomic_load_n(&in->peak_bytes, __ATOMIC_RELAXED);
 }
 
+// ---- Optional per-process BO accounting (a04br3-bo-owner=1 or mp bit 0x200; default off) ----
+// Counts BOs by the process that created or imported them, by size class, and the BOs whose pages outlive the BO in a user
+// mapping (orphaned views). Spin lock around counters only; no allocation or logging under it.
+struct BoOwner { int pid; char name[20]; uint64_t created, createdBytes, freed, freedBytes, live, liveBytes, peakBytes, hostLive, hostLiveBytes; };
+constexpr unsigned kBoOwners = 24, kBoClasses = 6;
+BoOwner gBoOwners[kBoOwners];
+uint64_t gBoClassLive[kBoClasses][2];
+uint64_t gBoOrphanLive, gBoOrphanLiveBytes, gBoOrphanTotal, gBoOrphanTotalBytes, gBoOwnerOverflow;
+IOSimpleLock *gBoOwnerLock;
+bool gBoOwnerEnabled;
+void initBoOwnerPolicy()
+{
+  uint32_t v = 0, mp = 0;
+  const bool on = (PE_parse_boot_argn("a04br3-bo-owner", &v, sizeof(v)) && v == 1) ||
+                  (PE_parse_boot_argn("mp", &mp, sizeof(mp)) && (mp & 0x200));
+  if (on && !gBoOwnerLock) gBoOwnerLock = IOSimpleLockAlloc();
+  __atomic_store_n(&gBoOwnerEnabled, on && gBoOwnerLock, __ATOMIC_RELEASE);
+}
+unsigned boSizeClass(uint64_t size)
+{
+  return size <= 0x10000 ? 0 : size <= 0x40000 ? 1 : size <= 0x100000 ? 2 : size <= 0x400000 ? 3 : size <= 0x1000000 ? 4 : 5;
+}
+void boOwnerAdd(native_powervr_bo *bo, bool hostImport)
+{
+  if (!__atomic_load_n(&gBoOwnerEnabled, __ATOMIC_ACQUIRE) || bo->ownerSlot) return;
+  char name[20] = {};
+  const int pid = proc_selfpid();
+  proc_selfname(name, sizeof(name));
+  IOSimpleLockLock(gBoOwnerLock);
+  unsigned slot = kBoOwners;
+  for (unsigned i = 0; i < kBoOwners; i++) {
+    if (gBoOwners[i].pid == pid && !strncmp(gBoOwners[i].name, name, sizeof(name))) { slot = i; break; }
+    if (slot == kBoOwners && !gBoOwners[i].pid && !gBoOwners[i].created) slot = i;
+  }
+  if (slot < kBoOwners) {
+    BoOwner &o = gBoOwners[slot];
+    if (!o.pid) { o.pid = pid; memcpy(o.name, name, sizeof(name)); }
+    o.created++; o.createdBytes += bo->size; o.live++; o.liveBytes += bo->size;
+    if (o.liveBytes > o.peakBytes) o.peakBytes = o.liveBytes;
+    if (hostImport) { o.hostLive++; o.hostLiveBytes += bo->size; }
+    const unsigned c = boSizeClass(bo->size);
+    gBoClassLive[c][0]++; gBoClassLive[c][1] += bo->size;
+    bo->ownerSlot = static_cast<uint8_t>(slot + 1);
+  } else {
+    gBoOwnerOverflow++;
+  }
+  IOSimpleLockUnlock(gBoOwnerLock);
+}
+void boOwnerRemove(native_powervr_bo *bo, bool orphaned)
+{
+  if (!bo->ownerSlot) return;
+  IOSimpleLockLock(gBoOwnerLock);
+  BoOwner &o = gBoOwners[bo->ownerSlot - 1];
+  o.freed++; o.freedBytes += bo->size; o.live--; o.liveBytes -= bo->size;
+  if (bo->host) { o.hostLive--; o.hostLiveBytes -= bo->size; }
+  const unsigned c = boSizeClass(bo->size);
+  gBoClassLive[c][0]--; gBoClassLive[c][1] -= bo->size;
+  if (orphaned) { gBoOrphanLive++; gBoOrphanLiveBytes += bo->size; gBoOrphanTotal++; gBoOrphanTotalBytes += bo->size; }
+  IOSimpleLockUnlock(gBoOwnerLock);
+  bo->ownerSlot = 0;
+}
+void boOwnerOrphanGone(uint64_t bytes)
+{
+  if (!bytes || !gBoOwnerLock) return;
+  IOSimpleLockLock(gBoOwnerLock);
+  gBoOrphanLive--; gBoOrphanLiveBytes -= bytes;
+  IOSimpleLockUnlock(gBoOwnerLock);
+}
+
 void boDestroy(native_powervr_bo *bo)
 {
   if (bo->hostMap) bo->hostMap->release();
+  if (bo->ownerSlot) {
+    // A view still retained by a user mapping keeps the pages (and the md it holds) after this BO goes.
+    const bool orphaned = bo->view && bo->view->getRetainCount() > 1;
+    if (orphaned) bo->view->orphanBytes_ = bo->size;
+    boOwnerRemove(bo, orphaned);
+  }
   if (bo->view) bo->view->release();   // the pages live on while user mappings of the view do
   if (bo->md) bo->md->release();
   if (bo->host) {
@@ -748,6 +828,7 @@ int boCreate(uint64_t size, uint64_t flags, native_powervr_bo **out)
     }
   __asm__ volatile("dsb sy" ::: "memory");
   boLiveAdd(bo, false);
+  boOwnerAdd(bo, false);
   *out = bo;
   return 0;
 }
@@ -919,6 +1000,7 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
   }
   if (report && bo->hostMap) IOLog("powervr: known scanout import: physical segments ready %u\n", bo->nents);
   boLiveAdd(bo, true);
+  boOwnerAdd(bo, true);
   if ((bo->flags & NATIVE_POWERVR_BO_READ_ONLY) && __atomic_load_n(&gBoLiveEnabled, __ATOMIC_ACQUIRE)) {
     static unsigned readonlyTraces;
     if (__atomic_fetch_add(&readonlyTraces, 1u, __ATOMIC_RELAXED) < 4)
@@ -929,6 +1011,31 @@ int boImportHost(task_t task, uint64_t address, uint64_t size, uint64_t flags, n
   return 0;
 }
 }  // namespace
+
+// Printed by the board's a04br3-proclog thread (package/A04BR3Board.cpp) when the accounting is on.
+extern "C" void native_powervr_bo_owner_report(void)
+{
+  if (!__atomic_load_n(&gBoOwnerEnabled, __ATOMIC_ACQUIRE)) return;
+  BoOwner rows[kBoOwners];
+  uint64_t classes[kBoClasses][2], orphan[4], overflow;
+  IOSimpleLockLock(gBoOwnerLock);
+  memcpy(rows, gBoOwners, sizeof(rows));
+  memcpy(classes, gBoClassLive, sizeof(classes));
+  orphan[0] = gBoOrphanLive; orphan[1] = gBoOrphanLiveBytes; orphan[2] = gBoOrphanTotal; orphan[3] = gBoOrphanTotalBytes;
+  overflow = gBoOwnerOverflow;
+  IOSimpleLockUnlock(gBoOwnerLock);
+  IOLog("a04br3 bo-owner total orphan_live=%llu orphan_live_bytes=%llu orphan_total=%llu orphan_total_bytes=%llu overflow=%llu "
+        "class_le64k=%llu/%llu le256k=%llu/%llu le1m=%llu/%llu le4m=%llu/%llu le16m=%llu/%llu gt16m=%llu/%llu\n",
+        orphan[0], orphan[1], orphan[2], orphan[3], overflow, classes[0][0], classes[0][1], classes[1][0], classes[1][1],
+        classes[2][0], classes[2][1], classes[3][0], classes[3][1], classes[4][0], classes[4][1], classes[5][0], classes[5][1]);
+  for (unsigned i = 0; i < kBoOwners; i++) {
+    const BoOwner &o = rows[i];
+    if (!o.created) continue;
+    IOLog("a04br3 bo-owner pid=%d name=%.19s live=%llu live_bytes=%llu peak_bytes=%llu created=%llu created_bytes=%llu "
+          "freed=%llu freed_bytes=%llu host_live=%llu host_live_bytes=%llu\n",
+          o.pid, o.name, o.live, o.liveBytes, o.peakBytes, o.created, o.createdBytes, o.freed, o.freedBytes, o.hostLive, o.hostLiveBytes);
+  }
+}
 
 extern "C" void native_powervr_bo_live_snapshot(native_powervr_bo_live_record *out)
 {
@@ -2113,6 +2220,7 @@ extern "C" int native_powervr_publish(void)
   initTqLowPolicy();
   initBoWcPolicy();
   initBoLivePolicy();
+  initBoOwnerPolicy();
   IOLog("powervr: device info: gpu_id %llx, phantoms %u, quirks 47217:%d 48545:%d 49927:%d 51764:%d 62269:%d 63142:%d, "
         "enhancements 35421:%d 42064:%d, VA bits %llu, free list min pages %u, max coeffs %u, CDM local mem %u%s\n",
         static_cast<unsigned long long>(gGpuId), rogue_get_num_phantoms(&gDev), gDev.quirks.has_brn47217, gDev.quirks.has_brn48545,
