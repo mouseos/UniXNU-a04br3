@@ -33,6 +33,7 @@ p.add_argument('--settle', type=float, default=60)
 p.add_argument('--ready-timeout', type=float, default=1500)
 p.add_argument('--result-timeout', type=float, default=75)
 p.add_argument('--parse-only', action='store_true')
+p.add_argument('--to-offset', type=int, help='end of this boot in the log (default: the end of the log), for --parse-only')
 p.add_argument('--app', help='X,Y of an app icon: measure app launches instead of the Home/swipe alternation')
 p.add_argument('--app-count', type=int, default=3)
 p.add_argument('--shot-dir', help='UART screenshot after each app launch (scripts/a04br3-screenshot.py --log)')
@@ -48,7 +49,8 @@ start = a.from_offset if a.from_offset is not None else os.path.getsize(a.log)
 def text():
     with open(a.log, 'rb') as f:
         f.seek(start)
-        return f.read().decode('latin1').replace('\r', '')
+        data = f.read(a.to_offset - start) if a.to_offset else f.read()
+        return data.decode('latin1').replace('\r', '')
 
 def results():
     out = []
