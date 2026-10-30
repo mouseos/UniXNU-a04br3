@@ -3,7 +3,8 @@
 // MetalPluginName -> /System/Library/Extensions/<name>.bundle). Copied from UniXNU drivers/NativeAdreno/NativeAdrenoAccelerator.cpp with
 // the Adreno user-client factory replaced by the PowerVR one (NativePowerVRMetal.cpp); nothing else differs. It derives from the original
 // IOAcceleratorES base as qualified in UniXNU drivers/NativeMetal/OriginalAcceleratorABI.h (no operational overrides), so the only
-// virtuals it adds are newUserClient and the property reads (counted for the console). Its static initializer is staged out of
+// virtuals it adds are newUserClient and the property reads (counted for the console; with a04br3-gpu-metal-hide=1 the plugin keys read as
+// absent outside the grant). Its static initializer is staged out of
 // __mod_init_func (UniXNU scripts/build-native-adreno-accelerator.py --source ... --into ...) and run by NativePowerVRMetal.cpp after
 // the original IOGPUFamily kext has loaded, because the parent metaclass does not exist before that. The class keeps the Apple
 // accelerator's name, as the Adreno one does, so original sandbox profiles that name the service class accept the plugin's open;
@@ -12,7 +13,8 @@
 #include <IOKit/IOUserClient.h>
 
 extern "C" IOReturn native_powervr_metal_new_user_client(IOService *, task_t, void *, UInt32, OSDictionary *, IOUserClient **);
-extern "C" void native_powervr_metal_note_property_read(const char *);
+// False when the key reads as absent in the calling process (a04br3-gpu-metal-hide=1, NativePowerVRMetal.cpp).
+extern "C" bool native_powervr_metal_note_property_read(const char *);
 
 class AGXAccelerator : public IOAcceleratorES {
     OSDeclareDefaultStructors(AGXAccelerator)
@@ -32,17 +34,17 @@ IOReturn AGXAccelerator::newUserClient(task_t owningTask,void *securityID,UInt32
 }
 OSObject *AGXAccelerator::copyProperty(const OSSymbol *key) const
 {
-    native_powervr_metal_note_property_read(key?key->getCStringNoCopy():nullptr);
+    if (!native_powervr_metal_note_property_read(key?key->getCStringNoCopy():nullptr)) return nullptr;
     return IORegistryEntry::copyProperty(key);
 }
 OSObject *AGXAccelerator::copyProperty(const OSString *key) const
 {
-    native_powervr_metal_note_property_read(key?key->getCStringNoCopy():nullptr);
+    if (!native_powervr_metal_note_property_read(key?key->getCStringNoCopy():nullptr)) return nullptr;
     return IORegistryEntry::copyProperty(key);
 }
 OSObject *AGXAccelerator::copyProperty(const char *key) const
 {
-    native_powervr_metal_note_property_read(key);
+    if (!native_powervr_metal_note_property_read(key)) return nullptr;
     return IORegistryEntry::copyProperty(key);
 }
 extern "C" IOService *native_powervr_accelerator_allocate(void) {return new AGXAccelerator;}
