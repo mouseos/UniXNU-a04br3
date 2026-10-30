@@ -45,10 +45,111 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern "C" unsigned panic_active(void);
 // The first bootstrap kernel links a display stub without NativeHidInput.
 extern "C" volatile uint32_t native_hid_input_command __attribute__((weak));
-// LegacyDisplayProbe.cpp and A04BR3Input.cpp (a04br3-input-latency=1): the timed host inputs. Weak: the bootstrap kernel has neither.
-extern "C" unsigned a04br3_latency_input(unsigned kind) __attribute__((weak));
-extern "C" void a04br3_latency_poll(void) __attribute__((weak));
-extern "C" volatile uint32_t a04br3_swipe_request __attribute__((weak));
+// The bootstrap kernel has no display archive: the latency instrument lives here so that every kernel links it.
+// ---- Input-to-display latency (a04br3-input-latency=1, default off) ------------------------------------------------------------
+// One sample at a time, all times from mach_absolute_time on the kernel's clock:
+//   rx      the host's UART request was received (this file: A04BR3!HOME, A04BR3!SWR)
+//   hid     the request left the board for iPadOS (HidInputProbe.cpp hands Home to NativeHidInput; A04BR3Input.cpp starts the swipe)
+//   swap    the first swap the compositor submitted and the display accepted after rx
+//   present the first frame completed into the scanout after rx (CPU copy or GPU hand-off), and the frames in the 2 s after it
+// The sample closes 2 s after its first present, or after 60 s without one, and prints one "a04br3 latency:" line. A request that
+// arrives while a sample is open is passed on to iPadOS but not measured (the line says so). The idle time before rx shows whether
+// unrelated frames (the lock screen clock) were near. scripts/a04br3-input-latency.py drives the inputs and summarizes the lines.
+namespace latency {
+struct LatencySample {
+    uint32_t seq,kind,framesAfter;bool open;
+    uint64_t rx,hid,swap,present,idle;
+};
+LatencySample gLatency;
+IOSimpleLock *gLatencyLock;
+int gLatencyEnabled=-1;
+volatile uint64_t gLatencyLastPresent;
+bool latencyEnabled(void) {
+    if(gLatencyEnabled<0){unsigned v=0;PE_parse_boot_argn("a04br3-input-latency",&v,sizeof v);gLatencyEnabled=(v==1);}
+    return gLatencyEnabled==1;
+}
+uint64_t latencyMs1000(uint64_t from,uint64_t to) {   // microseconds between two absolute times, 0 when to is unset
+    if(!to || to<from)return 0;
+    uint64_t ns=0;absolutetime_to_nanoseconds(to-from,&ns);return ns/1000;
+}
+const char *latencyKind(uint32_t kind) {return kind==1?"home":kind==2?"swipe":"other";}
+}  // namespace latency
+using namespace latency;
+extern "C" {
+// A04BR3Input.cpp sends one swipe when this is 1 (A04BR3!SWR); only it clears it.
+volatile uint32_t a04br3_swipe_request;
+volatile uint32_t a04br3_latency_samples,a04br3_latency_skipped;
+// Opens a sample for a host input of the given kind (1 Home, 2 swipe). Returns its sequence number, 0 when not measured.
+unsigned a04br3_latency_input(unsigned kind) {
+    if(!latencyEnabled())return 0;
+    if(!gLatencyLock)gLatencyLock=IOSimpleLockAlloc();   // first caller is the single UART thread
+    if(!gLatencyLock)return 0;
+    const uint64_t now=mach_absolute_time();
+    IOSimpleLockLock(gLatencyLock);
+    unsigned seq=0;
+    if(!gLatency.open) {
+        const uint64_t last=gLatencyLastPresent;
+        a04br3_latency_samples=a04br3_latency_samples+1;
+        gLatency=LatencySample{a04br3_latency_samples,kind,0,true,now,0,0,0,last?now-last:0};
+        seq=gLatency.seq;
+    } else a04br3_latency_skipped=a04br3_latency_skipped+1;
+    IOSimpleLockUnlock(gLatencyLock);
+    if(!seq)IOLog("a04br3 latency: kind=%s input not measured, sample %u still open\n",latencyKind(kind),gLatency.seq);
+    return seq;
+}
+void a04br3_latency_hid(void) {
+    if(!gLatencyLock)return;
+    const uint64_t now=mach_absolute_time();
+    IOSimpleLockLock(gLatencyLock);
+    if(gLatency.open && !gLatency.hid)gLatency.hid=now;
+    IOSimpleLockUnlock(gLatencyLock);
+}
+void a04br3_latency_swap(void) {
+    if(!gLatencyLock)return;
+    const uint64_t now=mach_absolute_time();
+    IOSimpleLockLock(gLatencyLock);
+    if(gLatency.open && !gLatency.swap)gLatency.swap=now;
+    IOSimpleLockUnlock(gLatencyLock);
+}
+void a04br3_latency_present(void) {
+    const uint64_t now=mach_absolute_time();
+    if(!gLatencyLastPresent && latencyEnabled()) {   // once per boot: the bench starts its inputs after the first frame
+        uint64_t ns=0;absolutetime_to_nanoseconds(now,&ns);
+        IOLog("a04br3 latency: display ready at_ns=%llu\n",(unsigned long long)ns);
+    }
+    gLatencyLastPresent=now;
+    if(!gLatencyLock)return;
+    IOSimpleLockLock(gLatencyLock);
+    if(gLatency.open) {
+        if(!gLatency.present)gLatency.present=now;
+        else gLatency.framesAfter++;
+    }
+    IOSimpleLockUnlock(gLatencyLock);
+}
+// Called every 100 ms by the UART thread: closes and prints the open sample when it is complete or has timed out.
+void a04br3_latency_poll(void) {
+    if(!gLatencyLock)return;
+    uint64_t twoSeconds=0,minute=0;
+    nanoseconds_to_absolutetime(2ull*NSEC_PER_SEC,&twoSeconds);nanoseconds_to_absolutetime(60ull*NSEC_PER_SEC,&minute);
+    const uint64_t now=mach_absolute_time();
+    LatencySample done{};bool report=false;
+    IOSimpleLockLock(gLatencyLock);
+    if(gLatency.open && ((gLatency.present && now-gLatency.present>=twoSeconds) || now-gLatency.rx>=minute)) {
+        gLatency.open=false;done=gLatency;report=true;
+    }
+    IOSimpleLockUnlock(gLatencyLock);
+    if(!report)return;
+    uint64_t rxNs=0;absolutetime_to_nanoseconds(done.rx,&rxNs);
+    const uint64_t hid=latencyMs1000(done.rx,done.hid),swap=latencyMs1000(done.rx,done.swap),present=latencyMs1000(done.rx,done.present);
+    const uint64_t idle=latencyMs1000(0,done.idle);
+    IOLog("a04br3 latency: seq=%u kind=%s %s rx_ns=%llu hid_ms=%llu.%03llu swap_ms=%llu.%03llu present_ms=%llu.%03llu frames_2s=%u idle_before_ms=%llu\n",
+          done.seq,latencyKind(done.kind),done.present?"ok":"timeout",(unsigned long long)rxNs,
+          (unsigned long long)(hid/1000),(unsigned long long)(hid%1000),(unsigned long long)(swap/1000),(unsigned long long)(swap%1000),
+          (unsigned long long)(present/1000),(unsigned long long)(present%1000),done.present?done.framesAfter+1:0,
+          (unsigned long long)(idle/1000));
+}
+}
+
 // Exported for the opt-in CPU PMU experiment. While a probe is in progress,
 // periodic WDT feeding stops so an upper-EL hang can return to fastboot.
 extern "C" {
@@ -94,7 +195,7 @@ bool resetRequested(void)
     if (c == kHomeRequest[gHomeMatched]) {
       if (++gHomeMatched == sizeof(kHomeRequest) - 1) {
         // Open the latency sample before the mailbox is visible to NativeHidInput (no work unless a04br3-input-latency=1).
-        if (unsigned (*opened)(unsigned) = a04br3_latency_input) opened(1);
+        (void)a04br3_latency_input(1);
         if (&native_hid_input_command) native_hid_input_command = 1;
         gHomeMatched = 0;
         IOLog("a04br3 input: UART Home %s\n", &native_hid_input_command ? "requested" : "unavailable in bootstrap kernel");
@@ -105,9 +206,9 @@ bool resetRequested(void)
     if (c == kSwipeRequest[gSwipeMatched]) {
       if (++gSwipeMatched == sizeof(kSwipeRequest) - 1) {
         gSwipeMatched = 0;
-        unsigned (*opened)(unsigned) = a04br3_latency_input;
-        if (opened && &a04br3_swipe_request && opened(2)) a04br3_swipe_request = 1;
-        IOLog("a04br3 input: UART swipe %s\n", opened && &a04br3_swipe_request ? "requested" : "unavailable (a04br3-input-latency=1)");
+        const bool timed = a04br3_latency_input(2) != 0;
+        if (timed) a04br3_swipe_request = 1;
+        IOLog("a04br3 input: UART swipe %s\n", timed ? "requested" : "not sent (needs a04br3-input-latency=1 and no open sample)");
       }
     } else {
       gSwipeMatched = (c == kSwipeRequest[0]) ? 1 : 0;
@@ -415,7 +516,7 @@ void cycleThread(void *, wait_result_t)
       resetNow();
     }
     const bool reset = resetRequested();
-    if (void (*poll)(void) = a04br3_latency_poll) poll();
+    a04br3_latency_poll();
     if (gShotWanted && gFb) { gShotWanted = false; sendShot(); }
     if (reset) {
       IOLog("a04br3-autoreset: reset requested on UART, resetting into fastboot\n");

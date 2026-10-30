@@ -38,8 +38,8 @@ void a04br3_input_start(void);
 void native_buttons_set_sink(void (*sink)(void *, uint32_t), void *context);
 volatile uint32_t a04br3_input_stage, a04br3_touch_contacts, a04br3_key_presses;
 volatile int a04br3_touch_error = -1;
-// A04BR3AutoReset.cpp sets 1 for one swipe (a04br3-input-latency=1); LegacyDisplayProbe.cpp times it.
-volatile uint32_t a04br3_swipe_request;
+// A04BR3AutoReset.cpp sets 1 for one swipe (a04br3-input-latency=1) and times it.
+extern volatile uint32_t a04br3_swipe_request;
 void a04br3_latency_hid(void);
 }
 

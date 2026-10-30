@@ -35,7 +35,7 @@ extern volatile uint32_t native_legacy_transfer_calls;
 static unsigned autoConfigured,autoFirst,autoCount,autoInterval,autoSent;
 static uint64_t autoNext,autoFrequency;
 static uint64_t counterNow(void){uint64_t v;__asm__ volatile("isb\n\tmrs %0, cntpct_el0":"=r"(v));return v;}
-extern "C" void a04br3_latency_hid(void);   // LegacyDisplayProbe.cpp (a04br3-input-latency=1; no work otherwise)
+extern "C" void a04br3_latency_hid(void);   // A04BR3AutoReset.cpp (a04br3-input-latency=1; no work otherwise)
 bool native_hid_input_requested(void) {
     if(native_legacy_transfer_calls<2)return false;
     if(!autoConfigured) {
