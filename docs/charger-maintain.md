@@ -15,10 +15,18 @@ result=1 is Deadline. The firmware handoff was valid (last firmware pet 8.7 s
 before adoption, about 11 s of budget left) and the registers equal the LK/stock
 image, so neither the handoff nor the policy rejected it. A04BR3ChargerCore.h
 step() also returns Deadline when one 8-register snapshot takes 1 s or more.
-The default-priority kernel thread started its snapshot at 31.32 s while the
-boot thread was busy (NativeMsdc read the signed root policy for 1757 ms), and
-the result was printed only after that read finished, so the snapshot most
-likely crossed the 1 s bound; the owner latched stopped before its first kick.
+Images that carry the bounded retry (998475f, A04BR3ChargerFresh.h) also log
+per-read timestamps. In the same overnight UART log every boot shows the first
+attempt crossing that bound, for example:
+
+    a04br3 charger: attempts=2 ... step=31289845692/33570714000 ... read0=33534355000/33534771076 read1=.../33535186615 read2=33535186769/33545506538
+
+The default-priority (BASEPRI_KERNEL 81) owner started at 31.29 s while boot
+work such as the 1757 ms NativeMsdc root-policy read was running, and its
+second attempt only began reading at 33.53 s, so the first snapshot took about
+2.2 s. With the retry those images kept kicking (up to kicks=720 per boot);
+the later memory-low-impact images were built without 998475f, so each boot
+printed result=1 kicks=0 and the owner latched stopped before its first kick.
 With no further TMR_RST the BQ24160 host watchdog expires 30 s after the last
 firmware pet and reloads DEFAULT settings (TI SLUSAO0H 8.3.9: lower regulation
 voltage and charge current than the stock 4.32 V / 1.3 A). The battery then
@@ -44,19 +52,32 @@ The stock values are the ceiling; static_assert and host tests check that no
 planned write exceeds them. Fields the stock driver never writes (SUPPLY_SEL,
 OTG_LOCK, EN_NOBATOP, VINDPM, reg07 bit4) are preserved.
 
-Each 10 s cycle, in one kernel thread at priority 81 holding the I2C2 lock:
+Each 10 s cycle, in one kernel thread at priority 91 (default kernel threads
+run at 81) holding the I2C2 lock, with up to three attempts per cycle:
 
-1. Read registers 00-07. A transfer error is counted and retried next cycle
-   after re-initializing I2C2 (a START left by an abandoned transfer is cleared
-   with the controller SOFTRESET; I2C2 carries only this thread's traffic).
-2. If the TI family ID matches, write TMR_RST (with unchanged SUPPLY_SEL).
-3. If FAULT is 0 or 3 (host watchdog expired) and the configuration differs
+1. Before each attempt, if START is still set from a transfer this thread
+   abandoned, clear it with the controller SOFTRESET (offset 0x50, as
+   i2c-mt65xx init_hw does) and re-initialize I2C2. I2C2 carries only this
+   thread's charger and gauge traffic.
+2. Read register 00 and the 04 ID. If the TI family ID matches, write TMR_RST
+   (with unchanged SUPPLY_SEL) at once, so a later read failure cannot delay
+   the kick.
+3. Read the remaining registers. A transfer error ends the attempt; the next
+   attempt re-initializes the controller.
+4. If FAULT is 0 or 3 (host watchdog expired) and the configuration differs
    from the stock image, write the differing registers and re-read them.
    Thermal, TS, safety-timer, supply and battery faults are logged and kicked
    but never overridden.
+5. Only after the kick, and only when a line is due, read the fuel gauge. A
+   gauge timeout is recovered at the start of the next attempt or cycle.
 
 There is no 1 s snapshot deadline and no latched stop: a slow or failed cycle
 is retried 10 s later, which is still inside the 30 s watchdog window.
+
+Register 02 reads back RESET=1 (0x8c); that bit is excluded from comparison and
+always written as 0. DDET_EN (register 03 bit0) is preserved. The stock driver
+also writes TMR_RST every 10 s; whether TMR_RST restarts the 6 h safety timer
+has not been verified here, so the timer behaves as it does under stock Linux.
 
 ## Telemetry
 
@@ -82,8 +103,11 @@ firmware owner (A04BR3_CHARGER_OWNER=1) may stay enabled; it bridges LK to EBS,
 and this mode does not need its handoff record.
 
 On the device, confirm in UART: kicks increases by 1 per 10 s, worstgap stays
-far below 30000 ms, raw stays 30,00,8c,a4,45,51,00,38 (or stat 5 when full)
-and vbat/rsoc rise or stay level under iOS load with the adapter connected.
+near 10000 ms (it must stay below 30000 ms), raw stays
+30,00,8c,a4,45,51,00,38 (or stat 5 when full) and vbat/rsoc rise or stay level
+under iOS load with the adapter connected. The first "maintain change" line
+gives the time of the first kernel kick; "maintain retried" lines show
+in-cycle retries and soft resets.
 
 ## Checks
 
