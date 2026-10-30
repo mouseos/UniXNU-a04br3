@@ -184,6 +184,7 @@ struct JobsDevice {
   uint32_t resetReportCount; // bounded diagnostic copies; independent of error delivery
   uint32_t fwccbActive; // callbacks outside fwccbLock; success must wait for all of them
   uint64_t timeoutAbs;
+  int kickError; // gJobs.lock; result of the synchronous reserved-kick shim
 };
 JobsDevice gJobs;
 volatile int32_t gJobsState;   // 0 not set up, 1 being set up, 2 ready
@@ -259,7 +260,7 @@ struct Job {
   uint32_t seqno;        // done_fence->seqno
   Job *paired;           // paired_job, during the submission only
   uint64_t kicked;
-  bool failed, timed_out;
+  bool failed, timed_out, quarantined;
   native_powervr_host_sync *hosts;
   bool hosts_completed;   // protected by gJobs.lock; success cannot precede the post-GPU cache maintenance
   native_powervr_pte_snapshot *pte;
@@ -979,7 +980,10 @@ extern "C" void pvr_kccb_send_cmd_reserved_powered(struct pvr_device *pvr_dev, s
     if (err == -EBUSY) IOSleep(1);
   }
   perfEnd(PerfKccb, perf);
-  if (err) native_powervr_log("powervr: jobs: KCCB command %x: %d\n", cmd->cmd_type, err);
+  if (err) {
+    gJobs.kickError = err; // Called only from run_job while gJobs.lock is held.
+    native_powervr_log("powervr: jobs: KCCB command %x: %d\n", cmd->cmd_type, err);
+  }
   if (kccb_slot) *kccb_slot = 0;
 }
 
@@ -1793,6 +1797,37 @@ bool wasFailed(const native_powervr_jobs_file *f, uint64_t fence)
   return lo && fence <= f->failed[lo - 1].last;
 }
 
+// gJobs.lock is held throughout. A timeout is ambiguous: a KICK already in the
+// KCCB can run later. Never retry it; a ring-full EBUSY was retried only before enqueue.
+int kickJobs(Job **js, uint32_t count, bool *touched)
+{
+  for (uint32_t i = 0; i < count; ++i) {
+    Job *j = js[i];
+    if (j->type == DRM_PVR_JOB_TYPE_FRAGMENT && j->paired) continue;
+    touched[i] = true;
+    if (j->paired) touched[i + 1] = true; // paired jobs are adjacent
+    gJobs.kickError = 0;
+    run_job(j, j->hwrt ? trackFor(j->hwrt) : nullptr);
+    if (gJobs.kickError) return gJobs.kickError;
+  }
+  return 0;
+}
+
+// No fence in a failed batch may later look successful, including unsubmitted
+// jobs. Keep all potentially exposed jobs and their VM mappings until reboot.
+void quarantineKickBatch(native_powervr_jobs_file *file, Job **js, uint32_t count, const bool *touched)
+{
+  for (uint32_t i = 0; i < count; ++i) {
+    Job *j = js[i];
+    recordFailed(file, j->fence);
+    if (!touched[i]) continue;
+    j->failed = true;
+    j->quarantined = true;
+    atomic_set(&j->ctx->faulty, 1);
+    native_powervr_vm_quarantine(nativeVm(j->ctx->vm_ctx));
+  }
+}
+
 // The primary queue identifies a live context incarnation without retaining pointers in history.
 uint64_t contextGeneration(const pvr_context *ctx)
 {
@@ -1915,10 +1950,12 @@ void completionThread(void *, wait_result_t)
     gJobs.resetReportCount = 0;
     list_head done;
     INIT_LIST_HEAD(&done);
-    bool dump = false;
+    bool dump = false, active = false;
     const uint64_t now = nowAbs();
     Job *j, *n;
     list_for_each_entry_safe(j, n, &gJobs.jobs, dev_link) {
+      if (j->quarantined) continue; // FW may still execute: retain job and its objects until reboot.
+      active = true;
       if (ready && queueReached(j->queue, j->seqno)) {
         complete_job_hosts(j);
         // FW can append a reset during the UFO/cache reads. Do not retire it ahead of that note.
@@ -1940,7 +1977,6 @@ void completionThread(void *, wait_result_t)
         dump = true;
       }
     }
-    const bool active = !list_empty(&gJobs.jobs);
     IOLockUnlock(gJobs.lock);
     IOLockUnlock(gJobs.fwccbLock);
     if (native_powervr_packet_enabled())
@@ -2230,6 +2266,10 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     u32 need[NativePowerVRAbiMaxJobs];
     uint32_t nq = 0;
     for (uint32_t i = 0; i < count && !err; i++) {
+      if (atomic_read(&js[i]->ctx->faulty) || native_powervr_vm_quarantined(nativeVm(js[i]->ctx->vm_ctx))) {
+        err = -EIO;
+        break;
+      }
       if (js[i]->queue->killed) {
         err = -EINVAL;   // the context was destroyed meanwhile
         break;
@@ -2271,25 +2311,26 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     if (uint32_t(file->nextFence) == NativePowerVRTunnelMagic) file->nextFence++;
     js[i]->fence = file->nextFence++;
   }
+  bool touched[NativePowerVRAbiMaxJobs] = {};
   const uint64_t kickPerf = perfBegin(PerfKick);
-  for (uint32_t i = 0; i < count; i++) {
-    Job *j = js[i];
-    if (j->type == DRM_PVR_JOB_TYPE_FRAGMENT && j->paired) continue;   // written with its geometry job
-    run_job(j, j->hwrt ? trackFor(j->hwrt) : nullptr);
-  }
+  err = kickJobs(js, count, touched);
   perfEnd(PerfKick, kickPerf);
   const uint64_t kicked = nowAbs();
+  if (err) quarantineKickBatch(file, js, count, touched);
   for (uint32_t i = 0; i < count; i++) {
     Job *j = js[i];
+    if (!touched[i]) continue;
     j->paired = nullptr;
     j->kicked = kicked;
     j->file = file;
     list_add_tail(&j->dev_link, &gJobs.jobs);
     list_add_tail(&j->file_link, &file->jobs);
-    fences[i] = j->fence;
+    if (!err) fences[i] = j->fence;
   }
   IOLockUnlock(gJobs.lock);
-  return 0;
+  if (err) for (uint32_t i = 0; i < count; i++) if (!touched[i]) pvr_job_release(js[i]);
+  return err ? -EIO : 0;
+
 }
 
 // NativePowerVRMethodWaitFence

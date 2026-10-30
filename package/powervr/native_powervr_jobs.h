@@ -22,6 +22,7 @@
 #ifndef NATIVE_POWERVR_JOBS_H
 #define NATIVE_POWERVR_JOBS_H
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include "native_powervr_pte.h"
 #ifndef NATIVE_POWERVR_JOBS_API
@@ -52,6 +53,9 @@ const struct pvr_device_enhancements *native_powervr_device_enhancements(void);
 /* VM contexts (struct pvr_vm_context), reference counted. The handle table holds one reference; a job-layer object
  * that keeps the VM context (a context, as pvr_context.c does with ctx->vm_ctx) takes its own. */
 struct native_powervr_vm_context;
+/* Freeze mappings and retain the VM until reboot after an ambiguous KICK. */
+void native_powervr_vm_quarantine(struct native_powervr_vm_context *vm_ctx);
+bool native_powervr_vm_quarantined(struct native_powervr_vm_context *vm_ctx);
 struct native_powervr_vm_context *native_powervr_vm_context_get(struct native_powervr_vm_context *vm_ctx);   /* pvr_vm_context_get() */
 void native_powervr_vm_context_put(struct native_powervr_vm_context *vm_ctx);                                 /* pvr_vm_context_put() */
 /* The page tables and firmware memory context: native_powervr_vm_fw_mem_ctx(), native_powervr_vm_page_table_root(). */
@@ -131,7 +135,8 @@ NATIVE_POWERVR_JOBS_API void native_powervr_hwrt_dataset_put(struct native_power
  * first two checks (a command stream is given; no hwrt on a job that is neither geometry nor fragment), and resolved
  * the handles (pvr_context_lookup(); for hwrt.set_handle != 0 the dataset of pvr_hwrt_data_lookup(), whose data_index
  * the job layer checks). The objects are borrowed for the call: a queued job takes its own references.
- * The job layer applies the ordering rules of NativePowerVRABI.h and queues all jobs or none. On success fences[i] is the
+ * A KICK failure may follow partial submission; it returns an error, quarantines affected jobs and VM mappings until reboot,
+ * and publishes no fences. On success fences[i] is the
  * fence of jobs[i] (nonzero, unique in the connection, increasing in submission order, and never a value whose low 32
  * bits are NativePowerVRTunnelMagic, so that no direct WaitFence input reads as a tunnel header). */
 struct native_powervr_job_submit {

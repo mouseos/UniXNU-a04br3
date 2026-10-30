@@ -87,7 +87,7 @@ void pvr_destroy_contexts_for_file(FileData*){} void pvr_destroy_free_lists_for_
 void pvr_destroy_hwrt_datasets_for_file(FileData*){} void xa_destroy(Xarray*){}
 constexpr uint32_t kMaxDeadlineMs=2;
 struct native_powervr_jobs_file {FileData pf;list_head link,jobs;uint64_t nextFence=2;FailedFenceRange failed[kFailureRanges]{};uint32_t failedCount=0;uint64_t failureUncertainThrough=0;RetiredFence retired[kFailedFences]{};uint32_t retiredNext=0;};
-struct Job {list_head dev_link,file_link;native_powervr_jobs_file*file;uint64_t fence=1;pvr_context*ctx;pvr_queue*queue;uint32_t id=12,seqno=1;bool failed=false,timed_out=false;uint64_t kicked=0;int type=3;bool hosts_completed=false;};
+struct Job {list_head dev_link,file_link;native_powervr_jobs_file*file;uint64_t fence=1;pvr_context*ctx;pvr_queue*queue;uint32_t id=12,seqno=1;bool failed=false,timed_out=false,quarantined=false;uint64_t kicked=0;int type=3;bool hosts_completed=false;};
 struct {pvr_device dev;IOLock*lock=&jobsLock,*fwccbLock=&fwLock;list_head jobs,files;rogue_fwif_ccb_ctl*fwccbCtl;rogue_fwif_fwccb_cmd*fwccb;uint32_t fwccbSlots=64;ResetNote resets[kResetNotes]{},resetReports[kResetNotes]{};uint32_t resetCount=0,resetReportCount=0,fwccbActive=0;uint64_t timeoutAbs=1000000000;}gJobs;
 uint32_t get_dm_type(pvr_queue*q){return q->dm;}
 bool queueReached(pvr_queue*q,uint32_t seq){assert(jobsHeld);return int32_t(*q->timeline_ufo.value-seq)>=0;}
@@ -137,6 +137,8 @@ void worker(){stopSleep=true;try{completionThread(nullptr,0);}catch(Stop&){}stop
 int poll(){return native_powervr_fence_wait(&file,1,0);}
 int main(){
  setup();assert(poll()==0&&syncs==1);worker();assert(released==1&&poll()==0);
+ // Late UFO cannot retire a quarantined failure or turn its fence into success.
+ setup();job.quarantined=true;job.failed=true;worker();assert(!released&&!syncs&&!list_empty(&gJobs.jobs)&&poll()==-EIO);
  // Pending reset cannot be bypassed by a signalled UFO; poll executes no callback.
  setup();publish();auto c=callbacks.load();assert(poll()==-ETIMEDOUT&&callbacks==c);worker();assert(poll()==-EIO);
  // A different consumer removed the reset but pauses before publishing its note.

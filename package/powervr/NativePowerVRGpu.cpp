@@ -970,6 +970,7 @@ struct Mapping { uint64_t addr, range, offset; native_powervr_bo *bo; };   // dr
 }
 struct native_powervr_vm_context {
   uint32_t refs;
+  bool quarantined;           // atomic; mappings permanently frozen after ambiguous KICK failure
   IOLock *lock;               // vm_ctx->lock
   native_powervr_vm *vm;      // page tables and firmware memory context (native_powervr_internal.h)
   Mapping *maps;              // ascending, disjoint
@@ -1017,6 +1018,7 @@ uint32_t vmFirstEndingAfter(const native_powervr_vm_context *ctx, uint64_t addr)
 // pvr_vm_map() after pvr_vm_bind_op_map_init()'s checks, with vm_ctx->lock held: drm_gpuvm_sm_map() over the list.
 int vmMapLocked(native_powervr_vm_context *ctx, native_powervr_bo *bo, uint64_t offset, uint64_t addr, uint64_t size)
 {
+  if (__atomic_load_n(&ctx->quarantined, __ATOMIC_ACQUIRE)) return -EIO;
   const uint64_t end = addr + size;
   int err = vmReserve(ctx, 2);   // at most one mapping is split in two, plus the new one
   if (err) return err;
@@ -1097,6 +1099,22 @@ extern "C" struct native_powervr_vm_context *native_powervr_vm_context_get(struc
 extern "C" void native_powervr_vm_context_put(struct native_powervr_vm_context *vm_ctx)
 {
   if (vm_ctx && refPut(&vm_ctx->refs)) vmContextRelease(vm_ctx);
+}
+// Freeze under the same lock as map/unmap. The extra reference intentionally
+// retains the mappings, BOs and GPU page tables until reboot, even on close.
+extern "C" void native_powervr_vm_quarantine(native_powervr_vm_context *vm)
+{
+  if (!vm) return;
+  IOLockLock(vm->lock);
+  if (!__atomic_load_n(&vm->quarantined, __ATOMIC_RELAXED)) {
+    native_powervr_vm_context_get(vm);
+    __atomic_store_n(&vm->quarantined, true, __ATOMIC_RELEASE);
+  }
+  IOLockUnlock(vm->lock);
+}
+extern "C" bool native_powervr_vm_quarantined(native_powervr_vm_context *vm)
+{
+  return !vm || __atomic_load_n(&vm->quarantined, __ATOMIC_ACQUIRE);
 }
 extern "C" struct native_powervr_vm *native_powervr_vm_context_vm(struct native_powervr_vm_context *vm_ctx) { return vm_ctx ? vm_ctx->vm : nullptr; }
 extern "C" int native_powervr_vm_find_bo(struct native_powervr_vm_context *vm_ctx, uint64_t device_addr, struct native_powervr_bo_mapping *out)
@@ -1942,6 +1960,7 @@ int NativePowerVRUserClient::vmUnmap(const drm_pvr_ioctl_vm_unmap_args *args)
   if (!vm_ctx) return -EINVAL;
   IOLockLock(vm_ctx->lock);
   int err = -ENOENT;
+  if (__atomic_load_n(&vm_ctx->quarantined, __ATOMIC_ACQUIRE)) { IOLockUnlock(vm_ctx->lock); return -EIO; }
   const uint32_t i = vmFirstEndingAfter(vm_ctx, args->device_addr);
   if (i < vm_ctx->count && vm_ctx->maps[i].addr == args->device_addr && vm_ctx->maps[i].range == args->size) {
     const Mapping m = vm_ctx->maps[i];
