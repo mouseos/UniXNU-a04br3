@@ -1,4 +1,4 @@
-import hashlib, importlib.util, unittest
+import hashlib, importlib.util, tempfile, unittest
 from pathlib import Path
 p=Path(__file__).resolve().parents[1]/'a04br3_trial_boundaries.py'
 s=importlib.util.spec_from_file_location('boundaries',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
@@ -21,4 +21,13 @@ class Boundaries(unittest.TestCase):
   pre=b'panic: late\n';a=m.ANCHOR+b'\n';snap=pre+a+a
   cap={'snapshot_sha256':hashlib.sha256(snap).hexdigest(),'checkpoint_verified':True,'offset_crosses_preloader_anchor':False,'boots_truncated':False,'boots':[{'index':i+1,'start_offset':len(pre)+i*len(a),'end_offset':len(pre)+(i+1)*len(a),'sha256':hashlib.sha256(a).hexdigest(),'closed_by_next_preloader':i==0} for i in range(2)]}
   self.assertFalse(m.classify(snap,cap,{'uart_offset':0,'flash_completed_uart_offset':0})['trial_exception_free'])
+ def test_service_output_must_match(self):
+  with tempfile.TemporaryDirectory() as t:
+   path=Path(t)/'uart';path.write_bytes(b'abc')
+   def run(args,text):
+    return ('ActiveState=active\nMainPID=1\nInvocationID=abc\nNRestarts=0\n' if 'show' in args else 'StandardOutput=append:'+str(path)+'\n')
+   self.assertEqual(m.service_snapshot(path,'unit',run)['size'],3)
+   def wrong(args,text):
+    return ('ActiveState=active\nMainPID=1\nInvocationID=abc\nNRestarts=0\n' if 'show' in args else 'StandardOutput=append:/wrong\n')
+   with self.assertRaises(ValueError):m.service_snapshot(path,'unit',wrong)
 if __name__=='__main__':unittest.main()
