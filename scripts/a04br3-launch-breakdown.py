@@ -43,7 +43,7 @@ if a.kernel:
             out = ''
     for l in out.splitlines():
         parts = l.split()
-        if len(parts) >= 3 and parts[1].lower() in 'tt':
+        if len(parts) >= 3 and parts[1] in ('T', 't', 'S', 's'):   # the kernel's text symbols are section (S) symbols
             syms.append((int(parts[0], 16), parts[2]))
     syms.sort()
 addrs = [s[0] for s in syms]
