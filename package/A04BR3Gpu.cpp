@@ -38,9 +38,10 @@ void bankWrite(void *, unsigned bank, unsigned offset, uint32_t value)
 void waitUs(void *, unsigned us) { IODelay(us); }
 
 // Startup-only clock/rail snapshot. Board.cpp calls GPU init after autoreset's
-// startup WACS transactions and before Input starts its touch power sequence.
-// This relies on no host reset request during startup; it is not a shared WACS
-// lock and must never be used as a runtime API or after the input thread starts.
+// startup WACS transactions and before Input starts its touch power sequence;
+// the opt-in RTC capture thread may run concurrently. Every read takes the
+// shared board WACS lock (A04BR3PwrapGuard, bounded wait) and quarantines it on
+// an uncertain transaction. It only reads and is not a runtime API.
 // Register sources: board Linux clk-mt8167.c, mt8167.dtsi, mtk-pmic-wrap.c
 // (mt8167_regs/pwrap_read), and mt6392-regulator.c plus mt6392/registers.h.
 uint32_t clockDiagnosticRead(volatile uint8_t *base, unsigned offset)
