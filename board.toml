@@ -156,6 +156,11 @@ BUILDID_STRING = "a04br3-bringup"
 # so firmware or a kernel that stops before a04br3-autoreset (package/A04BR3AutoReset.cpp) takes over still resets
 # into fastboot. Remove together with a04br3-autoreset for a release image.
 A04BR3_TEST_CYCLE = "1"
+# eMMC HS200 (188 MHz, CMD21 tuning; uefi-a04br3 271931c6): on hardware verify=ok, signed root policy read 1757 -> 508 ms.
+A04BR3_EMMC_HS200 = "1"
+# CPU 1300 MHz once in SEC: VPROC 1.20 -> 1.30 V read back, then ARMPLL 1001 -> 1300 MHz, the stock CT3 kernel's maximum
+# OPP (uefi-a04br3 867a4163). On hardware the PMU cycle counter gives about 1,300,000 cycles per 13,001 ticks of 13 MHz.
+A04BR3_CPU_1300 = "1"
 
 # The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
 # trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
@@ -200,6 +205,9 @@ kernel_args = [
   # first-boot LaunchServices database build in lsd did not finish within 45 minutes and SpringBoard waits on it.
   "sheng-smp=1",
   "a04br3-proclog=60",
+  # Charge maintenance (package/A04BR3ChargerMaintain.h): keep the BQ24160 at the stock limits, kick its watchdog every
+  # 10 s and log the fuel gauge (voltage, charge, temperature) every 60 s; without it the battery ran flat overnight.
+  "a04br3-cm=1",
   # UI stack trace targets are optional diagnostics: pass boot-ui-focus3/4 explicitly when needed.
   # Bring-up: every reset returns to LK fastboot for the unattended cycle (package/A04BR3AutoReset.cpp). Remove for a
   # release image.
