@@ -108,6 +108,16 @@ def main():
             not 0x10000000 <= args.owned_memory_size <= 0x200000000
             or args.owned_memory_size % 0x200000):
         parser.error('Owned memory must be 256 MiB to 8 GiB, aligned to 2 MiB')
+    # Opt-in larger window (default off; board.toml keeps 0x54000000). DarwinBoot places the window at the 2 MiB
+    # aligned start of DDR High (0x68000000, uefi-a04br3 MemoryMapLib) plus the kernel VA's low 21 bits (0x7C000 for the
+    # current kernels), and allocates it only if that run is free (DarwinBoot.c AllocateWindow, fail closed). The
+    # override must stay below the display reservation at 0xBE9C0000 for any offset up to 0x1C0000.
+    override = os.environ.get('A04BR3_OWNED_MEMORY_SIZE')
+    if override:
+        size = int(override, 0)
+        if size % 0x200000 or not 0x54000000 <= size or 0x68000000 + 0x1C0000 + size > 0xBE9C0000:
+            parser.error('A04BR3_OWNED_MEMORY_SIZE must be 2 MiB aligned, at least 0x54000000 and end below 0xBE9C0000')
+        args.owned_memory_size = size
 
     try:
         cpu_regs = [int(value, 0) for value in args.cpu_regs.split(',')]

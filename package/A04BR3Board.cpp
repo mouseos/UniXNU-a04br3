@@ -17,6 +17,7 @@
 // After the policy it starts the PowerVR user-space probe once under a04br3-powervrprobed=1 (package/A04BR3ProbeLaunch.c);
 // that start has no build-time stand-in and waits for the hook.
 #include <IOKit/IOLib.h>
+#include <IOKit/IODeviceTreeSupport.h>
 #include <pexpert/pexpert.h>
 #include <stdint.h>
 #include "BootMemoryQueueSnapshot.h"
@@ -36,6 +37,7 @@ void a04br3_gpu_init(void);
 void boot_memory_snapshot(uint64_t out[7]);
 void boot_home_perf_sample(void);
 void boot_memory_top_sample(void);
+void boot_memory_tag_sample(void);
 void boot_home_irq_init(unsigned);
 void boot_live_pc_init(unsigned);
 void boot_live_pc_report(void);
@@ -53,6 +55,9 @@ void native_powervr_submit_perf_enable(unsigned);
 void native_powervr_submit_perf_report(void);
 void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
 extern volatile uint64_t native_msdc_verified_cache_stats[3] __attribute__((weak_import));
+extern "C" volatile uint32_t native_ram_block_ready __attribute__((weak_import));
+extern "C" volatile uint32_t native_ram_block_sparse __attribute__((weak_import));
+extern "C" void IODTFreeLoaderInfo(const char *key, void *infoAddr, int infoSize);
 extern volatile uint64_t native_msdc_irq_stats[4] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_worker_stats[4] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_irq_mask_failures __attribute__((weak_import));
@@ -328,6 +333,37 @@ void procLogOptions(unsigned &perf, unsigned &rootTiming, unsigned &msdcPerf)
   if (ioStats == 1) msdcPerf = 1;
 }
 
+// a04br3-free-data-seed=1 (default off): after NativeRamBlock has imported the packed Data seed into its own pages
+// (native_ram_block_sparse, NativeRamBlock.cpp sets memory=nullptr), the loader's copy in the XNU window is no longer read.
+// Return it to the VM like the stock ramdisk path does (IODTFreeLoaderInfo also removes /chosen/memory-map/PackedRAMDisk).
+// Proposal for NativeRamBlock itself; kept here because the driver repository is not writable from this board.
+static void a04br3_free_data_seed(void)
+{
+  static bool done;
+  if (done) return;
+  unsigned enabled = 0;
+  if (!PE_parse_boot_argn("a04br3-free-data-seed", &enabled, sizeof(enabled)) || enabled != 1) { done = true; return; }
+  if (!&native_ram_block_ready || !&native_ram_block_sparse) { done = true; IOLog("a04br3 data-seed free: skipped=no-driver\n"); return; }
+  if (!native_ram_block_ready) return;   // retried on the next round
+  done = true;
+  if (!native_ram_block_sparse) { IOLog("a04br3 data-seed free: skipped=not-imported\n"); return; }
+  IORegistryEntry *map = IORegistryEntry::fromPath("/chosen/memory-map", gIODTPlane);
+  OSData *range = map ? OSDynamicCast(OSData, map->getProperty("PackedRAMDisk")) : nullptr;
+  uint64_t physical = 0, bytes = 0;
+  if (range && range->getLength() == 16) {
+    memcpy(&physical, range->getBytesNoCopy(), 8);
+    memcpy(&bytes, static_cast<const uint8_t *>(range->getBytesNoCopy()) + 8, 8);
+  }
+  if (map) map->release();
+  if (!physical || !bytes || (physical & 4095) || bytes > 0x40000000ULL) { IOLog("a04br3 data-seed free: skipped=no-range\n"); return; }
+  uint64_t before[7], after[7];
+  boot_memory_snapshot(before);
+  // Only whole pages inside the range are released (ml_static_mfree truncates the end).
+  IODTFreeLoaderInfo("PackedRAMDisk", reinterpret_cast<void *>(physical), static_cast<int>(bytes));
+  IOLog("a04br3 data-seed free: pa=0x%llx bytes=%llu wired_pages_before=%llu wired_pages_after=%llu\n",
+        physical, bytes, before[4], (boot_memory_snapshot(after), after[4]));
+}
+
 void procLogThread(void *, wait_result_t)
 {
   unsigned perf, rootTiming, msdcPerf;
@@ -336,8 +372,12 @@ void procLogThread(void *, wait_result_t)
   if (!PE_parse_boot_argn("a04br3-membench", &memBench, sizeof(memBench)))
     PE_parse_boot_argn("mb", &memBench, sizeof(memBench));
   uint64_t cacheReportSeconds = 0;
+  unsigned wiredTag = 0;
+  PE_parse_boot_argn("a04br3-wiredtag", &wiredTag, sizeof(wiredTag));
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
+    a04br3_free_data_seed();
+    if (wiredTag && (round == 1 || round % wiredTag == 0)) boot_memory_tag_sample();
     if (perf != 1) {
       static ProcLine line;
       line = {};
