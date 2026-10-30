@@ -4,7 +4,8 @@
 40桁のcommitを要求する。実ソースはgit objectから読み、worktreeの未commit変更や
 NativeMobileDisplayの現在HEADを混入させない。base commitの実gitlinkと指定された
 NativeMobileDisplay commitの一致も検査し、入力SHA-256とcommitを標準出力に記録する。
-全6項目が未指定のときは通常のunittest探索で明示的にskipする。一部だけ指定、
+全6項目が環境に存在しないときは通常のunittest探索で明示的にskipする。
+空文字の指定や一部だけの指定、
 不正なcommitやgitlink不一致は失敗として扱い、HEADを自動選択しない。
 
 - `A04BR3_DEVICE_ROOT`、`A04BR3_DEVICE_COMMIT`: 検査するdevice repoとcommit。
@@ -20,7 +21,8 @@ XNU固定参照は `d8b80295118ef25ac3a784134bcf95cd8e88109f` の
 `osfmk/mach/kern_return.h:76,91`。
 
 `scripts/tests/test_powervr_lifecycle_pins.py` は上記の正しい環境を設定してから実行し、
-commit未指定・短縮・gitlink不一致の拒否を確認する。full device pinを変更して各候補を
+commit未指定・短縮を確認し、独立した一時Git repo内の2 commitとgitlinkで
+一致・不一致の検査を再現する。空文字単独指定も拒否する。full device pinを変更して各候補を
 再試験し、出力を検証記録に残す。`git show` はローカルobjectを要求し、fetchしない。
 
 各ケースは実関数を抽出するが、host descriptor、実BOのprepare/complete、cache、

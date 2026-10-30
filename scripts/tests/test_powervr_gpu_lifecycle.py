@@ -80,7 +80,7 @@ def run_cpp(body):
 class GpuLifecycleTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not any(os.environ.get(name) for name in PIN_NAMES):
+        if not any(name in os.environ for name in PIN_NAMES):
             raise unittest.SkipTest('GPU lifecycle requires six explicit fixed-source inputs')
         load_pinned_inputs()
 
