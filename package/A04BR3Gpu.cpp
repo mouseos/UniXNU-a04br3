@@ -70,7 +70,7 @@ const char *clockDiagnosticPmicRead(volatile uint8_t *pwrap, unsigned address, u
   A04BR3PwrapGuard guard(10000);
   if (!guard) return "WACS2 busy";
   if ((address & 1) || address > 0xfffe) return "invalid PMIC address";
-  if (!clockDiagnosticWait(pwrap, 0)) { guard.quarantine(); return "idle timeout or INIT_DONE lost"; }
+  if (!clockDiagnosticWait(pwrap, 0)) return "idle timeout or INIT_DONE lost";
   // Only a read command: bit 31 is always zero. No PMIC register writes,
   // wrapper initialization, or changes to clock/power/voltage configuration.
   clockDiagnosticWrite(pwrap, 0xa0, (address >> 1) << 16);

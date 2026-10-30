@@ -27,7 +27,7 @@ static void clockDiagnosticWrite(volatile uint8_t *p,unsigned o,uint32_t v){wr(p
 main=r'''
 static void reset(int f){busy=false;phase=0;fault=f;clears=commands=0;writing=false;}
 static bool run(int owner){uint32_t out=0;uint16_t v=0;if(owner==0)return wacs(false,0x800a,0,&out);if(owner==1)return pwRead(0x800a,&v)==0;return clockDiagnosticPmicRead(gPwrap,0x800a,&v)==nullptr;}
-int main(){for(int owner=0;owner<3;++owner){reset(0);assert(run(owner));assert(!busy && commands==1 && clears==1);for(int f=1;f<=4;++f){reset(f);assert(!run(owner));assert(busy);int old=commands;assert(!run((owner+1)%3));assert(commands==old);if(f==1)assert(clears==0);}}
+int main(){for(int owner=0;owner<3;++owner){reset(0);assert(run(owner));assert(!busy && commands==1 && clears==1);for(int f=1;f<=4;++f){reset(f);assert(!run(owner));if(f==1){assert(!busy && clears==0);fault=0;assert(run((owner+1)%3));}else{assert(busy);int old=commands;assert(!run((owner+1)%3));assert(commands==old);}}}
  reset(4);assert(!wacs(true,0x800a,1,nullptr) && busy);reset(4);assert(pwWrite(0x800a,1)!=0 && busy);
  reset(0);assert(wacs(true,0x800a,1,nullptr) && !busy);reset(0);assert(pwWrite(0x800a,1)==0 && !busy);
 }

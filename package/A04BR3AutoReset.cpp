@@ -123,7 +123,7 @@ bool wacs(bool write, uint32_t address, uint32_t data, uint32_t *out)
   A04BR3PwrapGuard guard;
   if (!guard || (address & 1) || address > 0xfffe || (!write && !out)) return false;
   uint32_t status = rd(gPwrap, kWacsRdata);
-  if (!(status & (1U << 21)) || ((status >> 16) & 7U) != 0) { guard.quarantine(); return false; }
+  if (!(status & (1U << 21)) || ((status >> 16) & 7U) != 0) return false;
   wr(gPwrap, kWacsCmd, (write ? 1U << 31 : 0) | ((address >> 1) << 16) | (data & 0xffff));
   for (unsigned spin=0; spin<1000000; ++spin) {
     status=rd(gPwrap, kWacsRdata);
@@ -321,7 +321,7 @@ struct RtcCaptureRow { uint64_t before, after; unsigned sec, status, quarantine,
 static void rtcCaptureThread(void *, wait_result_t)
 {
   RtcCaptureIO io; A04BR3RtcReference state={}; RtcCaptureRow rows[64]={};
-  unsigned n=0, stopReason=0; bool allOk=true, quarantined=false;
+  unsigned n=0, stopReason=0; bool allOk=true;
   // Reuse the feeder/probe gate as an exclusive lease across the entire capture.
   // A stuck worker leaves feeding disabled; hardware reset remains unverified.
   bool gateLocked=false;
@@ -346,7 +346,6 @@ static void rtcCaptureThread(void *, wait_result_t)
     rows[n].before=io.timer();
     A04BR3RtcWacsResult r=a04br3_rtc_wacs_read(io);
     rows[n].after=io.timer(); rows[n].sec=r.second; rows[n].status=r.status; rows[n].quarantine=r.quarantined; rows[n].initial=r.initial; rows[n].last=r.last; rows[n].response=r.response;
-    quarantined = r.quarantined;
     const bool observed = r.status==rtcOk && a04br3_rtc_observe(state,{rows[n].before,rows[n].after,r.second});
     if (panic_active()) { thread_terminate(current_thread()); return; }
     IOLog("a04br3 rtc-ref-row n=%u before=%llu after=%llu sec=%u status=%u quarantine=%u initial=%08x last=%08x response=%08x\n",n,static_cast<unsigned long long>(rows[n].before),static_cast<unsigned long long>(rows[n].after),rows[n].sec,rows[n].status,rows[n].quarantine,rows[n].initial,rows[n].last,rows[n].response);
@@ -359,10 +358,10 @@ static void rtcCaptureThread(void *, wait_result_t)
   const bool complete = n==64 && allOk && !state.invalid &&
       __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE) &&
       __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE);
-  // Keep feeding suppressed only when WACS state is uncertain, recovery is
-  // lost, or panic is active. Safe data/lock failures do not poison the gate.
+  // WACS quarantine is independent of this gate. A returned transaction can
+  // release the gate even if the separate WACS lock remains quarantined.
   bool released=false;
-  if (!quarantined && __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) {
+  if (__atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) {
     for (unsigned retry=0; retry<1000 && !panic_active() &&
          __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE); ++retry) {
       if (!gWatchdogGate.lock()) { IOSleep(1); continue; }
@@ -378,7 +377,7 @@ static void rtcCaptureThread(void *, wait_result_t)
     }
   }
   if (panic_active()) { thread_terminate(current_thread()); return; }
-  if (!released && !quarantined && !stopReason) stopReason=5;
+  if (!released && !stopReason) stopReason=5;
   IOLog("a04br3 rtc-ref samples=%u valid=%u reason=%u released=%u rtc_seconds=%u min_ticks=%llu max_ticks=%llu owner=unverified timebase=uncalibrated rtc_rate=unverified alias=unverified recovery=unverified\n",n,static_cast<unsigned>(complete && b.valid && released),stopReason,static_cast<unsigned>(released),b.rtcSeconds,static_cast<unsigned long long>(b.minTicks),static_cast<unsigned long long>(b.maxTicks));
   thread_terminate(current_thread());
 }

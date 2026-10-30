@@ -45,9 +45,9 @@ main=r'''
 static void reset(){commands=clears=slept=rows=finished=summaries=retrySleeps=unavailable=releaseFailures=panicOnAcquire=manualPanic=0;held=issued=cleared=false;failAt=panicAt=fault=stateAt=gateFailures=gateAttempts=0;expectedCount=64;expectedValid=0;a04br3_runtime_probe_active=0;gRtcCaptureActive=0;gWatchdogGate.busy=0;a04br3_runtime_recovery_ready=1;}
 int main(){
  reset();expectedValid=1;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==64 && rows==64 && summaries==1 && finished==1);
- reset();failAt=1;expectedCount=1;rtcCaptureThread(nullptr,0);assert(commands==1 && clears==0 && rows==1 && held && summaries==1 && a04br3_runtime_probe_active && gRtcCaptureActive);
- reset();failAt=64;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==63 && rows==64 && held && summaries==1 && a04br3_runtime_probe_active && gRtcCaptureActive);
- for(unsigned kind=1;kind<=4;kind++){reset();fault=kind;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && finished==1);if(kind==2 || kind==3)assert(held && a04br3_runtime_probe_active);else assert(!held && !a04br3_runtime_probe_active);}
+ reset();failAt=1;expectedCount=1;rtcCaptureThread(nullptr,0);assert(commands==1 && clears==0 && rows==1 && held && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
+ reset();failAt=64;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==63 && rows==64 && held && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
+ for(unsigned kind=1;kind<=4;kind++){reset();fault=kind;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && finished==1);if(kind==3)assert(held && !a04br3_runtime_probe_active);else assert(!held && !a04br3_runtime_probe_active);}
  reset();fault=7;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  reset();gateFailures=3;expectedValid=1;rtcCaptureThread(nullptr,0);assert(gateAttempts==5 && retrySleeps==3 && !a04br3_runtime_probe_active && summaries==1);
  reset();releaseFailures=999;expectedValid=1;rtcCaptureThread(nullptr,0);assert(gateAttempts==1001 && retrySleeps==999 && !a04br3_runtime_probe_active && summaries==1);

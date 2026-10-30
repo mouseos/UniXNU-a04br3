@@ -98,7 +98,7 @@ int pwRead(unsigned addr, uint16_t *value)
 {
   A04BR3PwrapGuard guard(10000);
   if (!guard) return -1;
-  if (pwWait(0)) { guard.quarantine(); return -1; }
+  if (pwWait(0)) return -1;
   wr(gPwrap, 0xa0, (addr >> 1) << 16);
   if (pwWait(6)) { guard.quarantine(); return -1; }
   *value = uint16_t(rd(gPwrap, 0xa4));
@@ -106,7 +106,7 @@ int pwRead(unsigned addr, uint16_t *value)
   if (pwWait(0)) { guard.quarantine(); return -1; }
   return 0;
 }
-int pwWrite(unsigned addr, uint16_t value) { A04BR3PwrapGuard guard(10000); if (!guard) return -1; if (pwWait(0)) { guard.quarantine(); return -1; } wr(gPwrap, 0xa0, 0x80000000U | ((addr >> 1) << 16) | value); if (pwWait(0)) { guard.quarantine(); return -1; } return 0; }
+int pwWrite(unsigned addr, uint16_t value) { A04BR3PwrapGuard guard(10000); if (!guard) return -1; if (pwWait(0)) return -1; wr(gPwrap, 0xa0, 0x80000000U | ((addr >> 1) << 16) | value); if (pwWait(0)) { guard.quarantine(); return -1; } return 0; }
 
 // MT6392 VGP1 to 1.8 V (voltage select 0x530 bits 5..7 = 3) and enabled (0x50a bit 15).
 int powerOn(void)

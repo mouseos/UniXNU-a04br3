@@ -16,14 +16,15 @@ The vendor MT6392 RTC driver reads the seconds register without RTC reload.
 Each diagnostic transaction takes the existing board WACS2 nonblocking lock,
 requires idle/initialized state without clearing a foreign valid response,
 issues one read of 0x800a, waits up to 2048 polls for valid and clears only
-its own response. If the initial state is foreign, or if command completion or return to idle
-is uncertain, it retains the shared lock for the boot. Known AutoReset, Input
+its own response. If command completion or return to idle is uncertain after issue, it retains
+the shared lock for the boot. A foreign initial state is left untouched and the
+lock is released without issuing a command. Known AutoReset, Input
 and GPU WACS2 command paths also retain that lock on uncertain completion;
 AutoReset no longer clears an unknown response and waits for write idle. That quarantine prevents
 known local users from touching a possibly pending transaction, but may disable
 touch, GPU power or recovery paths which use WACS2. The RTC worker reserves the existing board probe/watchdog gate over the entire
 capture, blocking cooperating runtime probes and normal watchdog feeding. It
-releases the gate after a completed transaction when WACS is not quarantined, including inconclusive or rejected data. Quarantine, recovery loss, panic or a stuck worker leaves normal feeding disabled. Release retries yield to the scheduler and are count-bounded. Exhausting them leaves the gate active and reports a failed release; neither the retry count nor sleeps guarantee the worker will run before watchdog expiry. This is a recovery attempt, not proof of
+releases the gate when the transaction returns, including inconclusive or rejected data. Recovery loss, panic or a stuck worker leaves normal feeding disabled. A returned quarantined WACS transaction retains its WACS lock but releases the separate watchdog gate. Release retries yield to the scheduler and are count-bounded. Exhausting them leaves the gate active and reports a failed release; neither the retry count nor sleeps guarantee the worker will run before watchdog expiry. This is a recovery attempt, not proof of
 a watchdog reset. The periodic software-reset thread and external watchdog
 agents are separate; actual reset/recovery is unverified. The poll bound is not a
 wall-time guarantee and an MMIO trap or hang may never return. There is no
