@@ -2,6 +2,12 @@
 
 診断controllerは固定の復旧bootを用いる。書込みの開始や完了とホスト側journalの永続化は原子的にできない。プロセス強制終了やホスト停止後、端末への書込みが完了したかを判定できない場合、復旧画像を再度書く。これは少なくとも1回の方式であり、書込みの厳密な1回性は保証しない。ユーザーは固定復旧画像の再書込みを許容している。journalと検証可能なreceiptは不要な重複を減らすが、クラッシュ窓をなくさない。通常の書込みでreadbackは行わない。
 
+readbackを禁止しているため、端末上のboot内容を外部から確認する手段がない。したがって「fastbootの書込み完了」と「ホスト側の記録」の間でホストが停止した場合の厳密な1回保証は原理的に満たせない。この制約は既知の仕様として受け入れ、これ以上の対策は行わない。
+
+controllerはjournalをarmedにする時点で共通 port/gsi/logs/flash.log のinodeとサイズを記録する。guardianは復旧前に、その位置以降に試験flash以外のboot書込み（fastbootの `Writing 'boot' OKAY`、mtkclientの `Wrote ... to sector 294912`）があるかを数え、あれば試験画像は既に置き換わっているとして書込みを行わずjournalを `superseded` で閉じる。これにより、controller停止後に別の作業が先に共有ロックを取って書いた画像を復旧画像で上書きすることを防ぎ、controller自身の復旧完了後の二重書込みも減らす。共通ログへ記録しない書込みは検出できない。
+
+controllerは共有ロック integration/flash-writer.lock を取得できるまで待つ。guardianは15秒ごとに非ブロッキングで取得を試みる。無関係なfastboot/mtkclientプロセスが残っている間、guardianは復旧を延期する（誤書込みは起こさないが復旧が遅れる）。
+
 復旧書込みの成功と復旧OS起動は別であり、後者はこのcontrollerでは確認しない。UARTのファイル連続性と収集サービスの状態を検査しても、UARTのbyte lossは証明できない。ホスト停止中の復旧や対象端末がfastbootに戻ることも保証しない。共通ロックは対応する書込み処理間でのみ有効で、非協調プロセスの操作を排除できない。
 
 on/offは同じkernel、addon、trust、data ramdiskで、起動引数はmb=1の有無が異なるが、ADTの乱数seedも異なる。seedとGPU addonの完全な出自、復旧方法の実機成功、trust受理および配布条件は未証明。既知GPU失敗経路は直近復旧bootにもあるが、画像間の他の差異が安全である証明ではない。原レビューのファイル名とSHA-256は configs/memory-ce66352-trial-review.json に記録する。

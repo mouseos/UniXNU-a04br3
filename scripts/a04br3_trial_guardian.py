@@ -40,10 +40,33 @@ def recover_if_abandoned(state_path, lock_path, restore):
         state=json.loads(state_path.read_text())
         if state.get('state')=='restored':return 'restored'
         if state.get('state')!='armed':raise ValueError('unknown recovery journal state')
-        if restore(state):
-            write_state(state_path,{**state,'state':'restored','recovery':'flash-confirmed','recovery_boot':'unverified'})
+        outcome=restore(state)
+        if outcome:
+            write_state(state_path,{**state,'state':'restored','recovery':outcome if isinstance(outcome,str) else 'flash-confirmed','recovery_boot':'unverified'})
             return 'restored'
         return 'retry'
+
+BOOT_WRITE=re.compile(rb"^(?:Writing 'boot'[ \t]+OKAY\b|Wrote .* to sector 294912 )",re.M)
+
+def superseded(common,state,stage):
+    """True when a boot write newer than the trial flash appears in the shared flash log.
+
+    Every cooperating writer (this controller, its recovery, the guardian,
+    flash_candidate_once.py and the fastboot helper scripts) appends its output
+    to the shared log while holding flash-writer.lock. The trial flash is the
+    first boot write after the recorded offset; the controller logs it to the
+    stage log before the shared log. Any further boot write means the trial
+    image is no longer on the device, so writing the recovery image would only
+    overwrite another writer's image or duplicate a completed recovery."""
+    offset=state.get('common_log_offset');inode=state.get('common_log_inode')
+    if type(offset) is not int or type(inode) is not int:return False
+    common=Path(common)
+    if common.stat().st_ino!=inode:return False
+    with common.open('rb') as f:
+        f.seek(offset);data=f.read()
+    try:trial=1 if BOOT_WRITE.search((stage/'flash.log').read_bytes()) else 0
+    except FileNotFoundError:trial=0
+    return len(BOOT_WRITE.findall(data))-trial>=1
 
 def restore_device(root,state):
     safe=root/'port/xnu/out/iostat-ui-stack-stream-20261030/boot.img'
@@ -72,6 +95,9 @@ def restore_device(root,state):
         if receipt.get('trial_id')==state['trial_id'] and receipt.get('safe_sha256')==SAFE_SHA and receipt.get('arguments')==['fastboot','-s',SERIAL,'flash','boot',str(safe)] and receipt.get('log_sha256')==hashlib.sha256(log).hexdigest() and receipt.get('returncode')==0 and type(begin) is int and type(end) is int and 0<=begin<end==len(log) and flash_transcript(log[begin:end]):
             return True
     except (OSError,ValueError,KeyError):pass
+    try:
+        if superseded(root/'port/gsi/logs/flash.log',state,stage):return 'superseded'
+    except OSError:pass
     # An orphaned fastboot can survive SIGKILL of the controller. Never race it.
     for process in Path('/proc').iterdir():
         if not process.name.isdigit():continue

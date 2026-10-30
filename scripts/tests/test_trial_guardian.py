@@ -25,6 +25,33 @@ class Guardian(unittest.TestCase):
    self.assertEqual(m.recover_if_abandoned(state,lock,lambda s:True),'restored')
    self.assertEqual(json.loads(state.read_text())['recovery_boot'],'unverified')
    self.assertEqual(m.recover_if_abandoned(state,lock,lambda s:self.fail('duplicate restore')),'restored')
+ def test_superseded_by_later_boot_write(self):
+  ok=b"Sending 'boot' (1 KB) OKAY [  1.000s]\nWriting 'boot' OKAY [  1.000s]\nFinished. Total time: 2.000s\n"
+  with tempfile.TemporaryDirectory() as t:
+   stage=Path(t)/'off';stage.mkdir();common=Path(t)/'flash.log';common.write_bytes(b'old '+ok)
+   st={'common_log_offset':common.stat().st_size,'common_log_inode':common.stat().st_ino}
+   self.assertFalse(m.superseded(common,st,stage))
+   (stage/'flash.log').write_bytes(ok)
+   self.assertFalse(m.superseded(common,st,stage))
+   with common.open('ab') as f:f.write(ok)
+   self.assertFalse(m.superseded(common,st,stage))
+   with common.open('ab') as f:f.write(b'\nWrote /x/boot.img to sector 294912 with sector count 262144.\n')
+   self.assertTrue(m.superseded(common,st,stage))
+   (stage/'flash.log').unlink()
+   self.assertTrue(m.superseded(common,st,stage))
+   self.assertFalse(m.superseded(common,{**st,'common_log_inode':st['common_log_inode']+1},stage))
+   self.assertFalse(m.superseded(common,{},stage))
+ def test_superseded_skips_write(self):
+  with tempfile.TemporaryDirectory() as t:
+   root=Path(t);safe=root/'port/xnu/out/iostat-ui-stack-stream-20261030/boot.img';safe.parent.mkdir(parents=True);safe.write_bytes(b'fake-image')
+   stage=root/'port/gsi/logs/ios-feasibility/memory-ce66352-trial/off';stage.mkdir(parents=True)
+   common=root/'port/gsi/logs/flash.log';common.write_bytes(b"Writing 'boot' OKAY [  1.000s]\nWriting 'boot' OKAY [  1.000s]\n")
+   state={'stage':str(stage),'trial_id':'a'*32,'safe_sha256':hashlib.sha256(b'fake-image').hexdigest(),'common_log_offset':0,'common_log_inode':common.stat().st_ino,'state':'armed'}
+   with patch.object(m,'SAFE_SHA',state['safe_sha256']),patch.object(m.subprocess,'run',side_effect=AssertionError('write over newer image')):
+    self.assertEqual(m.restore_device(root,state),'superseded')
+    path=root/'state';lock=root/'lock';m.write_state(path,state)
+    self.assertEqual(m.recover_if_abandoned(path,lock,lambda s:m.restore_device(root,s)),'restored')
+   self.assertEqual(json.loads(path.read_text())['recovery'],'superseded')
  def test_invalid_state_fails_closed(self):
   with tempfile.TemporaryDirectory() as t:
    state=Path(t)/'state';m.write_state(state,{'state':'corrupt'})
