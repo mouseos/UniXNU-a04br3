@@ -1,18 +1,50 @@
 """修正した実関数を抽出し、カーネル/MMIOのモックで寿命と順序を検証する。実機アクセスなし。"""
 from pathlib import Path
+import hashlib
 import os
+import re
 import subprocess
 import tempfile
 import unittest
 
-DEVICE = Path(os.environ.get('A04BR3_DEVICE_ROOT', Path(__file__).resolve().parents[2])).resolve()
-GPU = (DEVICE / 'package/powervr/NativePowerVRGpu.cpp').read_text()
-JOBS = (DEVICE / 'package/powervr/NativePowerVRJobs.cpp').read_text()
-BASE = Path(os.environ.get('UNIXNU_BASE_ROOT', DEVICE.parent / 'UniXNU')).resolve()
-GOP_DIR = BASE / 'drivers/NativeMobileDisplay'
-GOP_COMMIT = os.environ.get('NATIVE_MOBILE_DISPLAY_COMMIT')
-GOP = (subprocess.check_output(['git', '-C', str(GOP_DIR), 'show', GOP_COMMIT + ':NativeGOPPresenter.cpp'], text=True)
-       if GOP_COMMIT else (GOP_DIR / 'NativeGOPPresenter.cpp').read_text())
+
+def required(name):
+    value = os.environ.get(name)
+    if not value:
+        raise SystemExit(f'{name} is required for pinned lifecycle tests')
+    return value
+
+
+def pinned_commit(name):
+    value = required(name)
+    if not re.fullmatch(r'[0-9a-f]{40}', value):
+        raise SystemExit(f'{name} must be a full lowercase commit hash')
+    return value
+
+
+def git(repo, *args):
+    return subprocess.check_output(['git', '-C', str(repo), *args])
+
+
+DEVICE = Path(required('A04BR3_DEVICE_ROOT')).resolve()
+DEVICE_COMMIT = pinned_commit('A04BR3_DEVICE_COMMIT')
+BASE = Path(required('UNIXNU_BASE_ROOT')).resolve()
+BASE_COMMIT = pinned_commit('UNIXNU_BASE_COMMIT')
+GOP_DIR = Path(required('NATIVE_MOBILE_DISPLAY_REPO')).resolve()
+GOP_COMMIT = pinned_commit('NATIVE_MOBILE_DISPLAY_COMMIT')
+for repository, commit in ((DEVICE, DEVICE_COMMIT), (BASE, BASE_COMMIT), (GOP_DIR, GOP_COMMIT)):
+    if git(repository, 'rev-parse', '--verify', commit + '^{commit}').decode().strip() != commit:
+        raise SystemExit('commit resolution differs from requested full pin')
+link = git(BASE, 'ls-tree', BASE_COMMIT, 'drivers/NativeMobileDisplay').decode().strip()
+if link != f'160000 commit {GOP_COMMIT}\tdrivers/NativeMobileDisplay':
+    raise SystemExit('NativeMobileDisplay commit does not match the pinned base gitlink')
+GPU = git(DEVICE, 'show', DEVICE_COMMIT + ':package/powervr/NativePowerVRGpu.cpp').decode()
+JOBS = git(DEVICE, 'show', DEVICE_COMMIT + ':package/powervr/NativePowerVRJobs.cpp').decode()
+BO_FLAGS = git(DEVICE, 'show', DEVICE_COMMIT + ':package/powervr/native_powervr_bo_flags.h').decode()
+GOP = git(GOP_DIR, 'show', GOP_COMMIT + ':NativeGOPPresenter.cpp').decode()
+print(f'device_commit={DEVICE_COMMIT} base_commit={BASE_COMMIT} native_mobile_display_commit={GOP_COMMIT}', flush=True)
+for name, source in (('gpu', GPU), ('jobs', JOBS), ('bo_flags', BO_FLAGS), ('presenter', GOP)):
+    print(f'{name}_sha256={hashlib.sha256(source.encode()).hexdigest()}', flush=True)
 
 
 def function(source, signature):
@@ -33,7 +65,8 @@ def run_cpp(body):
     with tempfile.TemporaryDirectory(prefix='powervr-lifecycle-') as tmp:
         source, binary = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
         source.write_text(body)
-        subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
+        (Path(tmp) / 'native_powervr_bo_flags.h').write_text(BO_FLAGS)
+        subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I', tmp,
                         '-fsanitize=address,undefined', '-fno-pie', '-no-pie', '-g', str(source), '-o', str(binary)], check=True)
         subprocess.run([str(binary)], check=True, timeout=30)
 
@@ -222,10 +255,11 @@ int main(){
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#include "native_powervr_bo_flags.h"
 using IOReturn=int;using IOByteCount=uint64_t;
-constexpr int kIOReturnSuccess=0,kIODirectionInOut=3,kIODirectionOut=1,kIOMemoryMapperNone=0,KERN_PROTECTION_FAILURE=3;
+constexpr int kIOReturnSuccess=0,kIODirectionInOut=3,kIODirectionOut=1,kIOMemoryMapperNone=0,KERN_PROTECTION_FAILURE=2,KERN_FAILURE=5;
 constexpr uint64_t kDevicePageSize=4096,kDevicePageMask=~4095ULL;
-int prepared=0,released=0;int prepareStatus=2,roStatus=0,direction=0;
+int prepared=0,released=0;int prepareStatus=KERN_FAILURE,roStatus=0,direction=0;
 void IOLog(const char *,...){}
 int proc_selfpid(){return 1;} bool gBoLiveEnabled=false;
 int hostImportFailure(const char *,uint64_t,uint64_t,int e,uint64_t=0,uint64_t=0,uint64_t=0,uint64_t=0){return e;}
@@ -233,7 +267,9 @@ struct IOMemoryDescriptor;
 struct IOMemoryMap {IOMemoryDescriptor *getMemoryDescriptor(){return nullptr;}
  uint64_t getPhysicalSegment(uint64_t,IOByteCount *,int){assert(false);return 0;}};
 int scanoutHostRange(void *,uint64_t,uint64_t,IOMemoryMap **out){*out=nullptr;return -ENOENT;}
-constexpr uint64_t DRM_PVR_BO_BYPASS_DEVICE_CACHE=1,NATIVE_POWERVR_BO_READ_ONLY=2;
+constexpr uint64_t DRM_PVR_BO_BYPASS_DEVICE_CACHE=1;
+static_assert(NATIVE_POWERVR_BO_READ_ONLY==(1ULL<<63),"actual GPU read-only flag");
+static_assert(KERN_PROTECTION_FAILURE==2 && KERN_FAILURE!=KERN_PROTECTION_FAILURE,"XNU kern_return ABI");
 struct IOMemoryDescriptor {void retain(){}int prepare(){++prepared;return direction==kIODirectionOut?roStatus:prepareStatus;}void release(){++released;}
  uint64_t getLength(){return 4096;}uint64_t getPhysicalSegment(uint64_t,IOByteCount *n,int){*n=4096;return 0x100000;}} md;
 struct native_powervr_sg {uint64_t phys,size;};
@@ -246,13 +282,13 @@ void boLiveAdd(native_powervr_bo *,bool){}
 using task_t=void *;
 ''' + source + r'''
 int main(){native_powervr_bo *out=nullptr;
- assert(boImportHost(nullptr,4096,4096,0,&out)==-EFAULT&&!out&&prepared==1&&released==1);
- prepareStatus=0;assert(boImportHost(nullptr,4096,4096,0,&out)==0&&out->hostPrepared&&out->nents==1);
+ assert(boImportHost(nullptr,4096,4096,0,&out)==-EFAULT&&!out&&prepared==1&&released==1&&direction==kIODirectionInOut);
+ prepareStatus=0;assert(boImportHost(nullptr,4096,4096,0,&out)==0&&out->hostPrepared&&out->nents==1&&!(out->flags&NATIVE_POWERVR_BO_READ_ONLY)&&direction==kIODirectionInOut);
  boDestroy(out);assert(prepared==2&&released==2);
  prepareStatus=KERN_PROTECTION_FAILURE;roStatus=0;out=nullptr;
- assert(boImportHost(nullptr,4096,4096,0,&out)==0&&out&&(out->flags&NATIVE_POWERVR_BO_READ_ONLY));
+ assert(boImportHost(nullptr,4096,4096,0,&out)==0&&out&&(out->flags&NATIVE_POWERVR_BO_READ_ONLY)&&direction==kIODirectionOut);
  boDestroy(out);assert(prepared==4&&released==4);
- roStatus=2;out=nullptr;assert(boImportHost(nullptr,4096,4096,0,&out)==-EFAULT&&!out);
+ roStatus=KERN_FAILURE;out=nullptr;assert(boImportHost(nullptr,4096,4096,0,&out)==-EFAULT&&!out);
  assert(prepared==6&&released==6);
 }
 '''
