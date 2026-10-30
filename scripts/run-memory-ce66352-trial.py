@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """既存の実機controllerを用いたce66352計測。レビュー記録は対象ハッシュと結び付ける。"""
-import argparse, fcntl, hashlib, importlib.util, json, os, re, subprocess, sys, types
+import argparse, fcntl, hashlib, importlib.util, json, os, re, shutil, subprocess, sys, types
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[3]
 WORK=ROOT/'port/gsi/logs/ios-feasibility/memory-ce66352-trial'
@@ -13,7 +13,7 @@ LAST=ROOT/'port/gsi/logs/ios-feasibility/msdc-adjacency-trial-20261030/adjacency
 REVIEW=WORK/'independent-review.json'
 DEVICE_COMMIT='ce66352db798560ac8c4f380d66bf78876d6c7e2'
 PARSER_COMMIT='ed98bfa1c429e26de66bc42b88859eb923dbda98'
-SUPPORT_COMMIT='25cf8f27eb0cb3fde1b628e796b601365742db98'
+SUPPORT_COMMIT='a455452df24ab130d2a58f958f7fcdee85f3fa5b'
 REPO=ROOT/'unixnu/UniXNU-a04br3-memory-low-impact'
 PARSER='scripts/summarize-memory-observation.py'
 DEVICE_FILES=('tools/a04br3-memory-copy-bench.c','package/A04BR3ProbeLaunch.c',
@@ -42,7 +42,7 @@ def check_object_sources(repo=REPO):
  for commit in (DEVICE_COMMIT,PARSER_COMMIT,SUPPORT_COMMIT):
   subprocess.run(['git','-C',str(repo),'cat-file','-e',commit+'^{commit}'],check=True,stdout=subprocess.DEVNULL)
  subprocess.run(['git','-C',str(repo),'merge-base','--is-ancestor',DEVICE_COMMIT,PARSER_COMMIT],check=True)
- for commit,paths in ((DEVICE_COMMIT,DEVICE_FILES),(SUPPORT_COMMIT,('scripts/a04br3_trial_guardian.py','scripts/a04br3_trial_boundaries.py','scripts/a04br3_trial_evidence.py'))):
+ for commit,paths in ((DEVICE_COMMIT,DEVICE_FILES),(SUPPORT_COMMIT,('scripts/a04br3_trial_guardian.py','scripts/a04br3_trial_boundaries.py','scripts/a04br3_trial_evidence.py','scripts/a04br3_trial_image_audit.py'))):
   for path in paths:
    blob=subprocess.check_output(['git','-C',str(repo),'show',commit+':'+path])
    need(hashlib.sha256(blob).digest()==hashlib.sha256((repo/path).read_bytes()).digest(),'作業ツリーの対象ソース不一致: '+path)
@@ -66,6 +66,11 @@ def check(mode):
 
 def main_locked(mode):
  m=check(mode);stage=WORK/mode;stage.mkdir(exist_ok=True)
+ audit_spec=importlib.util.spec_from_file_location('trial_image_audit',REPO/'scripts/a04br3_trial_image_audit.py')
+ audit=importlib.util.module_from_spec(audit_spec);audit_spec.loader.exec_module(audit)
+ image_audit=audit.audit(ROOT)
+ need(all(image_audit['checks'].values()) and image_audit['manifest_sha256']==digest(MANIFEST),'画像内部の実体照合に失敗')
+ (stage/'image-audit.json').write_text(json.dumps(image_audit,ensure_ascii=False,indent=2)+'\n')
  start_guardian()
  spec=importlib.util.spec_from_file_location('original_controller',SOURCE);mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
  mod.WORK=stage;mod.IMAGE=ART/f'{mode}-boot.img';mod.MANIFEST=MANIFEST;mod.BASE=MANIFEST;mod.SAFE=SAFE;mod.UART=UART;mod.REVIEW=REVIEW
@@ -89,6 +94,10 @@ def main_locked(mode):
  def fastboot_guard(arguments,*args,**kwargs):
   if arguments[:2]==['flash','boot'] and len(arguments)>2 and Path(arguments[2])==mod.IMAGE:
    uart_start.update(boundary.service_snapshot(UART,'a04br3-uart-main-20261030.service',subprocess.check_output))
+   need(shutil.which('fastboot') is not None,'fastbootが見つかりません')
+   cancel=kwargs.get('cancel')
+   if cancel is not None: cancel.check()
+   with (stage/'flash.log').open('ab'), (ROOT/'port/gsi/logs/flash.log').open('ab'): pass
    guardian.write_state(WORK/'recovery-state.json',{'state':'armed','stage':str(stage.resolve()),'image_sha256':mod.IMG_SHA,'safe_sha256':mod.SAFE_SHA})
   return old_fastboot(arguments,*args,**kwargs)
  mod.logged_fastboot=fastboot_guard
@@ -104,7 +113,7 @@ def main_locked(mode):
   tmp=stage/'boot-boundaries.json.tmp';tmp.write_text(json.dumps(report,indent=2)+'\n');tmp.replace(stage/'boot-boundaries.json')
   reasons=separation['boots'][0]['events']['boot_reasons'];next_reasons=separation['boots'][0]['next_boot_reasons']
   lines=[line.split('boot-args = ',1)[1].strip() for line in raw.splitlines() if 'boot-args = ' in line]
-  need(separation['trial_exception_free'] and set(reasons)=={4} and next_reasons and next_reasons[0]==4 and 'mount-complete volume OwnerData' in raw and 'a04br3-autoreset: 720 s elapsed, resetting into fastboot' in raw and lines and all(line==args for line in lines),'起動または例外の証拠不正')
+  need(separation['trial_exception_free'] and reasons==[4] and next_reasons==[4] and 'mount-complete volume OwnerData' in raw and 'a04br3-autoreset: 720 s elapsed, resetting into fastboot' in raw and lines and all(line==args for line in lines),'起動または例外の証拠不正')
   if mode=='off':
    need(b'a04br3_mem_copy ' not in data and b'a04br3: memory bench spawn ' not in data,'offでbench活動を観測')
    analysis={'assessment':{'status':'disabled'}}
@@ -123,6 +132,9 @@ def main_locked(mode):
  mod.capture_valid=capture_with_bench
  original_write_result=mod.write_result
  def write_result_with_bench(result):
+  result['recovery_write_confirmed']=result.get('recovery_confirmed') is True
+  result['recovery_boot_verified']=False
+  result['recovery_confirmed_meaning']='legacy field: recovery boot partition write only'
   path=stage/'benchmark-analysis.json'
   if path.exists(): result['benchmark_analysis_sha256']=digest(path)
   path=stage/'boot-boundaries.json'
@@ -141,7 +153,7 @@ def main_locked(mode):
   boundary_file=off_dir/'boot-boundaries.json';saved_boundary=json.loads(boundary_file.read_text())
   boundary.continuity(saved_boundary['uart_continuity']['before'],saved_boundary['uart_continuity']['after'])
   text=off_raw.decode('utf8','replace');off_args=[line.split('boot-args = ',1)[1].strip() for line in text.splitlines() if 'boot-args = ' in line]
-  need(off.get('boot_capture_valid') is True and off.get('recovery_confirmed') is True and mod.flash_ok((off_dir/'recovery-flash.log').read_bytes(),0) and off_separation['trial_exception_free'] and set(off_separation['boots'][0]['events']['boot_reasons'])=={4} and off_separation['boots'][0]['next_boot_reasons'][:1]==[4] and 'mount-complete volume OwnerData' in text and 'a04br3-autoreset: 720 s elapsed, resetting into fastboot' in text and off_args and all(a==m['variants']['off']['kernel_args'] for a in off_args) and saved_boundary['separation']==off_separation and off.get('boot_boundaries_sha256')==digest(boundary_file) and off.get('scanout')==mod.scanout_summary(text) and off['scanout'].get('progress_observed') is True and off.get('benchmark_analysis_sha256')==digest(analysis_path) and analysis.get('assessment',{}).get('status')=='disabled' and analysis.get('image_sha256')==m['variants']['off']['boot_sha256'] and analysis.get('boot_raw_sha256')==hashlib.sha256(off_raw).hexdigest() and b'a04br3_mem_copy ' not in off_raw and b'a04br3: memory bench spawn ' not in off_raw and analysis.get('parser_commit')==PARSER_COMMIT,'off試験未完了')
+  need(off.get('boot_capture_valid') is True and off.get('recovery_confirmed') is True and mod.flash_ok((off_dir/'recovery-flash.log').read_bytes(),0) and off_separation['trial_exception_free'] and off_separation['boots'][0]['events']['boot_reasons']==[4] and off_separation['boots'][0]['next_boot_reasons']==[4] and 'mount-complete volume OwnerData' in text and 'a04br3-autoreset: 720 s elapsed, resetting into fastboot' in text and off_args and all(a==m['variants']['off']['kernel_args'] for a in off_args) and saved_boundary['separation']==off_separation and off.get('boot_boundaries_sha256')==digest(boundary_file) and off.get('scanout')==mod.scanout_summary(text) and off['scanout'].get('progress_observed') is True and off.get('benchmark_analysis_sha256')==digest(analysis_path) and analysis.get('assessment',{}).get('status')=='disabled' and analysis.get('image_sha256')==m['variants']['off']['boot_sha256'] and analysis.get('boot_raw_sha256')==hashlib.sha256(off_raw).hexdigest() and b'a04br3_mem_copy ' not in off_raw and b'a04br3: memory bench spawn ' not in off_raw and analysis.get('parser_commit')==PARSER_COMMIT,'off試験未完了')
  try: mod.run_locked()
  finally:
   result_file=stage/'result.json'
