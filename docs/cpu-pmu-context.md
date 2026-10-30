@@ -1,3 +1,8 @@
+> Safety update: the board qualification is unconditionally refused in this
+> revision, including `aq=1`. The earlier experiment described below is
+> historical; no PMU access is authorized by an opt-in argument. Higher-EL
+> ownership, watchdog recovery and timer calibration remain unverified.
+
 # PMUv3 context diagnostic
 
 The explicitly experimental `arw=3 aq=1` mode collects a context snapshot

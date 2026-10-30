@@ -4,8 +4,9 @@ from pathlib import Path
 import subprocess,tempfile
 root=Path(__file__).resolve().parents[2]
 s=(root/'package/A04BR3AutoReset.cpp').read_text();a=s.index('// This local lease serializes');b=s.index('// The lock coordinates known board WACS2 users',a);source=s[a:b]
-needle='static bool a04br3_pmu_access_qualified(unsigned cpu) {\n#if defined(A04BR3_PMUV3_EXPERIMENT) && A04BR3_PMUV3_EXPERIMENT\n  return cpu < 4 && __atomic_load_n(&gPmuExperiment,__ATOMIC_ACQUIRE)==1;\n#else\n  (void)cpu; return false;\n#endif\n}'
+needle='static bool a04br3_pmu_access_qualified(unsigned cpu) {\n  // A boot argument and a local lease cannot establish ownership against\n  // EL2, EL3, firmware or debug agents. Keep all windows fail-closed.\n  (void)cpu; return false;\n}'
 assert source.count(needle)==1
+actual_source=source
 source=source.replace(needle,'static bool a04br3_pmu_access_qualified(unsigned cpu) { return cpu < 4 && testQualified; }')
 main='''
 int main(){uint64_t gen=0;assert(!a04br3_pmu_qualification_available(0));
@@ -28,4 +29,25 @@ with tempfile.TemporaryDirectory(prefix='pmu-gate-integration-') as d:
  p=Path(d);cpp=p/'test.cpp';exe=p/'test';cpp.write_text('#include <cassert>\n#include <atomic>\n#include <thread>\n#include "A04BR3WatchdogGate.h"\n#include "A04BR3PmuLease.h"\nstatic A04BR3WatchdogGate gWatchdogGate={};\nstatic volatile uint32_t a04br3_runtime_probe_active=0;\nstatic bool testQualified=false;\n'+source+main)
  subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all','-pthread','-I',str(root/'package'),str(cpp),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True)
+# Exercise the actual (unmocked) qualification and wrapper with both builds.
+actual_main = r"""
+int main() {
+#if A04BR3_PMUV3_EXPERIMENT
+ __atomic_store_n(&gPmuExperiment,1U,__ATOMIC_RELEASE);
+#endif
+ for (unsigned cpu=0; cpu<5; ++cpu) {
+  uint64_t token=0;
+  assert(!a04br3_pmu_qualification_available(cpu));
+  assert(a04br3_runtime_probe_begin());
+  assert(!a04br3_pmu_lease_acquire(cpu,&token));
+  assert(token==0); assert(a04br3_runtime_probe_end_checked());
+ }
+}
+"""
+with tempfile.TemporaryDirectory(prefix='pmu-gate-actual-') as d:
+ p=Path(d); cpp=p/'actual.cpp'; exe=p/'actual'
+ cpp.write_text('#include <cassert>\n#include "A04BR3WatchdogGate.h"\n#include "A04BR3PmuLease.h"\nstatic A04BR3WatchdogGate gWatchdogGate={};\nstatic volatile uint32_t a04br3_runtime_probe_active=0;\n'+actual_source+actual_main)
+ for mode in (0,1):
+  subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror',f'-DA04BR3_PMUV3_EXPERIMENT={mode}','-I',str(root/'package'),str(cpp),'-o',str(exe)],check=True)
+  subprocess.run([str(exe)],check=True)
 print('PASS actual gate/lease wrappers: refusal, active lease blocks release, nonblocking contention')

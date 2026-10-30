@@ -328,7 +328,7 @@ void cycleThread(void *, wait_result_t)
 
 // This local lease serializes participating EL1 clients only. Upper-EL and
 // debugger non-interference remains unverified. The separately compiled
-// diagnostic permits an explicit experimental boot argument, not proof of ownership.
+// diagnostic records an experimental boot request but does not authorize access.
 static A04BR3PmuLease gRuntimePmuLease = {};
 // This opt-in is an experimental assumption, not proof of EL2/EL3 or debugger
 // exclusion. It is compiled only with the PMUv3 backend and KPC disabled.
@@ -336,11 +336,9 @@ static A04BR3PmuLease gRuntimePmuLease = {};
 static unsigned gPmuExperiment;
 #endif
 static bool a04br3_pmu_access_qualified(unsigned cpu) {
-#if defined(A04BR3_PMUV3_EXPERIMENT) && A04BR3_PMUV3_EXPERIMENT
-  return cpu < 4 && __atomic_load_n(&gPmuExperiment,__ATOMIC_ACQUIRE)==1;
-#else
+  // A boot argument and a local lease cannot establish ownership against
+  // EL2, EL3, firmware or debug agents. Keep all windows fail-closed.
   (void)cpu; return false;
-#endif
 }
 extern "C" bool a04br3_pmu_qualification_available(unsigned cpu)
 {
@@ -409,7 +407,7 @@ extern "C" void a04br3_autoreset_init(void)
   unsigned experiment=0;
   if (PE_parse_boot_argn("aq", &experiment, sizeof(experiment)) && experiment==1) {
     __atomic_store_n(&gPmuExperiment,1U,__ATOMIC_RELEASE);
-    IOLog("a04br3-pmu: EXPERIMENT enabled; EL2/EL3/debug ownership and WDT recovery unverified\n");
+    IOLog("a04br3-pmu: EXPERIMENT requested but unavailable; EL2/EL3/debug ownership and WDT recovery unverified\n");
   }
 #endif
   gResetSeconds = seconds;
