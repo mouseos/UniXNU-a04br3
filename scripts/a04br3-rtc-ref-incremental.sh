@@ -18,9 +18,13 @@ kernel=out/a04br3/kernel/kernel.macho
 msdc="$tree/build/native-msdc/libNativeMsdc.a"
 grep -q -- '-DNATIVE_MSDC_IRQ_WAIT=1' "$tree/build/native-msdc/compile-command.json"
 grep -q -- '-DA04BR3_RTC_REF=1' "$tree/build/a04br3-board/A04BR3AutoReset.command.json"
+symbols=$(mktemp -d)
+trap 'rm -rf "$symbols"' EXIT
+nm -g "$msdc" > "$symbols/msdc"
+nm -g "$kernel" > "$symbols/kernel"
 for sym in native_msdc_irq_mask_failures native_msdc_irq_stats native_msdc_worker_stats; do
-  nm -g "$msdc" | grep -q " _$sym$"
+  grep -q " _$sym$" "$symbols/msdc"
 done
 for sym in native_msdc_irq_mask_failures native_msdc_irq_stats native_msdc_worker_stats native_cs_trace_report; do
-  nm -g "$kernel" | grep -q " _$sym$"
+  grep -q " _$sym$" "$symbols/kernel"
 done
