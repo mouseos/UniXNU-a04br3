@@ -12,7 +12,8 @@ UART=ROOT/'port/gsi/logs/uart-ttyUSB0-921600.log'
 LAST=ROOT/'port/gsi/logs/ios-feasibility/msdc-adjacency-trial-20261030/adjacency'
 REVIEW=WORK/'independent-review.json'
 DEVICE_COMMIT='ce66352db798560ac8c4f380d66bf78876d6c7e2'
-PARSER_COMMIT='e3fbd2d9a4ac22cd81cec76e34928f5f89814ab9'
+PARSER_COMMIT='ed98bfa1c429e26de66bc42b88859eb923dbda98'
+SUPPORT_COMMIT='25cf8f27eb0cb3fde1b628e796b601365742db98'
 REPO=ROOT/'unixnu/UniXNU-a04br3-memory-low-impact'
 PARSER='scripts/summarize-memory-observation.py'
 DEVICE_FILES=('tools/a04br3-memory-copy-bench.c','package/A04BR3ProbeLaunch.c',
@@ -38,10 +39,10 @@ def start_guardian():
  state=WORK/'recovery-state.json'
  if state.exists(): need(json.loads(state.read_text()).get('state')=='restored','以前の復旧処理が未完了')
 def check_object_sources(repo=REPO):
- for commit in (DEVICE_COMMIT,PARSER_COMMIT):
+ for commit in (DEVICE_COMMIT,PARSER_COMMIT,SUPPORT_COMMIT):
   subprocess.run(['git','-C',str(repo),'cat-file','-e',commit+'^{commit}'],check=True,stdout=subprocess.DEVNULL)
  subprocess.run(['git','-C',str(repo),'merge-base','--is-ancestor',DEVICE_COMMIT,PARSER_COMMIT],check=True)
- for commit,paths in ((DEVICE_COMMIT,DEVICE_FILES),):
+ for commit,paths in ((DEVICE_COMMIT,DEVICE_FILES),(SUPPORT_COMMIT,('scripts/a04br3_trial_guardian.py','scripts/a04br3_trial_boundaries.py','scripts/a04br3_trial_evidence.py'))):
   for path in paths:
    blob=subprocess.check_output(['git','-C',str(repo),'show',commit+':'+path])
    need(hashlib.sha256(blob).digest()==hashlib.sha256((repo/path).read_bytes()).digest(),'作業ツリーの対象ソース不一致: '+path)
@@ -79,6 +80,8 @@ def main_locked(mode):
  boundary_path=REPO/'scripts/a04br3_trial_boundaries.py'
  boundary_spec=importlib.util.spec_from_file_location('trial_boundaries',boundary_path)
  boundary=importlib.util.module_from_spec(boundary_spec);boundary_spec.loader.exec_module(boundary)
+ evidence_spec=importlib.util.spec_from_file_location('trial_bench_evidence',REPO/'scripts/a04br3_trial_evidence.py')
+ bench_evidence=importlib.util.module_from_spec(evidence_spec);evidence_spec.loader.exec_module(bench_evidence)
  guardian_spec=importlib.util.spec_from_file_location('trial_guardian',REPO/'scripts/a04br3_trial_guardian.py')
  guardian=importlib.util.module_from_spec(guardian_spec);guardian_spec.loader.exec_module(guardian)
  uart_start={}
@@ -111,6 +114,9 @@ def main_locked(mode):
    analysis=parser.analyze(data,expected)
    success=parser.assess(data,analysis,'copy',65536,True)
    need(success or analysis.get('assessment',{}).get('status')=='skip','bench未完了')
+   strict=bench_evidence.analyze_benchmark(data.decode('utf8','replace'),'on')
+   need(strict['valid'] and (strict['outcome']=='completed' if success else strict['outcome']=='skip'),'bench統計またはskipの整合性不正')
+   analysis['bench_crosscheck']=strict
   analysis.update(parser_commit=PARSER_COMMIT,parser_sha256=hashlib.sha256(parser_source).hexdigest(),boot_raw_sha256=raw_sha,image_sha256=expected)
   tmp=stage/'benchmark-analysis.json.tmp';tmp.write_text(json.dumps(analysis,indent=2)+'\n');tmp.replace(stage/'benchmark-analysis.json')
   return True
