@@ -20,6 +20,21 @@
 # did not leave fastboot, 3 when it did not come back within wait_seconds. A return alone does not prove automatic recovery;
 # this observer cannot distinguish a UART reset or a physical reset from watchdog recovery. Logs: ${RUNS_ROOT:-out/a04br3/unattended}/<time>/round-N/.
 set -uo pipefail
+CAPTURE=
+# A failed image check, fastboot error, or interrupted round must not leave a
+# competing UART reader behind. Never touch a collector supplied via UART_LOG.
+# Bash may defer a signal trap until a foreground command exits; SIGKILL and
+# host power loss cannot be handled by this trap.
+stop_capture() {
+  if [ -n "$CAPTURE" ]; then
+    kill "$CAPTURE" 2>/dev/null || :
+    wait "$CAPTURE" 2>/dev/null || :
+    CAPTURE=
+  fi
+}
+trap stop_capture EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 IMG=${1:?boot image}
 LIMIT=${2:-1200}
@@ -79,7 +94,7 @@ for round in $(seq 1 "$ROUNDS"); do
   left=0
   for _ in $(seq 1 60); do if ! listed; then left=1; break; fi; sleep 1; done
   finish() {
-    [ -n "$CAPTURE" ] && kill "$CAPTURE" 2>/dev/null
+    stop_capture
     if [ -n "${UART_LOG:-}" ]; then tail -c +$((START + 1)) "$UART_LOG" > "$RUN/uart.log"; fi
     classify
   }
