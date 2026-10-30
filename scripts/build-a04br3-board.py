@@ -26,7 +26,7 @@ from a04br3_runtime_config import require_cpu_counters_disabled
 ROOT = Path(__file__).resolve().parents[1]
 KIT = ROOT / 'kits/a04br3'
 CXX_SOURCES = ['A04BR3Board.cpp', 'A04BR3AutoReset.cpp', 'KeyStoreProbe.cpp', 'A04BR3Gpu.cpp', 'A04BR3Charger.cpp', 'A04BR3RegisterLock.cpp']
-C_SOURCES = ['BootWatchdogPolicy.c', 'A04BR3ProbeLaunch.c']
+C_SOURCES = ['BootWatchdogPolicy.c', 'A04BR3ProbeLaunch.c', 'A04BR3LaunchProc.c']
 OBJ = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
 out = ROOT / 'build/a04br3-board'
 out.mkdir(parents=True, exist_ok=True)

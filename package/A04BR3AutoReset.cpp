@@ -65,15 +65,52 @@ LatencySample gLatency;
 IOSimpleLock *gLatencyLock;
 int gLatencyEnabled=-1;
 volatile uint64_t gLatencyLastPresent;
+// a04br3-input-latency=2 adds the app launch breakdown to each timed tap (launchTraceThread below).
 bool latencyEnabled(void) {
-    if(gLatencyEnabled<0){unsigned v=0;PE_parse_boot_argn("a04br3-input-latency",&v,sizeof v);gLatencyEnabled=(v==1);}
-    return gLatencyEnabled==1;
+    if(gLatencyEnabled<0){unsigned v=0;PE_parse_boot_argn("a04br3-input-latency",&v,sizeof v);gLatencyEnabled=(v==1||v==2)?int(v):0;}
+    return gLatencyEnabled>0;
 }
 uint64_t latencyMs1000(uint64_t from,uint64_t to) {   // microseconds between two absolute times, 0 when to is unset
     if(!to || to<from)return 0;
     uint64_t ns=0;absolutetime_to_nanoseconds(to-from,&ns);return ns/1000;
 }
 const char *latencyKind(uint32_t kind) {return kind==1?"home":kind==2?"swipe":kind==3?"tap":"other";}
+// ---- App launch breakdown (a04br3-input-latency=2, default off) ----------------------------------------------------------------
+// While a timed tap's sample is open (at most 90 s), one thread samples the launch through package/BootProcessProbe.c: process
+// events every 100 ms, counters and the threads of Preferences, SpringBoard, backboardd, runningboardd, launchd and lsd every
+// second ("a04br3 lt" lines, scripts/a04br3-launch-breakdown.py). The walks run in their own thread, never in the UART thread.
+volatile uint64_t gLaunchRx;
+uint32_t gLaunchThreadStarted;
+}  // namespace latency
+extern "C" void boot_launch_trace_begin(uint64_t rx);
+extern "C" void boot_launch_trace_sample(unsigned full);
+namespace latency {
+// The launch breakdown follows the tap's sample: it stops when the sample closes (15 s after the last frame, or 90 s).
+bool launchSampleOpen(uint64_t rx) {
+    if(!gLatencyLock)return false;
+    IOSimpleLockLock(gLatencyLock);
+    const bool open=gLatency.open && gLatency.rx==rx;
+    IOSimpleLockUnlock(gLatencyLock);
+    return open;
+}
+void launchTraceThread(void *, wait_result_t) {
+    uint64_t launch=0;nanoseconds_to_absolutetime(90ull*NSEC_PER_SEC,&launch);
+    for(;;) {
+        const uint64_t rx=__atomic_load_n(&gLaunchRx,__ATOMIC_ACQUIRE);
+        if(!rx){IOSleep(100);continue;}
+        boot_launch_trace_begin(rx);
+        boot_launch_trace_sample(1);
+        unsigned samples=1;
+        for(unsigned tick=1;launchSampleOpen(rx) && mach_absolute_time()-rx<launch;++tick) {
+            IOSleep(100);
+            boot_launch_trace_sample(tick%10==0);++samples;
+        }
+        boot_launch_trace_sample(1);
+        IOLog("a04br3 lt end samples=%u\n",samples+1);
+        uint64_t expected=rx;
+        __atomic_compare_exchange_n(&gLaunchRx,&expected,0ull,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE);
+    }
+}
 }  // namespace latency
 using namespace latency;
 extern "C" {
@@ -97,6 +134,14 @@ unsigned a04br3_latency_input(unsigned kind) {
         seq=gLatency.seq;
     } else a04br3_latency_skipped=a04br3_latency_skipped+1;
     IOSimpleLockUnlock(gLatencyLock);
+    if(seq && kind==3 && gLatencyEnabled==2 && !__atomic_load_n(&gLaunchRx,__ATOMIC_ACQUIRE)) {
+        if(!__atomic_exchange_n(&gLaunchThreadStarted,1u,__ATOMIC_ACQ_REL)) {
+            thread_t thread=nullptr;
+            if(kernel_thread_start(launchTraceThread,nullptr,&thread)==KERN_SUCCESS)thread_deallocate(thread);
+            else IOLog("a04br3 lt unavailable: thread\n");
+        }
+        __atomic_store_n(&gLaunchRx,now,__ATOMIC_RELEASE);
+    }
     if(!seq)IOLog("a04br3 latency: kind=%s input not measured, sample %u still open\n",latencyKind(kind),gLatency.seq);
     return seq;
 }
