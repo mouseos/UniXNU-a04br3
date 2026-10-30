@@ -74,7 +74,8 @@ happens a "maintain wrote" line lists the before image and every write.
 
 ## Enabling and checking
 
-Add --kernel-arg a04br3-charger-maintain=1 to the payload build (the
+Add --kernel-arg a04br3-charger-maintain=1 (short alias a04br3-cm=1; log
+period alias a04br3-cl=<seconds>) to the payload build (the
 a04br3-memory-*payload.sh scripts pass extra arguments through). If
 a04br3-charger-owner=1 is also present it is ignored and logged as such. The
 firmware owner (A04BR3_CHARGER_OWNER=1) may stay enabled; it bridges LK to EBS,
