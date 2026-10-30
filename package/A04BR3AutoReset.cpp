@@ -51,7 +51,7 @@ extern "C" volatile uint32_t native_hid_input_command __attribute__((weak));
 //   rx      the host's UART request was received (this file: A04BR3!HOME, A04BR3!SWR)
 //   hid     the request left the board for iPadOS (HidInputProbe.cpp hands Home to NativeHidInput; A04BR3Input.cpp starts the swipe)
 //   swap    the first swap the compositor submitted and the display accepted after rx
-//   present the first frame completed into the scanout after rx (CPU copy or GPU hand-off), and the frames in the 2 s after it
+//   present the first frame completed into the scanout after that swap (CPU copy or GPU hand-off), and the frames in the 2 s after it
 // The sample closes 2 s after its first present, or after 60 s without one, and prints one "a04br3 latency:" line. A request that
 // arrives while a sample is open is passed on to iPadOS but not measured (the line says so). The idle time before rx shows whether
 // unrelated frames (the lock screen clock) were near. scripts/a04br3-input-latency.py drives the inputs and summarizes the lines.
@@ -120,7 +120,9 @@ void a04br3_latency_present(void) {
     gLatencyLastPresent=now;
     if(!gLatencyLock)return;
     IOSimpleLockLock(gLatencyLock);
-    if(gLatency.open) {
+    // Only a frame after the first swap the compositor submitted after the input answers it: a frame of an earlier swap can
+    // still complete just after the input.
+    if(gLatency.open && gLatency.swap) {
         if(!gLatency.present)gLatency.present=now;
         else gLatency.framesAfter++;
     }

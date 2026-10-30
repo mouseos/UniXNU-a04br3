@@ -63,12 +63,17 @@ def summarize(samples):
     def stats(values):
         return dict(n=len(values), median=round(statistics.median(values), 3) if values else None,
                     max=round(max(values), 3) if values else None, min=round(min(values), 3) if values else None)
-    measured = [s for s in samples[1:] if s['status'] == 'ok']   # samples[0] is the wake/unlock Home
+    # samples[0] is the wake/unlock Home. A sample answers its input only when a swap followed the input and the first frame came
+    # after it: kernels before 874a08c's successor stamped the first frame after the input even if it belonged to an earlier swap.
+    for s in samples:
+        s['valid'] = s['status'] == 'ok' and s['swap_ms'] > 0 and s['present_ms'] >= s['swap_ms']
+    measured = [s for s in samples[1:] if s['valid']]
     out = dict(log=a.log, from_offset=start, unlock=samples[0] if samples else None, samples=samples[1:],
                timeouts=sum(1 for s in samples[1:] if s['status'] != 'ok'),
+               unattributed=sum(1 for s in samples[1:] if s['status'] == 'ok' and not s['valid']),
                present_ms=stats([s['present_ms'] for s in measured]), swap_ms=stats([s['swap_ms'] for s in measured]),
                hid_ms=stats([s['hid_ms'] for s in measured]),
-               present_ms_timeouts_as_60s=stats([s['present_ms'] if s['status'] == 'ok' else 60000.0 for s in samples[1:]]),
+               present_ms_timeouts_as_60s=stats([s['present_ms'] if s['valid'] else 60000.0 for s in samples[1:] if s['valid'] or s['status'] != 'ok']),
                present_after_hid_ms=stats([s['present_ms'] - s['hid_ms'] for s in measured]))
     for kind in ('home', 'swipe'):
         out['present_ms_' + kind] = stats([s['present_ms'] for s in measured if s['kind'] == kind])
@@ -98,4 +103,4 @@ if not a.parse_only:
 
 summary = summarize(results())
 json.dump(summary, open(a.out, 'w'), indent=1)
-print(json.dumps({k: summary[k] for k in ('timeouts', 'present_ms', 'present_ms_timeouts_as_60s', 'swap_ms', 'hid_ms', 'present_after_hid_ms', 'present_ms_home', 'present_ms_swipe')}, indent=1))
+print(json.dumps({k: summary[k] for k in ('timeouts', 'unattributed', 'present_ms', 'present_ms_timeouts_as_60s', 'swap_ms', 'hid_ms', 'present_after_hid_ms', 'present_ms_home', 'present_ms_swipe')}, indent=1))
