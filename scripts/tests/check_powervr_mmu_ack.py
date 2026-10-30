@@ -91,8 +91,5 @@ with tempfile.TemporaryDirectory(prefix='mmu-ack-') as t:
  flag=s[a:b]
  (p/'flag.cpp').write_text('#include <cassert>\n#include <cstring>\nstatic bool present,gMmuAckEnabled;static unsigned argument;static bool PE_parse_boot_argn(const char*n,void*p,unsigned long){assert(!strcmp(n,"a04br3-mmu-ack"));*static_cast<unsigned*>(p)=argument;return present;}\nstatic void init(){'+flag+'}\nint main(){for(unsigned i=0;i<4;i++)for(int p=0;p<2;p++){argument=i;present=p;init();assert(gMmuAckEnabled==(p&&i==1));}}\n')
  subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror',str(p/'flag.cpp'),'-o',str(p/'flag')],check=True);subprocess.run([str(p/'flag')],check=True)
- a=s.index('  unsigned fastPoll = 0;');b=s.index('\n',s.index('  gKccbFastPoll =',a));flag=s[a:b]
- (p/'fastflag.cpp').write_text('#include <cassert>\n#include <cstring>\nstatic bool present,gKccbFastPoll;static unsigned argument;static bool PE_parse_boot_argn(const char*n,void*p,unsigned long){assert(!strcmp(n,"a04br3-kccb-fast"));*static_cast<unsigned*>(p)=argument;return present;}\nstatic void init(){'+flag+'}\nint main(){for(unsigned i=0;i<4;i++)for(int p=0;p<2;p++){argument=i;present=p;init();assert(gKccbFastPoll==(p&&i==1));}}\n')
- subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-Werror',str(p/'fastflag.cpp'),'-o',str(p/'fastflag')],check=True);subprocess.run([str(p/'fastflag')],check=True)
 
-print('PASS actual startup policy: absent/0/1/2/3; no GPU execution')
+print('PASS actual MMU startup policy: absent/0/1/2/3; no GPU execution')

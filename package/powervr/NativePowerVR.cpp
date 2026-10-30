@@ -22,6 +22,7 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
+#include "A04BR3KccbFastArgs.h"
 #include <libkern/libkern.h>
 #include <string.h>
 #include "compat/native_powervr_linux_compat.h"
@@ -558,8 +559,7 @@ void native_powervr_boot(void)
   packetDiagnosticInit();
   unsigned mmuAck = 0;
   gMmuAckEnabled = PE_parse_boot_argn("a04br3-mmu-ack", &mmuAck, sizeof(mmuAck)) && mmuAck == 1;
-  unsigned fastPoll = 0;
-  gKccbFastPoll = PE_parse_boot_argn("a04br3-kccb-fast", &fastPoll, sizeof(fastPoll)) && fastPoll == 1;
+  gKccbFastPoll = a04br3_kccb_fast_args(PE_boot_args());
   if (!a04br3_gpu_bvnc || a04br3_gpu_bvnc == ~0ULL) { IOLog("powervr: no core identified; firmware not booted\n"); return; }
   // Its own thread: the boot waits up to 10 s for the firmware and must not hold up unixnu_board_init().
   thread_t thread = nullptr;
