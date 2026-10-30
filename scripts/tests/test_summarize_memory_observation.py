@@ -56,7 +56,7 @@ class ProtocolTests(unittest.TestCase):
   self.assertEqual(self.run_cli(VM+'a04br3 perf sample ns=300 tasks=2\n','kernel-vm').returncode,0)
  def test_capture_evidence(self):
   sha=lambda x:hashlib.sha256(x).hexdigest()
-  data=raw('');prefix=b'old\n';snap=prefix+data+m.ANCHOR+b'\n';log=b'OKAY\nOKAY\nFinished.\n';image='a'*64
+  data=raw(VM+'a04br3 perf sample ns=300 tasks=2\n');prefix=b'old\n';snap=prefix+data+m.ANCHOR+b'\n';log=b"Sending 'boot' (129680 KB) OKAY [  3.828s]\nWriting 'boot' OKAY [  6.861s]\nFinished. Total time: 10.818s\n";image='a'*64
   evidence='flash.log sha256='+sha(log)
   flash={'uart_offset':10,'flash_completed_uart_offset':12,'boot_sha256':image,'flash_success':True,'flash_success_evidence':evidence}
   fb=json.dumps(flash).encode();cap={'flash_record_sha256':sha(fb),'snapshot_sha256':sha(snap),'flash_boot_sha256':image,'flash_success_claimed':True,'flash_success_evidence':evidence,'checkpoint_verified':True,'first_anchor_after_flash':True,'offset_crosses_preloader_anchor':False,'boots_truncated':False,'flash_offset':10,'flash_completed_uart_offset':12,'snapshot_end_offset':10+len(snap),'prefix_bytes_before_first_preloader':len(prefix),'boots':[{'index':1,'start_offset':10+len(prefix),'end_offset':10+len(prefix)+len(data),'closed_by_next_preloader':True,'bytes':len(data),'sha256':sha(data)},{'start_offset':10+len(prefix)+len(data)}]}
@@ -64,6 +64,33 @@ class ProtocolTests(unittest.TestCase):
    paths=[Path(tmp)/str(i) for i in range(4)]
    for path,content in zip(paths,(json.dumps(cap).encode(),fb,snap,log)):path.write_bytes(content)
    self.assertEqual(m.capture_evidence(data,image,*paths)['next_boot_start_offset'],cap['boots'][0]['end_offset'])
+   send,write,finish=log.splitlines(keepends=True)
+   bad_logs=[send+send+finish,write+write+finish,write+send+finish,
+             send+finish,send+write,send+write+finish+send,
+             send.replace(b"'boot'",b"'recovery'")+write+finish,
+             send+write.replace(b"'boot'",b"'recovery'")+finish,
+             send.replace(b'OKAY',b'FAILED')+write+finish,
+             send+write.replace(b'OKAY',b'FAILED')+finish,
+             send+write+finish+b'FAILED (remote error)\n',
+             send+write+finish+b'Warning: unexpected\n',
+             send+write+finish.rstrip(b'\n'),
+             send.replace(b'129680',b'0')+write+finish,
+             send.replace(b'OKAY',b'OKAY junk')+write+finish,
+             send+write+finish.replace(b'10.818s',b'10.818s junk')]
+   for bad in bad_logs:
+    with self.subTest(log=bad):
+     # Rebind both hashes so rejection tests transcript validation, not hashing.
+     evidence='flash.log sha256='+sha(bad);flash['flash_success_evidence']=evidence
+     fb=json.dumps(flash).encode();cap['flash_record_sha256']=sha(fb);cap['flash_success_evidence']=evidence
+     paths[0].write_text(json.dumps(cap));paths[1].write_bytes(fb);paths[3].write_bytes(bad)
+     with self.assertRaises(ValueError):m.capture_evidence(data,image,*paths)
+     if bad==send+send+finish:
+      boot=Path(tmp)/'boot';boot.write_bytes(data)
+      result=subprocess.run(['python3',str(p),str(boot),'--image-sha256',image,'--expected-raw-sha256',sha(data),'--expect','kernel-vm','--capture-json',str(paths[0]),'--flash-json',str(paths[1]),'--snapshot',str(paths[2]),'--flash-log',str(paths[3])],capture_output=True,text=True)
+      self.assertNotEqual(result.returncode,0);self.assertIn('flash log must contain',result.stderr)
+   paths[3].write_bytes(log);flash['flash_success_evidence']='flash.log sha256='+sha(log)
+   fb=json.dumps(flash).encode();cap['flash_record_sha256']=sha(fb);cap['flash_success_evidence']=flash['flash_success_evidence']
+   paths[0].write_text(json.dumps(cap));paths[1].write_bytes(fb)
    paths[2].write_bytes(snap+b'x')
    with self.assertRaises(ValueError):m.capture_evidence(data,image,*paths)
 if __name__=='__main__':unittest.main()

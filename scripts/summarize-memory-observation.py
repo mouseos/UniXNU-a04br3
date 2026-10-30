@@ -108,13 +108,25 @@ def assess(data, result, expected, size=None):
  result['assessment']={'expected':expected,'status':status,'expected_size_bytes':size}
  return status=='success'
 
+def validate_flash_log(log):
+ # Accept only the complete three-line fastboot transcript used by this workflow.
+ # A hash and a count of OKAY tokens cannot identify the partition or stage.
+ lines=log.split(b'\n')
+ send=rb"Sending 'boot' \(([1-9][0-9]*) KB\)[ \t]+OKAY \[[ \t]*[0-9]+\.[0-9]+s\]"
+ write=rb"Writing 'boot'[ \t]+OKAY \[[ \t]*[0-9]+\.[0-9]+s\]"
+ finish=rb"Finished\. Total time: [0-9]+\.[0-9]+s"
+ if len(lines)!=4 or lines[-1]!=b'' or not all(re.fullmatch(p,l) for p,l in zip((send,write,finish),lines[:3])):
+  raise ValueError('flash log must contain exactly successful boot send, boot write, and completion')
+
 def capture_evidence(raw, image, capture_path, flash_path, snapshot_path, flash_log):
  cap_bytes=capture_path.read_bytes(); flash_bytes=flash_path.read_bytes(); snap=snapshot_path.read_bytes(); log=flash_log.read_bytes()
  cap=json.loads(cap_bytes); flash=json.loads(flash_bytes); boots=cap.get('boots',[])
  sha=lambda b:hashlib.sha256(b).hexdigest()
  if cap.get('flash_record_sha256')!=sha(flash_bytes) or cap.get('snapshot_sha256')!=sha(snap):raise ValueError('capture evidence hash mismatch')
  if cap.get('flash_boot_sha256')!=image or flash.get('boot_sha256')!=image or flash.get('flash_success') is not True or cap.get('flash_success_claimed') is not True:raise ValueError('flash identity or success claim mismatch')
- if 'sha256='+sha(log) not in cap.get('flash_success_evidence','') or flash.get('flash_success_evidence')!=cap.get('flash_success_evidence') or log.count(b'OKAY')!=2 or log.count(b'Finished.')!=1:raise ValueError('flash log evidence mismatch')
+ evidence=cap.get('flash_success_evidence','')
+ if not isinstance(evidence,str) or not re.search(r' sha256='+sha(log)+r'\Z',evidence) or flash.get('flash_success_evidence')!=evidence:raise ValueError('flash log evidence mismatch')
+ validate_flash_log(log)
  if cap.get('checkpoint_verified') is not True or cap.get('first_anchor_after_flash') is not True or cap.get('offset_crosses_preloader_anchor') is not False or cap.get('boots_truncated') is not False or len(boots)<2:raise ValueError('incomplete capture boundary evidence')
  base=cap.get('flash_offset'); start=boots[0].get('start_offset'); end=boots[0].get('end_offset'); completed=cap.get('flash_completed_uart_offset')
  if any(type(x) is not int for x in (base,start,end,completed)) or not base<=completed<=start<end<=base+len(snap) or base!=flash.get('uart_offset') or completed!=flash.get('flash_completed_uart_offset') or cap.get('snapshot_end_offset')!=base+len(snap):raise ValueError('invalid capture offsets')

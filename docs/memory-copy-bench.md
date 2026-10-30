@@ -241,3 +241,12 @@ and the next preloader. This is evidence of the recorded flash operation and
 boot segmentation, not independent authentication of the runtime image or a
 proof that UART lost no bytes. Without the files, image identity remains a
 caller claim and end-of-boot closure is unverified.
+
+The flash transcript check accepts only three complete fastboot lines in order:
+`Sending 'boot' (N KB) OKAY [...]`, `Writing 'boot' OKAY [...]`, and
+`Finished. Total time: ...`. Missing, repeated, failed, other-partition,
+malformed or additional lines are rejected even if evidence hashes match.
+Other fastboot formats require a separately reviewed parser; a rejection does
+not itself prove that flashing failed. The log has no image digest, so linking
+that boot write to an image hash still relies on the flash record rather than
+on cryptographic proof from the transcript or device.
