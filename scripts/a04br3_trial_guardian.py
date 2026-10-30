@@ -13,7 +13,9 @@ def flash_transcript(data):
 
 def conflicts(argv):
     if not argv or not argv[0]:return False
-    program=os.path.basename(os.fsdecode(argv[0]))
+    names=[os.path.basename(os.fsdecode(x)) for x in argv[:2]]
+    if any(n in ('mtk','mtkclient','mtk.py') for n in names):return True
+    program=names[0]
     if program not in ('fastboot','mtk','mtkclient'):return False
     if program=='fastboot' and argv[1:]==[b'devices']:return False
     if b'-s' in argv:
@@ -61,7 +63,9 @@ def superseded(common,state,stage):
     offset=state.get('common_log_offset');inode=state.get('common_log_inode')
     if type(offset) is not int or type(inode) is not int:return False
     common=Path(common)
-    if common.stat().st_ino!=inode:return False
+    # A rotated or truncated log cannot prove the trial image is still current;
+    # report undetermined so the caller defers instead of overwriting.
+    if common.stat().st_ino!=inode or common.stat().st_size<offset:return None
     with common.open('rb') as f:
         f.seek(offset);data=f.read()
     try:trial=1 if BOOT_WRITE.search((stage/'flash.log').read_bytes()) else 0
@@ -96,7 +100,9 @@ def restore_device(root,state):
             return True
     except (OSError,ValueError,KeyError):pass
     try:
-        if superseded(root/'port/gsi/logs/flash.log',state,stage):return 'superseded'
+        decided=superseded(root/'port/gsi/logs/flash.log',state,stage)
+        if decided is None:return False
+        if decided:return 'superseded'
     except OSError:pass
     # An orphaned fastboot can survive SIGKILL of the controller. Never race it.
     for process in Path('/proc').iterdir():

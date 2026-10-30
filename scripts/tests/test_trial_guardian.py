@@ -9,6 +9,8 @@ class Guardian(unittest.TestCase):
   self.assertTrue(m.conflicts([b'fastboot',b'-s',m.SERIAL.encode(),b'flash',b'boot']))
   self.assertTrue(m.conflicts([b'fastboot',b'flash',b'boot']))
   self.assertTrue(m.conflicts([b'mtk']))
+  self.assertTrue(m.conflicts([b'/home/yuma/miniconda3/bin/python',b'/home/yuma/miniconda3/bin/mtk',b'w',b'boot']))
+  self.assertFalse(m.conflicts([b'python3',b'other.py']))
  def test_transcript_rejects_wrong_partition_and_extra_lines(self):
   valid=b"Sending 'boot' (1 KB) OKAY [  1.000s]\nWriting 'boot' OKAY [  1.000s]\nFinished. Total time: 2.000s\n"
   self.assertTrue(m.flash_transcript(valid))
@@ -39,7 +41,8 @@ class Guardian(unittest.TestCase):
    self.assertTrue(m.superseded(common,st,stage))
    (stage/'flash.log').unlink()
    self.assertTrue(m.superseded(common,st,stage))
-   self.assertFalse(m.superseded(common,{**st,'common_log_inode':st['common_log_inode']+1},stage))
+   self.assertIsNone(m.superseded(common,{**st,'common_log_inode':st['common_log_inode']+1},stage))
+   self.assertIsNone(m.superseded(common,{**st,'common_log_offset':10**9},stage))
    self.assertFalse(m.superseded(common,{},stage))
  def test_superseded_skips_write(self):
   with tempfile.TemporaryDirectory() as t:

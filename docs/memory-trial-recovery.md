@@ -8,6 +8,8 @@ controllerはjournalをarmedにする時点で共通 port/gsi/logs/flash.log の
 
 controllerは共有ロック integration/flash-writer.lock を取得できるまで待つ。guardianは15秒ごとに非ブロッキングで取得を試みる。無関係なfastboot/mtkclientプロセスが残っている間、guardianは復旧を延期する（誤書込みは起こさないが復旧が遅れる）。
 
+共通ログが入れ替わった（inode不一致）か切り詰められた場合、guardianは判定不能として書込みを延期する。controllerはguardianを毎回再起動し、検証済みのコードで動かす。Claudeレビュー（2026-10-30）で残した既知の制約は次のとおり。controller停止後に共通ログへ過去出力が追記されると、試験画像が残ったまま superseded と誤判定しうる。試験flashのOKAY行がstageログにだけ書かれ共通ログに書かれる前の極小の窓で停止し、その後に別作業が書いた場合は上書きしうる。待機中の別writerがロックを先に取り続けるとguardianの復旧が遅れる。boot以外の名前（boot_a等）への書込みは数えない。
+
 復旧書込みの成功と復旧OS起動は別であり、後者はこのcontrollerでは確認しない。UARTのファイル連続性と収集サービスの状態を検査しても、UARTのbyte lossは証明できない。ホスト停止中の復旧や対象端末がfastbootに戻ることも保証しない。共通ロックは対応する書込み処理間でのみ有効で、非協調プロセスの操作を排除できない。
 
 on/offは同じkernel、addon、trust、data ramdiskで、起動引数はmb=1の有無が異なるが、ADTの乱数seedも異なる。seedとGPU addonの完全な出自、復旧方法の実機成功、trust受理および配布条件は未証明。既知GPU失敗経路は直近復旧bootにもあるが、画像間の他の差異が安全である証明ではない。原レビューのファイル名とSHA-256は configs/memory-ce66352-trial-review.json に記録する。
