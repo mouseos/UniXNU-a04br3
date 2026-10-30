@@ -7,6 +7,13 @@ USAGE='a04br3_mem_copy phase=vm_usage query_begin_ns=10 query_end_ns=20 page_siz
 COPY='a04br3_mem_copy synthetic=1 threads=1 size_bytes=65536 start_monotonic_ns=100 end_monotonic_ns=200 elapsed_ns=100 logical_bytes=65536 verified=1\n'
 def raw(s):return m.ANCHOR+b'\n'+s.encode()
 class Tests(unittest.TestCase):
+ def test_uart_crcrlf_records_are_terminated(self):
+  lines=['a04br3_mem_copy phase=waiting delay_seconds=180 profile=low_impact_64k','a04br3_mem_copy phase=begin kind=copy size_bytes=65536','a04br3_mem_copy phase=skip reason=insufficient_free_pages','a04br3_mem_copy phase=end kind=copy status=skip']
+  data=raw(''.join(x+'\r\r\n' for x in lines))
+  result=m.analyze(data,'a'*64)
+  self.assertFalse(m.assess(data,result,'copy',65536,True))
+  self.assertEqual(result['assessment']['status'],'skip')
+  with self.assertRaises(ValueError):m.assess(data+b'a04br3_mem_copy phase=end kind=copy status=ok',m.analyze(data,'a'*64),'copy',65536,True)
  def test_values_not_added(self):
   x=m.analyze(raw(VM+'a04br3 perf sample ns=300 tasks=2\n'+USAGE+'a04br3_mem_copy phase=vm_usage_extended compressor_pages=2 external_pages=3 internal_pages=4 non_atomic=1\n'+COPY),'a'*64)
   self.assertEqual(x['vm_usage'][0]['free_excluding_speculative_bytes'],6*4096)

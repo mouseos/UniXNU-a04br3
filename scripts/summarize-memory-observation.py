@@ -58,9 +58,12 @@ def assess(data, result, expected, size=None, boot_run=False):
   result['assessment']={'expected':expected,'status':'observed' if result['kernel_vm'] else 'missing','copy_test_success_claimed':False}
   return bool(result['kernel_vm'])
  rows=[]
- for line in data.splitlines(keepends=True):
+ # UART lines end with \r\r\n. bytes.splitlines also splits at \r and would
+ # report a complete record as unterminated, so only \n terminates a record.
+ parts=data.split(b'\n')
+ for i,line in enumerate(parts):
   if b'a04br3_mem_copy ' not in line: continue
-  if not line.endswith(b'\n'): raise ValueError('unterminated diagnostic record')
+  if i==len(parts)-1: raise ValueError('unterminated diagnostic record')
   record=line.split(b'a04br3_mem_copy ',1)[1].rstrip(b'\r\n').decode('ascii')
   pairs=record.split(' ')
   if any(not re.fullmatch(r'[a-z_]+=[A-Za-z0-9_]+',x) for x in pairs):raise ValueError('malformed diagnostic record')
