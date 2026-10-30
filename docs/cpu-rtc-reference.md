@@ -20,16 +20,14 @@ its own response. If command completion or return to idle is uncertain after iss
 the shared lock for the boot. A foreign initial state is left untouched and the
 lock is released without issuing a command. Known AutoReset, Input
 and GPU WACS2 command paths also retain that lock on uncertain completion;
-AutoReset no longer clears an unknown response and waits for write idle. That quarantine prevents
+AutoReset no longer clears an unknown response. AutoReset and Input require an observed non-idle phase followed by idle for a write; a write too fast to observe that phase is conservatively quarantined. This check is not proof of hardware command acceptance. That quarantine prevents
 known local users from touching a possibly pending transaction, but may disable
 touch, GPU power or recovery paths which use WACS2. The RTC worker reserves the existing board probe/watchdog gate over the entire
 capture, blocking cooperating runtime probes while allowing normal watchdog
 feeding. The worker releases its own capture state after returned transactions,
 including rejected data and lost recovery readiness. A stuck worker may leave
 capture exclusion active; periodic feeding continues, so watchdog recovery is
-not established. Release retries yield to the scheduler and are count-bounded.
-Exhaustion reports failed release and can leave capture exclusion active. Neither
-the retry count nor sleeps guarantee a wall-time bound. The periodic software-reset thread and external watchdog
+not established. After a returned operation the capture exclusion is cleared atomically, independent of gate contention. The periodic software-reset thread and external watchdog
 agents are separate; actual reset/recovery is unverified. The poll bound is not a
 wall-time guarantee and an MMIO trap or hang may never return. There is no
 exclusive lease against secure firmware, EL2/EL3 or debug agents. An opt-in

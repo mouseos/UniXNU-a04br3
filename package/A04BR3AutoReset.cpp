@@ -125,11 +125,15 @@ bool wacs(bool write, uint32_t address, uint32_t data, uint32_t *out)
   uint32_t status = rd(gPwrap, kWacsRdata);
   if (!(status & (1U << 21)) || ((status >> 16) & 7U) != 0) return false;
   wr(gPwrap, kWacsCmd, (write ? 1U << 31 : 0) | ((address >> 1) << 16) | (data & 0xffff));
+  bool writeBusy=false;
   for (unsigned spin=0; spin<1000000; ++spin) {
     status=rd(gPwrap, kWacsRdata);
     if (!(status & (1U << 21))) break;
-    if (((status >> 16) & 7U) == (write ? 0U : 6U)) {
-      if (write) return true;
+    const unsigned fsm=(status >> 16) & 7U;
+    if (write && fsm != 0) writeBusy=true;
+    if (fsm == (write ? 0U : 6U)) {
+      if (write && writeBusy) return true;
+      if (write) continue;
       const uint32_t value=status & 0xffffU;
       wr(gPwrap, kWacsVldclr, 1);
       for (unsigned n=0; n<1000000; ++n) {
@@ -358,23 +362,11 @@ static void rtcCaptureThread(void *, wait_result_t)
   const bool complete = n==64 && allOk && !state.invalid &&
       __atomic_load_n(&gRtcCaptureActive,__ATOMIC_ACQUIRE) &&
       __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE);
-  // WACS quarantine is independent of this gate. A returned transaction can
-  // release the gate even if the separate WACS lock remains quarantined.
-  bool released=false;
-  {
-    for (unsigned retry=0; retry<1000 && !panic_active(); ++retry) {
-      if (!gWatchdogGate.lock()) { IOSleep(1); continue; }
-      if (!panic_active() && __atomic_load_n(&gRtcCaptureActive,__ATOMIC_ACQUIRE) &&
-          !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)) {
-        __atomic_store_n(&gRtcCaptureActive,0U,__ATOMIC_RELEASE);
-        released=true;
-      }
-      gWatchdogGate.unlock();
-      break;
-    }
-  }
+  // The final WACS operation has returned. Publishing release atomically is
+  // safe without taking the gate: probe begin checks this flag under the gate.
+  __atomic_store_n(&gRtcCaptureActive,0U,__ATOMIC_RELEASE);
+  const bool released=true;
   if (panic_active()) { thread_terminate(current_thread()); return; }
-  if (!released && !stopReason) stopReason=5;
   IOLog("a04br3 rtc-ref samples=%u valid=%u reason=%u released=%u rtc_seconds=%u min_ticks=%llu max_ticks=%llu owner=unverified timebase=uncalibrated rtc_rate=unverified alias=unverified recovery=unverified\n",n,static_cast<unsigned>(complete && b.valid && released),stopReason,static_cast<unsigned>(released),b.rtcSeconds,static_cast<unsigned long long>(b.minTicks),static_cast<unsigned long long>(b.maxTicks));
   thread_terminate(current_thread());
 }
