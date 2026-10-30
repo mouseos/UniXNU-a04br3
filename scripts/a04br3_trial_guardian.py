@@ -37,14 +37,30 @@ def restore_device(root,state):
     stage=Path(state['stage']).resolve()
     permitted=(root/'port/gsi/logs/ios-feasibility/memory-ce66352-trial').resolve()
     if stage.parent!=permitted or stage.name not in ('off','on'):return False
+    # The controller may have published recovery evidence immediately before
+    # dying and before closing its journal. Reconcile before attempting a write.
+    try:
+        started=json.loads((stage/'started.json').read_text())
+        result=json.loads((stage/'result.json').read_text())
+        statuses=[json.loads(x) for x in (stage/'fastboot-status.jsonl').read_text().splitlines()]
+        done=[s for s in statuses if s.get('arguments')==['flash','boot',str(safe)] and s.get('status')=='completed' and s.get('returncode')==0]
+        log=(stage/'recovery-flash.log').read_bytes()
+        import re
+        if (started.get('image_sha256')==state.get('image_sha256') and result.get('recovery_write_confirmed') is True and done and
+            len(re.findall(rb"^Sending 'boot'.*\bOKAY\b",log,re.M))==1 and len(re.findall(rb"^Writing 'boot'.*\bOKAY\b",log,re.M))==1 and log.count(b'OKAY')==2 and log.count(b'Finished.')==1):
+            return True
+    except (OSError,ValueError,KeyError):pass
     # An orphaned fastboot can survive SIGKILL of the controller. Never race it.
     for process in Path('/proc').iterdir():
         if not process.name.isdigit():continue
         try:
-            command=(process/'cmdline').read_bytes().split(b'\0',1)[0]
+            argv=(process/'cmdline').read_bytes().split(b'\0');command=argv[0]
         except FileNotFoundError:continue
         except OSError:return False
         if command and os.path.basename(os.fsdecode(command)) in ('fastboot','mtk','mtkclient'):
+            if b'-s' in argv:
+                i=argv.index(b'-s')
+                if i+1<len(argv) and argv[i+1]!=SERIAL.encode():continue
             return False
     def call(args):
         try:

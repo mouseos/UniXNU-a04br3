@@ -52,7 +52,7 @@ def classify(snapshot, cap, flash):
         boot.append({'index':i+1,'sha256':recorded['sha256'],'closed':i+1<len(positions),'events':e})
     for i in range(len(boot)-1): boot[i]['next_boot_reasons']=boot[i+1]['events']['boot_reasons']
     uncertain=events(ambiguous)
-    clean=not uncertain['panic'] and not uncertain['el3'] and not any(b['events']['panic'] or b['events']['el3'] for b in boot)
+    clean=not uncertain['panic'] and not uncertain['el3'] and not uncertain['boot_reasons'] and not any(b['events']['panic'] or b['events']['el3'] for b in boot)
     return {'old_prefix':events(old), 'after_flash_prefix':uncertain, 'boots':boot, 'trial_exception_free':clean,
             'limitations':['flash completion offset is host observed; buffered UART data can cross the boundary', 'exception patterns are incomplete and UART byte loss is unproven']}
 
@@ -68,5 +68,10 @@ def service_snapshot(uart, unit, run):
     if len(destinations)!=1 or Path(destinations[0]).resolve()!=path.resolve():
         raise ValueError('UART service output does not match capture file')
     st=path.stat()
+    again=run(['systemctl','--user','show',unit,'-p','ActiveState','-p','MainPID','-p','InvocationID','-p','NRestarts'],text=True)
+    props2=dict(line.split('=',1) for line in again.splitlines() if '=' in line)
+    st2=path.stat()
+    if props!=props2 or (st.st_dev,st.st_ino)!=(st2.st_dev,st2.st_ino) or st2.st_size<st.st_size:
+        raise ValueError('UART service changed while sampling')
     return {'active':props['ActiveState'],'main_pid':int(props['MainPID']),'invocation':props['InvocationID'],
             'restarts':int(props['NRestarts']),'dev':st.st_dev,'inode':st.st_ino,'size':st.st_size}

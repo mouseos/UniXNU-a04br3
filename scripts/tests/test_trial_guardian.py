@@ -1,5 +1,6 @@
-import fcntl, importlib.util, json, subprocess, sys, tempfile, unittest
+import fcntl, hashlib, importlib.util, json, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
+from unittest.mock import patch
 p=Path(__file__).resolve().parents[1]/'a04br3_trial_guardian.py';s=importlib.util.spec_from_file_location('guardian',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 class Guardian(unittest.TestCase):
  def test_interruption_and_retry(self):
@@ -26,4 +27,29 @@ class Guardian(unittest.TestCase):
    self.assertEqual(m.recover_if_abandoned(state,lock,lambda s:True),'active')
    child.kill();child.wait();child.stdout.close()
    self.assertEqual(m.recover_if_abandoned(state,lock,lambda s:True),'restored')
+ def test_fake_fastboot_recovers_and_logs(self):
+  with tempfile.TemporaryDirectory() as t:
+   root=Path(t);safe=root/'port/xnu/out/iostat-ui-stack-stream-20261030/boot.img';safe.parent.mkdir(parents=True);safe.write_bytes(b'fake-image')
+   stage=root/'port/gsi/logs/ios-feasibility/memory-ce66352-trial/off';stage.mkdir(parents=True)
+   binary=root/'fastboot';binary.write_text('''#!/usr/bin/env python3
+import sys
+if sys.argv[1:] == ['devices']: print('0C0U265083 fastboot')
+else:
+ print("Sending 'boot' (1 KB) OKAY [  1.000s]")
+ print("Writing 'boot' OKAY [  1.000s]")
+ print('Finished. Total time: 2.000s')
+''');binary.chmod(0o755)
+   with patch.object(m,'SAFE_SHA',hashlib.sha256(b'fake-image').hexdigest()),patch.dict(os.environ,{'PATH':str(root)+':'+os.environ['PATH']}):
+    self.assertTrue(m.restore_device(root,{'stage':str(stage)}))
+   self.assertIn(b"Writing 'boot'",(stage/'guardian-recovery.log').read_bytes())
+ def test_published_recovery_prevents_duplicate_write(self):
+  with tempfile.TemporaryDirectory() as t:
+   root=Path(t);safe=root/'port/xnu/out/iostat-ui-stack-stream-20261030/boot.img';safe.parent.mkdir(parents=True);safe.write_bytes(b'fake-image')
+   stage=root/'port/gsi/logs/ios-feasibility/memory-ce66352-trial/off';stage.mkdir(parents=True)
+   (stage/'started.json').write_text(json.dumps({'image_sha256':'abc'}))
+   (stage/'result.json').write_text(json.dumps({'recovery_write_confirmed':True}))
+   (stage/'fastboot-status.jsonl').write_text(json.dumps({'arguments':['flash','boot',str(safe)],'status':'completed','returncode':0})+'\n')
+   (stage/'recovery-flash.log').write_text("Sending 'boot' OKAY\nWriting 'boot' OKAY\nFinished.\n")
+   with patch.object(m,'SAFE_SHA',hashlib.sha256(b'fake-image').hexdigest()),patch.object(m.subprocess,'run',side_effect=AssertionError('duplicate write')):
+    self.assertTrue(m.restore_device(root,{'stage':str(stage),'image_sha256':'abc'}))
 if __name__=='__main__':unittest.main()

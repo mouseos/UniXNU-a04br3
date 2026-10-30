@@ -1,7 +1,6 @@
 """Read-only audit of ce66352 images. Requires pyfatfs; does not access hardware."""
-import hashlib, json, struct, sys, tomllib, zlib
+import hashlib, json, struct, subprocess, sys, tomllib, zlib
 from pathlib import Path
-from pyfatfs.PyFatFS import PyFatFS
 
 
 def digest(data): return hashlib.sha256(data).hexdigest()
@@ -25,12 +24,11 @@ def audit(root):
         checks[mode+'_fd'] = digest(fd) == m['fd_sha256'] and decompressed[192:] == fd
         dtb = (root/'unixnu/uefi-a04br3/Resources/DTBs/a04br3.dtb').read_bytes()
         checks[mode+'_dtb'] = digest(dtb) == m['dtb_sha256'] and stream.unused_data.endswith(dtb) and not any(stream.unused_data[:-len(dtb)])
-        fs = PyFatFS(str(payload), read_only=True)
-        try:
-            base = '/EFI/UniXNU/Payloads/'
-            members = {name: digest(fs.readbytes(base+name)) for name in ('kernel.macho','kernel.macho.adt','kernel.macho.gpuaddon','kernel.macho.trustcache','scratch-data.img')}
-            args = tomllib.loads(fs.readtext('/EFI/UniXNU/unixnu.toml'))['entry'][0]['args']
-        finally: fs.close()
+        def member(name):
+            return subprocess.check_output(['7z','x','-so','-bd',str(payload),name],stderr=subprocess.DEVNULL)
+        base = 'EFI/UniXNU/Payloads/'
+        members = {name: digest(member(base+name)) for name in ('kernel.macho','kernel.macho.adt','kernel.macho.gpuaddon','kernel.macho.trustcache','scratch-data.img')}
+        args = tomllib.loads(member('EFI/UniXNU/unixnu.toml').decode('utf8'))['entry'][0]['args']
         metadata = json.loads(Path(variant['payload_meta']).read_text())
         checks[mode+'_kernel'] = members['kernel.macho'] == variant['kernel_sha256'] == metadata['kernel_sha256']
         checks[mode+'_adt'] = members['kernel.macho.adt'] == variant['adt_sha256'] == metadata['adt_sha256']
