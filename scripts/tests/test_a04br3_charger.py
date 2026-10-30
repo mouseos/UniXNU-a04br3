@@ -113,4 +113,17 @@ with tempfile.TemporaryDirectory(prefix='a04br3-charger-') as tmp:
     assert cross
     subprocess.run([cross, '-target', 'aarch64-none-elf', '-ffreestanding', '-std=c++17', '-Wall', '-Wextra', '-Werror',
                     '-fsyntax-only', '-I', str(root), str(ROOT/'package/A04BR3Charger.cpp')], check=True)
-print('PASS actual owner/policy/PIO: ASan/UBSan, first FAULT and partial reads, deadline, no policy repair, write whitelist, FIFO/NACK/busy/timeout, AArch64 board source syntax')
+# Maintain mode without a firmware charger owner starts with the I2C2 clock gated by LK. A controller read before
+# initialize() opens the gate stalls the bus and the TOPRGU watchdog resets the tablet, so the loop's first
+# controller access must be conditioned on the gate.
+source = (ROOT/'package/A04BR3Charger.cpp').read_text()
+body = source[source.index('void maintainService('):source.index('bool mapAll(')]
+loop = body[body.index('for (; attempts < 3; ++attempts) {'):]
+gate = loop.index('const bool gated = (rd32(top, 0x24) & (1U << 16)) != 0;')
+first_read = loop.index('io.rd(')
+assert gate < first_read and loop[first_read - len('!gated && ('):first_read] == '!gated && (', 'I2C2 read before the gate check'
+init = loop.index('a04charger::initialize(io)')
+assert 'io.rd(' not in loop[first_read + 1:init].replace('io.wr(0x50, 1)', ''), 'unconditioned I2C2 access before initialize'
+so = body[:body.index('for (;;)')]
+assert 'io.rd(' not in so and 'i2c' not in so
+print('PASS actual owner/policy/PIO: ASan/UBSan, first FAULT and partial reads, deadline, no policy repair, write whitelist, FIFO/NACK/busy/timeout, AArch64 board source syntax, maintain gate before I2C2 access')

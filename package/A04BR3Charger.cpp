@@ -182,7 +182,11 @@ void maintainService(void *, wait_result_t) {
     // Up to three attempts per 10 s cycle so one failed transfer never delays the kick a whole cycle.
     for (; attempts < 3; ++attempts) {
       IO io;
-      bool stuck = (io.rd(0x24) & 1) != 0;
+      // LK hands over with the I2C2 clock gated (TOPCKGEN 0x24 bit 16); a register read of a gated controller stalls the
+      // bus until the TOPRGU watchdog resets the tablet (no firmware charger owner, a04br3-cm=1, 2/2 boots). Only
+      // initialize() opens the gate, so the controller is read only while the gate is open.
+      const bool gated = (rd32(top, 0x24) & (1U << 16)) != 0;
+      bool stuck = !gated && (io.rd(0x24) & 1) != 0;
       if (!ready || stuck || !stillOwned()) {
         if (!st.cycles && !ready) inheritedReady(); // first time only: logs inherited GPIO/controller state
         // I2C2 carries only this thread's charger/gauge traffic, so a transfer this
