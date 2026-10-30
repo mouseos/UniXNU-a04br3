@@ -18,6 +18,27 @@ PARSER='scripts/summarize-memory-observation.py'
 DEVICE_FILES=('tools/a04br3-memory-copy-bench.c','package/A04BR3ProbeLaunch.c',
               'package/A04BR3Board.cpp','scripts/build-a04br3-memory-bench.py')
 GUARDIAN_UNIT='a04br3-ce66352-recovery.service'
+ANCHOR=b'[pmic6392_init] Preloader Start'
+def low_capacity_poweroff(segment):
+ # LK shows the low-capacity logo and powers off before UniXNU when the battery
+ # gauge reports low capacity; the charger then powers the device on again.
+ return b'mt_disp_show_low_capacity_logo' in segment and b'mt_power_off' in segment and b'UNIXNU' not in segment
+def trial_boot(stage_dir,snapshot,cap,separation):
+ """Locate the trial boot after leading LK low-capacity power-off boots and verify it against the capture."""
+ info=json.loads((stage_dir/'trial-boot.json').read_text());idx=info['index']
+ boots=cap['boots'];need(type(idx) is int and 1<=idx<=3 and len(boots)>=idx+1 and len(separation['boots'])>=idx+1,'試験起動の番号不正')
+ base=cap['flash_offset']
+ def segment(i):
+  rec=boots[i-1];data=(stage_dir/f'capture-final/boot-{i}.raw').read_bytes()
+  need(rec['index']==i and rec['closed_by_next_preloader'] is True and hashlib.sha256(data).hexdigest()==rec['sha256']==separation['boots'][i-1]['sha256'] and snapshot[rec['start_offset']-base:rec['end_offset']-base]==data,'起動区間の照合失敗')
+  return data
+ for i in range(1,idx):
+  reasons=separation['boots'][i-1]['events']['boot_reasons']
+  need(low_capacity_poweroff(segment(i)) and reasons and all(r==4 for r in reasons),'低残量起動の判定不正')
+ data=segment(idx);entry=separation['boots'][idx-1]
+ reasons=entry['events']['boot_reasons'];following=entry['next_boot_reasons'];expected_reason=4 if idx==1 else 1
+ need(separation['trial_exception_free'] and reasons and all(r==expected_reason for r in reasons) and following and all(r==4 for r in following),'起動または例外の証拠不正')
+ return idx,data
 def digest(p):
  with p.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
 def need(ok,msg):
@@ -110,19 +131,42 @@ def main_locked(mode):
    kwargs['on_pre_spawn']=arm;kwargs['on_launch_error']=launch_failed
   return old_fastboot(arguments,*args,**kwargs)
  mod.logged_fastboot=fastboot_guard
+ trial_ctx={}
+ def observe_trial(offset,cancel):
+  for _ in range(50):
+   cancel.check()
+   with UART.open('rb') as stream:
+    stream.seek(offset);data=stream.read(128*1024*1024+1)
+   need(len(data)<=128*1024*1024,'UART capture limit exceeded')
+   pos=[m.start() for m in re.finditer(re.escape(ANCHOR),data)]
+   skipped=0
+   while skipped<2 and skipped+1<len(pos) and low_capacity_poweroff(data[pos[skipped]:pos[skipped+1]]):skipped+=1
+   if len(pos)>=skipped+2:
+    mod.wait_interruptible(25,cancel)
+    subprocess.run([sys.executable,str(mod.COLLECTOR),'--uart-log',str(UART),'--flash-record',str(stage/'flash.json'),'--out',str(stage/'capture-final')],check=True)
+    guardian.write_state(stage/'trial-boot.json',{'index':skipped+1,'skipped_low_capacity_boots':skipped})
+    return
+   mod.wait_interruptible(30,cancel)
+  try: subprocess.run([sys.executable,str(mod.COLLECTOR),'--uart-log',str(UART),'--flash-record',str(stage/'flash.json'),'--out',str(stage/'capture-timeout')],check=False)
+  finally: raise RuntimeError('UART timeout waiting for the trial boot to close')
+ mod.observe=observe_trial
+ original_scanout=mod.scanout_summary
+ mod.scanout_summary=lambda raw:original_scanout(trial_ctx.get('text',raw))
  def capture_with_bench(cap,raw,args,expected,record_sha,raw_sha,snapshot):
-  data=(stage/'capture-final/boot-1.raw').read_bytes()
-  need(hashlib.sha256(data).hexdigest()==raw_sha,'bench対象起動ログ不一致')
-  parser.capture_evidence(data,expected,stage/'capture-final/capture.json',stage/'flash.json',stage/'capture-final/post-flash.raw',stage/'flash.log')
+  first=(stage/'capture-final/boot-1.raw').read_bytes()
+  need(hashlib.sha256(first).hexdigest()==raw_sha,'捕捉の先頭起動ログ不一致')
+  # The fixed parser authenticates the flash record, snapshot and first boundary.
+  parser.capture_evidence(first,expected,stage/'capture-final/capture.json',stage/'flash.json',stage/'capture-final/post-flash.raw',stage/'flash.log')
   flash=json.loads((stage/'flash.json').read_text())
   separation=boundary.classify(snapshot,cap,flash)
+  index,data=trial_boot(stage,snapshot,cap,separation)
+  raw=data.decode('utf8','replace');trial_ctx['text']=raw
   final_state=boundary.service_snapshot(UART,'a04br3-uart-main-20261030.service',subprocess.check_output)
   continuity=boundary.continuity(uart_start,final_state)
-  report={'separation':separation,'uart_continuity':continuity}
+  report={'separation':separation,'uart_continuity':continuity,'trial_boot_index':index}
   tmp=stage/'boot-boundaries.json.tmp';tmp.write_text(json.dumps(report,indent=2)+'\n');tmp.replace(stage/'boot-boundaries.json')
-  reasons=separation['boots'][0]['events']['boot_reasons'];next_reasons=separation['boots'][0]['next_boot_reasons']
   lines=[line.split('boot-args = ',1)[1].strip() for line in raw.splitlines() if 'boot-args = ' in line]
-  need(separation['trial_exception_free'] and reasons==[4] and next_reasons==[4] and 'mount-complete volume OwnerData' in raw and 'a04br3-autoreset: 720 s elapsed, resetting into fastboot' in raw and lines and all(line==args for line in lines),'起動または例外の証拠不正')
+  need('mount-complete volume OwnerData' in raw and 'a04br3-autoreset: 720 s elapsed, resetting into fastboot' in raw and lines and all(line==args for line in lines),'起動または例外の証拠不正')
   if mode=='off':
    need(b'a04br3_mem_copy ' not in data and b'a04br3: memory bench spawn ' not in data,'offでbench活動を観測')
    analysis={'assessment':{'status':'disabled'}}
@@ -135,7 +179,7 @@ def main_locked(mode):
    strict=bench_evidence.analyze_benchmark(data.decode('utf8','replace'),'on')
    need(strict['valid'] and (strict['outcome']=='completed' if success else strict['outcome']=='skip'),'bench統計またはskipの整合性不正')
    analysis['bench_crosscheck']=strict
-  analysis.update(parser_commit=PARSER_COMMIT,parser_sha256=hashlib.sha256(parser_source).hexdigest(),boot_raw_sha256=raw_sha,image_sha256=expected)
+  analysis.update(parser_commit=PARSER_COMMIT,parser_sha256=hashlib.sha256(parser_source).hexdigest(),boot_raw_sha256=hashlib.sha256(data).hexdigest(),trial_boot_index=index,first_boot_raw_sha256=raw_sha,image_sha256=expected)
   tmp=stage/'benchmark-analysis.json.tmp';tmp.write_text(json.dumps(analysis,indent=2)+'\n');tmp.replace(stage/'benchmark-analysis.json')
   return True
  mod.capture_valid=capture_with_bench
@@ -160,15 +204,17 @@ def main_locked(mode):
  if mode=='on':
   off_dir=WORK/'off';off=json.loads((off_dir/'result.json').read_text());analysis_path=off_dir/'benchmark-analysis.json'
   analysis=json.loads(analysis_path.read_text())
-  off_raw=(off_dir/'capture-final/boot-1.raw').read_bytes()
+  off_first=(off_dir/'capture-final/boot-1.raw').read_bytes()
   off_cap=json.loads((off_dir/'capture-final/capture.json').read_text())
   off_flash=json.loads((off_dir/'flash.json').read_text())
-  parser.capture_evidence(off_raw,m['variants']['off']['boot_sha256'],off_dir/'capture-final/capture.json',off_dir/'flash.json',off_dir/'capture-final/post-flash.raw',off_dir/'flash.log')
-  off_separation=boundary.classify((off_dir/'capture-final/post-flash.raw').read_bytes(),off_cap,off_flash)
+  parser.capture_evidence(off_first,m['variants']['off']['boot_sha256'],off_dir/'capture-final/capture.json',off_dir/'flash.json',off_dir/'capture-final/post-flash.raw',off_dir/'flash.log')
+  off_snapshot=(off_dir/'capture-final/post-flash.raw').read_bytes()
+  off_separation=boundary.classify(off_snapshot,off_cap,off_flash)
+  off_index,off_raw=trial_boot(off_dir,off_snapshot,off_cap,off_separation)
   boundary_file=off_dir/'boot-boundaries.json';saved_boundary=json.loads(boundary_file.read_text())
   boundary.continuity(saved_boundary['uart_continuity']['before'],saved_boundary['uart_continuity']['after'])
   text=off_raw.decode('utf8','replace');off_args=[line.split('boot-args = ',1)[1].strip() for line in text.splitlines() if 'boot-args = ' in line]
-  need(off.get('boot_capture_valid') is True and off.get('recovery_confirmed') is True and mod.flash_ok((off_dir/'recovery-flash.log').read_bytes(),0) and off_separation['trial_exception_free'] and off_separation['boots'][0]['events']['boot_reasons']==[4] and off_separation['boots'][0]['next_boot_reasons']==[4] and 'mount-complete volume OwnerData' in text and 'a04br3-autoreset: 720 s elapsed, resetting into fastboot' in text and off_args and all(a==m['variants']['off']['kernel_args'] for a in off_args) and saved_boundary['separation']==off_separation and off.get('boot_boundaries_sha256')==digest(boundary_file) and off.get('scanout')==mod.scanout_summary(text) and off['scanout'].get('progress_observed') is True and off.get('benchmark_analysis_sha256')==digest(analysis_path) and analysis.get('assessment',{}).get('status')=='disabled' and analysis.get('image_sha256')==m['variants']['off']['boot_sha256'] and analysis.get('boot_raw_sha256')==hashlib.sha256(off_raw).hexdigest() and b'a04br3_mem_copy ' not in off_raw and b'a04br3: memory bench spawn ' not in off_raw and analysis.get('parser_commit')==PARSER_COMMIT,'off試験未完了')
+  need(off.get('boot_capture_valid') is True and off.get('recovery_confirmed') is True and mod.flash_ok((off_dir/'recovery-flash.log').read_bytes(),0) and saved_boundary.get('trial_boot_index')==off_index and analysis.get('trial_boot_index')==off_index and 'mount-complete volume OwnerData' in text and 'a04br3-autoreset: 720 s elapsed, resetting into fastboot' in text and off_args and all(a==m['variants']['off']['kernel_args'] for a in off_args) and saved_boundary['separation']==off_separation and off.get('boot_boundaries_sha256')==digest(boundary_file) and off.get('scanout')==mod.scanout_summary(text) and off['scanout'].get('progress_observed') is True and off.get('benchmark_analysis_sha256')==digest(analysis_path) and analysis.get('assessment',{}).get('status')=='disabled' and analysis.get('image_sha256')==m['variants']['off']['boot_sha256'] and analysis.get('boot_raw_sha256')==hashlib.sha256(off_raw).hexdigest() and b'a04br3_mem_copy ' not in off_raw and b'a04br3: memory bench spawn ' not in off_raw and analysis.get('parser_commit')==PARSER_COMMIT,'off試験未完了')
  try: mod.run_locked()
  finally:
   result_file=stage/'result.json'
