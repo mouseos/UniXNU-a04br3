@@ -11,14 +11,14 @@ import unittest
 def required(name):
     value = os.environ.get(name)
     if not value:
-        raise SystemExit(f'{name} is required for pinned lifecycle tests')
+        raise ValueError(f'{name} is required for pinned lifecycle tests')
     return value
 
 
 def pinned_commit(name):
     value = required(name)
     if not re.fullmatch(r'[0-9a-f]{40}', value):
-        raise SystemExit(f'{name} must be a full lowercase commit hash')
+        raise ValueError(f'{name} must be a full lowercase commit hash')
     return value
 
 
@@ -26,25 +26,31 @@ def git(repo, *args):
     return subprocess.check_output(['git', '-C', str(repo), *args])
 
 
-DEVICE = Path(required('A04BR3_DEVICE_ROOT')).resolve()
-DEVICE_COMMIT = pinned_commit('A04BR3_DEVICE_COMMIT')
-BASE = Path(required('UNIXNU_BASE_ROOT')).resolve()
-BASE_COMMIT = pinned_commit('UNIXNU_BASE_COMMIT')
-GOP_DIR = Path(required('NATIVE_MOBILE_DISPLAY_REPO')).resolve()
-GOP_COMMIT = pinned_commit('NATIVE_MOBILE_DISPLAY_COMMIT')
-for repository, commit in ((DEVICE, DEVICE_COMMIT), (BASE, BASE_COMMIT), (GOP_DIR, GOP_COMMIT)):
-    if git(repository, 'rev-parse', '--verify', commit + '^{commit}').decode().strip() != commit:
-        raise SystemExit('commit resolution differs from requested full pin')
-link = git(BASE, 'ls-tree', BASE_COMMIT, 'drivers/NativeMobileDisplay').decode().strip()
-if link != f'160000 commit {GOP_COMMIT}\tdrivers/NativeMobileDisplay':
-    raise SystemExit('NativeMobileDisplay commit does not match the pinned base gitlink')
-GPU = git(DEVICE, 'show', DEVICE_COMMIT + ':package/powervr/NativePowerVRGpu.cpp').decode()
-JOBS = git(DEVICE, 'show', DEVICE_COMMIT + ':package/powervr/NativePowerVRJobs.cpp').decode()
-BO_FLAGS = git(DEVICE, 'show', DEVICE_COMMIT + ':package/powervr/native_powervr_bo_flags.h').decode()
-GOP = git(GOP_DIR, 'show', GOP_COMMIT + ':NativeGOPPresenter.cpp').decode()
-print(f'device_commit={DEVICE_COMMIT} base_commit={BASE_COMMIT} native_mobile_display_commit={GOP_COMMIT}', flush=True)
-for name, source in (('gpu', GPU), ('jobs', JOBS), ('bo_flags', BO_FLAGS), ('presenter', GOP)):
-    print(f'{name}_sha256={hashlib.sha256(source.encode()).hexdigest()}', flush=True)
+PIN_NAMES = ('A04BR3_DEVICE_ROOT', 'A04BR3_DEVICE_COMMIT', 'UNIXNU_BASE_ROOT',
+             'UNIXNU_BASE_COMMIT', 'NATIVE_MOBILE_DISPLAY_REPO', 'NATIVE_MOBILE_DISPLAY_COMMIT')
+
+
+def load_pinned_inputs():
+    global GPU, JOBS, BO_FLAGS, GOP
+    DEVICE = Path(required('A04BR3_DEVICE_ROOT')).resolve()
+    DEVICE_COMMIT = pinned_commit('A04BR3_DEVICE_COMMIT')
+    BASE = Path(required('UNIXNU_BASE_ROOT')).resolve()
+    BASE_COMMIT = pinned_commit('UNIXNU_BASE_COMMIT')
+    GOP_DIR = Path(required('NATIVE_MOBILE_DISPLAY_REPO')).resolve()
+    GOP_COMMIT = pinned_commit('NATIVE_MOBILE_DISPLAY_COMMIT')
+    for repository, commit in ((DEVICE, DEVICE_COMMIT), (BASE, BASE_COMMIT), (GOP_DIR, GOP_COMMIT)):
+        if git(repository, 'rev-parse', '--verify', commit + '^{commit}').decode().strip() != commit:
+            raise ValueError('commit resolution differs from requested full pin')
+    link = git(BASE, 'ls-tree', BASE_COMMIT, 'drivers/NativeMobileDisplay').decode().strip()
+    if link != f'160000 commit {GOP_COMMIT}\tdrivers/NativeMobileDisplay':
+        raise ValueError('NativeMobileDisplay commit does not match the pinned base gitlink')
+    GPU = git(DEVICE, 'show', DEVICE_COMMIT + ':package/powervr/NativePowerVRGpu.cpp').decode()
+    JOBS = git(DEVICE, 'show', DEVICE_COMMIT + ':package/powervr/NativePowerVRJobs.cpp').decode()
+    BO_FLAGS = git(DEVICE, 'show', DEVICE_COMMIT + ':package/powervr/native_powervr_bo_flags.h').decode()
+    GOP = git(GOP_DIR, 'show', GOP_COMMIT + ':NativeGOPPresenter.cpp').decode()
+    print(f'device_commit={DEVICE_COMMIT} base_commit={BASE_COMMIT} native_mobile_display_commit={GOP_COMMIT}', flush=True)
+    for name, source in (('gpu', GPU), ('jobs', JOBS), ('bo_flags', BO_FLAGS), ('presenter', GOP)):
+        print(f'{name}_sha256={hashlib.sha256(source.encode()).hexdigest()}', flush=True)
 
 
 def function(source, signature):
@@ -72,6 +78,12 @@ def run_cpp(body):
 
 
 class GpuLifecycleTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if not any(os.environ.get(name) for name in PIN_NAMES):
+            raise unittest.SkipTest('GPU lifecycle requires six explicit fixed-source inputs')
+        load_pinned_inputs()
+
     def test_arm64_cache_instructions(self):
         stub = '''using size_t=__SIZE_TYPE__; using uintptr_t=__UINTPTR_TYPE__;
 using uint64_t=unsigned long long; using uint32_t=unsigned int; using vm_offset_t=uintptr_t;

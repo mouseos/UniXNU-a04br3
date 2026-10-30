@@ -4,6 +4,8 @@
 40桁のcommitを要求する。実ソースはgit objectから読み、worktreeの未commit変更や
 NativeMobileDisplayの現在HEADを混入させない。base commitの実gitlinkと指定された
 NativeMobileDisplay commitの一致も検査し、入力SHA-256とcommitを標準出力に記録する。
+全6項目が未指定のときは通常のunittest探索で明示的にskipする。一部だけ指定、
+不正なcommitやgitlink不一致は失敗として扱い、HEADを自動選択しない。
 
 - `A04BR3_DEVICE_ROOT`、`A04BR3_DEVICE_COMMIT`: 検査するdevice repoとcommit。
 - `UNIXNU_BASE_ROOT`、`UNIXNU_BASE_COMMIT`: UniXNU base repoとcommit。
