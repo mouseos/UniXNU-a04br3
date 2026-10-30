@@ -51,7 +51,7 @@ def analyze(data,image_sha):
  for snapshot in result['vm_usage']:
   if 'extended' not in snapshot:snapshot['extended']={'status':'missing'}
  return result
-def assess(data, result, expected, size=None):
+def assess(data, result, expected, size=None, boot_run=False):
  """Explicit single invocation protocol; incomplete data cannot be success."""
  if expected == 'kernel-vm':
   result['assessment']={'expected':expected,'status':'observed' if result['kernel_vm'] else 'missing','copy_test_success_claimed':False}
@@ -66,6 +66,11 @@ def assess(data, result, expected, size=None):
   f=parse_fields(record)
   if len(f)!=len(pairs):raise ValueError('duplicate diagnostic field')
   rows.append(f)
+ if boot_run:
+  if expected!='copy' or size!=65536:raise ValueError('boot-run requires 64KiB copy')
+  if not rows or rows[0]!={'phase':'waiting','delay_seconds':'180','profile':'low_impact_64k'}:
+   raise ValueError('missing or invalid boot-run waiting record')
+  rows=rows[1:]
  begins=[(i,f) for i,f in enumerate(rows) if f.get('phase')=='begin']
  ends=[(i,f) for i,f in enumerate(rows) if f.get('phase')=='end']
  status='missing'
@@ -135,7 +140,7 @@ def capture_evidence(raw, image, capture_path, flash_path, snapshot_path, flash_
  return {'capture_sha256':sha(cap_bytes),'flash_record_sha256':sha(flash_bytes),'snapshot_sha256':sha(snap),'flash_log_sha256':sha(log),'first_boot_start_offset':start,'next_boot_start_offset':end,'image_sha256_recorded':image,'flash_success':'recorded claim supported by flash log, not runtime image authentication','limitations':'UART loss and runtime image identity remain unproven'}
 
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('boot',type=Path);p.add_argument('--image-sha256',required=True);p.add_argument('--expected-raw-sha256',required=True);p.add_argument('--expect',choices=('kernel-vm','observe','copy'),required=True);p.add_argument('--size-bytes',type=int)
+ p=argparse.ArgumentParser();p.add_argument('boot',type=Path);p.add_argument('--image-sha256',required=True);p.add_argument('--expected-raw-sha256',required=True);p.add_argument('--expect',choices=('kernel-vm','observe','copy'),required=True);p.add_argument('--size-bytes',type=int);p.add_argument('--boot-run',action='store_true')
  p.add_argument('--capture-json',type=Path);p.add_argument('--flash-json',type=Path);p.add_argument('--snapshot',type=Path);p.add_argument('--flash-log',type=Path);a=p.parse_args()
  try:
   if a.expect=='copy' and a.size_bytes not in (65536,262144,1048576):raise ValueError('copy requires an expected supported size')
@@ -146,7 +151,7 @@ if __name__=='__main__':
   files=(a.capture_json,a.flash_json,a.snapshot,a.flash_log)
   if any(files) and not all(files):raise ValueError('all capture evidence files required')
   result['capture_evidence']=capture_evidence(data,a.image_sha256,*files) if all(files) else {'status':'not_supplied'}
-  ok=assess(data,result,a.expect,a.size_bytes)
+  ok=assess(data,result,a.expect,a.size_bytes,a.boot_run)
   print(json.dumps(result,indent=2))
   if not ok:raise SystemExit(2)
  except (OSError,ValueError,UnicodeError,KeyError,TypeError) as e:p.exit(1,'error: '+str(e)+'\n')

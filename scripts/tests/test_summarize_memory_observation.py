@@ -25,12 +25,23 @@ class Tests(unittest.TestCase):
  def test_image_identity_required(self):
   with self.assertRaises(ValueError):m.analyze(raw(''),'not-sha')
 class ProtocolTests(unittest.TestCase):
- def run_cli(self, text, expected, size=None):
+ def run_cli(self, text, expected, size=None, boot_run=False):
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp)/'boot';data=raw(text);path.write_bytes(data)
    args=['python3',str(p),str(path),'--image-sha256','a'*64,'--expected-raw-sha256',hashlib.sha256(data).hexdigest(),'--expect',expected]
    if size:args+=['--size-bytes',str(size)]
+   if boot_run:args+=['--boot-run']
    return subprocess.run(args,text=True,capture_output=True)
+ def test_boot_run_waiting_record(self):
+  wait='a04br3_mem_copy phase=waiting delay_seconds=180 profile=low_impact_64k\n'
+  body='a04br3_mem_copy phase=begin kind=copy size_bytes=65536\na04br3_mem_copy phase=skip reason=insufficient_free_pages\na04br3_mem_copy phase=end kind=copy status=skip\n'
+  r=self.run_cli(wait+body,'copy',65536,True)
+  self.assertEqual(r.returncode,2,r.stderr)
+  self.assertEqual(json.loads(r.stdout)['assessment']['status'],'skip')
+  for bad in (body,wait+wait+body,wait.replace('180','179')+body,wait.replace('64k','1m')+body):
+   self.assertEqual(self.run_cli(bad,'copy',65536,True).returncode,1)
+  self.assertEqual(self.run_cli(wait+body,'copy',65536).returncode,1)
+  self.assertEqual(self.run_cli(wait+body,'observe',None,True).returncode,1)
  def test_failure_and_missing_cli(self):
   for text in ('', 'a04br3_mem_copy phase=error reason=invalid_elapsed\n', 'a04br3_mem_copy phase=begin kind=copy size_bytes=65536\n', 'a04br3_mem_copy synthetic=1 threads=1 size_bytes=65536'):
    r=self.run_cli(text,'copy',65536);self.assertNotEqual(r.returncode,0,(text,r.stdout))
@@ -44,6 +55,10 @@ class ProtocolTests(unittest.TestCase):
    data=f'a04br3_mem_copy phase=begin kind={kind} size_bytes={size}\n'+body+f'a04br3_mem_copy phase=end kind={kind} status=ok\n'
    r=self.run_cli(data,kind,size if kind=='copy' else None);self.assertEqual(r.returncode,0,r.stderr)
    self.assertEqual(json.loads(r.stdout)['assessment']['status'],'success')
+   if kind=='copy':
+    waiting='a04br3_mem_copy phase=waiting delay_seconds=180 profile=low_impact_64k\n'
+    r=self.run_cli(waiting+data,kind,size,True);self.assertEqual(r.returncode,0,r.stderr)
+    self.assertEqual(json.loads(r.stdout)['assessment']['status'],'success')
   data='a04br3_mem_copy phase=begin kind=copy size_bytes=65536\na04br3_mem_copy phase=skip reason=insufficient_free_pages\na04br3_mem_copy phase=end kind=copy status=skip\n'
   r=self.run_cli(data,'copy',65536);self.assertEqual(r.returncode,2);self.assertEqual(json.loads(r.stdout)['assessment']['status'],'skip')
  def test_incomplete_and_contradiction(self):
