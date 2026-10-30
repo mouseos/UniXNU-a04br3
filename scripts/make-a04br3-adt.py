@@ -118,6 +118,18 @@ def main():
         if size % 0x200000 or not 0x54000000 <= size or 0x68000000 + 0x1C0000 + size > 0xBE9C0000:
             parser.error('A04BR3_OWNED_MEMORY_SIZE must be 2 MiB aligned, at least 0x54000000 and end below 0xBE9C0000')
         args.owned_memory_size = size
+    # Opt-in memory floor (default off): DarwinBoot hands XNU the range from the floor up to the window as well, if the final
+    # EFI map shows it as memory the OS owns after ExitBootServices (needs the uefi-a04br3 A04BR3_RAMDISK_RECLAIMABLE=1 FD for
+    # the payload FAT at 0x60000000). The floor may not go below 0x52000000: the DXE heap below it holds the UEFI runtime
+    # code/data, and lower still lie the LK DTB, ram_console/pstore/minirdump (read by the preloader across resets), the ATF
+    # (secure 0x43000000-0x4302FFFF) and the UEFI FD. TEE and the display reservation are above the window.
+    args.memory_floor = None
+    floor = os.environ.get('A04BR3_MEMORY_FLOOR')
+    if floor:
+        value = int(floor, 0)
+        if value % 0x200000 or not 0x52000000 <= value < 0x68000000:
+            parser.error('A04BR3_MEMORY_FLOOR must be 2 MiB aligned in 0x52000000..0x68000000')
+        args.memory_floor = value
 
     try:
         cpu_regs = [int(value, 0) for value in args.cpu_regs.split(',')]
@@ -164,6 +176,8 @@ def main():
                           if (args.data_ramdisk or args.packed_data_ramdisk) and not args.persistent_data else []),
                         *( [('darwinboot-memory-size', struct.pack('<Q', args.owned_memory_size))]
                            if args.owned_memory_size else [] ),
+                        *( [('darwinboot-memory-floor', struct.pack('<Q', args.memory_floor))]
+                           if args.memory_floor else [] ),
                         ('dram-base', struct.pack('<Q', DRAM_BASE)),
                         ('dram-size', struct.pack('<Q', args.dram_size)),
                         # Image4 hash algorithm. The target iPad's DT specifies sha2-384 in /chosen; this
