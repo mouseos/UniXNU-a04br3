@@ -494,7 +494,7 @@ void boot_ast_caller_report(void) {
 #define LIVE_PC_CPUS 4u
 #define LIVE_PC_SLOTS 64u
 #define LIVE_PC_RATE 16u
-struct live_pc_row { uint64_t stamp,pc,lr,tid,uid; unsigned user,exec_version; };
+struct live_pc_row { uint64_t stamp,pc,lr,tid,uid,sample_time; unsigned user,exec_version; };
 struct live_pc_cpu { uint64_t ticks,written; struct live_pc_row rows[LIVE_PC_SLOTS]; } __attribute__((aligned(64)));
 int proc_pidversion(proc_t);
 proc_t proc_find(int);
@@ -521,6 +521,7 @@ void native_live_pc_sample(uint64_t pc,uint64_t lr,unsigned user) {
  struct live_pc_row *r=&c->rows[seq%LIVE_PC_SLOTS];
  __atomic_store_n(&r->stamp,2*seq+1,__ATOMIC_SEQ_CST);
  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+ __atomic_store_n(&r->sample_time,mach_absolute_time(),__ATOMIC_RELAXED);
  __atomic_store_n(&r->pc,pc,__ATOMIC_RELAXED);
  __atomic_store_n(&r->lr,lr,__ATOMIC_RELAXED);
  __atomic_store_n(&r->tid,current_thread()->thread_id,__ATOMIC_RELAXED);
@@ -538,7 +539,7 @@ void boot_live_pc_report(void) {
  uint64_t epoch=++live_pc_epoch,ns=0,start_ns=0;
  absolutetime_to_nanoseconds(now,&ns);if(start)absolutetime_to_nanoseconds(start,&start_ns);
  const char *boot=(bootsessionuuid_string && bootsessionuuid_string[0])?bootsessionuuid_string:"unavailable";
- printf("a04br3 livepc boot=%s pid=%u epoch=%llu previous_report_start_ns=%llu report_start_ns=%llu sample_time=unavailable hook=%u rate=%u bad_cpu=%u\n",boot,pid,(unsigned long long)epoch,(unsigned long long)start_ns,(unsigned long long)ns,boot_home_irq_hook_available(),LIVE_PC_RATE,__atomic_load_n(&live_pc_bad_cpu,__ATOMIC_RELAXED));
+ printf("a04br3 livepc boot=%s pid=%u epoch=%llu previous_report_start_ns=%llu report_start_ns=%llu sample_clock=mach_absolute_time hook=%u rate=%u bad_cpu=%u\n",boot,pid,(unsigned long long)epoch,(unsigned long long)start_ns,(unsigned long long)ns,boot_home_irq_hook_available(),LIVE_PC_RATE,__atomic_load_n(&live_pc_bad_cpu,__ATOMIC_RELAXED));
  for(unsigned cpu=0;cpu<LIVE_PC_CPUS;cpu++) {
   struct live_pc_cpu *c=&live_pc_cpus[cpu];
   uint64_t end=__atomic_load_n(&c->written,__ATOMIC_ACQUIRE),begin=live_pc_previous[cpu],lost=0,torn=0;
@@ -549,10 +550,12 @@ void boot_live_pc_report(void) {
    uint64_t stamp=__atomic_load_n(&r->stamp,__ATOMIC_ACQUIRE);
    uint64_t pc=__atomic_load_n(&r->pc,__ATOMIC_RELAXED),lr=__atomic_load_n(&r->lr,__ATOMIC_RELAXED);
    uint64_t tid=__atomic_load_n(&r->tid,__ATOMIC_RELAXED),uid=__atomic_load_n(&r->uid,__ATOMIC_RELAXED);
+   uint64_t sample_time=__atomic_load_n(&r->sample_time,__ATOMIC_RELAXED),sample_ns=0;
    unsigned user=__atomic_load_n(&r->user,__ATOMIC_RELAXED),version=__atomic_load_n(&r->exec_version,__ATOMIC_RELAXED);
    __atomic_thread_fence(__ATOMIC_ACQUIRE);
    if(stamp!=2*seq+2 || __atomic_load_n(&r->stamp,__ATOMIC_ACQUIRE)!=stamp){torn++;continue;}
-   printf("a04br3 livepc sample epoch=%llu cpu=%u seq=%llu uid=%llu exec_version=%u tid=%llu mode=%s pc=%llx lr=%llx\n",(unsigned long long)epoch,cpu,(unsigned long long)seq,(unsigned long long)uid,version,(unsigned long long)tid,user?"user":"kernel-unslid",(unsigned long long)pc,(unsigned long long)lr);
+   absolutetime_to_nanoseconds(sample_time,&sample_ns);
+   printf("a04br3 livepc sample epoch=%llu cpu=%u seq=%llu uid=%llu exec_version=%u tid=%llu sample_ns=%llu mode=%s pc=%llx lr=%llx\n",(unsigned long long)epoch,cpu,(unsigned long long)seq,(unsigned long long)uid,version,(unsigned long long)tid,(unsigned long long)sample_ns,user?"user":"kernel-unslid",(unsigned long long)pc,(unsigned long long)lr);
   }
   printf("a04br3 livepc cpu=%u epoch=%llu ticks=%llu end=%llu lost=%llu torn=%llu\n",cpu,(unsigned long long)epoch,(unsigned long long)__atomic_load_n(&c->ticks,__ATOMIC_RELAXED),(unsigned long long)end,(unsigned long long)lost,(unsigned long long)torn);
  }

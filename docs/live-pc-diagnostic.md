@@ -19,8 +19,13 @@ The counters and timestamps are non-atomic. Other CPU IDs set `bad_cpu`. Periodi
 It does not calculate CPU time. This is not a saved UPCB or a call stack.
 
 Every report includes the XNU boot session UUID when available, pid,
-epoch and monotonic report-start times; samples are not individually
-timestamped and are not bounded by the report-start time. Each sample includes
+epoch and monotonic report-start times. Each sample has sample_ns, captured
+with mach_absolute_time in the interrupt and converted outside it. Samples can
+be newer than report_start_ns because each CPU ring is read later. The existing
+perf task and thread reports provide cumulative CPU times, but are separately
+read and non-atomic; thread rows lack individual capture timestamps. Match
+boot, process identity and TID and bracket using surrounding reports; sample
+counts do not directly measure CPU time. Each sample includes
 its own uid and exec_version; `unavailable` is not a boot identifier. Follow the
 UART boot boundary and do not join separate boots. Samples carry the process
 identity version, which XNU increments on exec. Never attribute a sample to an

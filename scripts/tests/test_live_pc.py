@@ -56,7 +56,7 @@ static void test_interference(void){if(inject_torn){inject_torn=0;for(unsigned i
 static void *writer(void *arg){test_cpu=(unsigned)(uintptr_t)arg;thread.thread_id=100+test_cpu;for(unsigned i=0;i<100000;i++){uint64_t pc=0x10000000ULL+((uint64_t)test_cpu<<24)+i;native_live_pc_sample(pc,pc^0x55aa,1);}return 0;}
 int main(void){
  boot_live_pc_init(0);native_live_pc_sample(1,2,1);assert(live_pc_cpus[0].ticks==0);
- boot_live_pc_init(1);native_live_pc_sample(0x1234,0x1234^0x55aa,1);assert(live_pc_cpus[0].written==1);
+ boot_live_pc_init(1);native_live_pc_sample(0x1234,0x1234^0x55aa,1);assert(live_pc_cpus[0].written==1);assert(live_pc_cpus[0].rows[0].sample_time==1);assert(live_pc_cpus[0].rows[0].tid==99);assert(live_pc_cpus[0].rows[0].pc==0x1234);
  test_cpu=9;native_live_pc_sample(1,2,1);assert(live_pc_bad_cpu==1);test_cpu=0;
  uint8_t macho[160]={0};struct live_macho_head *h=(void *)macho;h->magic=0xfeedfacf;h->ncmds=2;h->sizeofcmds=96;
  uint32_t *u=(void *)(macho+32);u[0]=0x1b;u[1]=24;memset(macho+40,0x5a,16);
@@ -95,6 +95,7 @@ int main(void){
   for row in (x for x in lines if 'livepc sample ' in x):
    fields=dict(x.split('=',1) for x in row.split() if '=' in x)
    self.assertEqual(int(fields['lr'],16),int(fields['pc'],16)^0x55aa)
+   self.assertGreater(int(fields['sample_ns']),0)
   self.assertTrue(any(' lost=' in x and int(x.split(' lost=')[1].split()[0])>0 for x in lines))
   self.assertTrue(any(' torn=' in x and int(x.split(' torn=')[1].split()[0])>0 for x in lines))
 if __name__=='__main__':unittest.main()
