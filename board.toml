@@ -231,6 +231,11 @@ kernel_args = [
   "offline-legacy-validate=1",
   "offline-legacy-transfer=1",
   "offline-legacy-cpu-present=1",
+  # The CPU copy into the firmware scanout (0xBE9C0000, outside XNU's DRAM) stores through a write-combined (Normal
+  # non-cacheable) mapping instead of Device-nGnRnE (UniXNU drivers/NativeMobileDisplay NativeScanoutMap.h). The uncached
+  # copy took 36.7 ms per 4,096,000-byte frame on this board ("a04br3 copy:" heartbeat). GPU hand-off frames
+  # (sheng-fb-gpu=1) do not use the CPU copy and are unchanged.
+  "offline-legacy-fb-wc=1",
   "offline-hid-input=1",
   "offline-hid-home=1",
   # The touch panel (BU21025) and the Home and volume up keys (package/A04BR3Input.cpp, ported from the iOS 16 bring-up of
