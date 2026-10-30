@@ -19,6 +19,13 @@
 // hand-off only, NativePowerVRMetalMarkBase | value a progress marker or text character, logged as "powervr-metal[<process>]: ..." and
 // refused. Other types (the original IOGPU library opens with type 1 and an API value) are refused. A process may open at most
 // a04br3-gpu-metal-opens GPU connections per boot (default 40, 0 = unlimited), so a client that crashes on every launch cannot loop.
+//
+// a04br3-gpu-metal-hide=1 (default off): the two plugin keys (MetalPluginName, MetalPluginClassName) read as absent in every process
+// the grant does not name. Only the granted processes get a native device (the plugin returns nil elsewhere: NativeVulkanMetalPlugin.mm
+// deviceForPort serves backboardd and the .clients list), yet without this every process that looks for Metal loads the whole plugin
+// bundle before it learns that. With the keys absent, the original discovery (Metal _getMetalPluginClassForService returns no class
+// when MetalPluginName is missing) skips the accelerator, the process loads nothing of ours and takes its own no-GPU path, as on a board
+// without a Metal plugin. The first reads still go to the console, marked hidden.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -31,6 +38,7 @@
 #include <string.h>
 #include <sys/errno.h>
 #include <stdint.h>
+#include "NativePowerVRNameList.h"
 
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" {
@@ -51,7 +59,7 @@ unsigned native_powervr_accelerator_instance_size(void) __attribute__((weak));
 
 void native_powervr_metal_publish(void);
 IOReturn native_powervr_metal_new_user_client(IOService *, task_t, void *, UInt32, OSDictionary *, IOUserClient **);
-void native_powervr_metal_note_property_read(const char *);
+bool native_powervr_metal_note_property_read(const char *);
 // Stages: 1 thread started, 2 NativePowerVRGpu published, 3 IOGPUFamily loaded, 4 class registered, 5 accelerator published.
 volatile uint32_t native_powervr_metal_stage, native_powervr_metal_opens, native_powervr_metal_refused, native_powervr_metal_name_reads;
 volatile int native_powervr_metal_status;
@@ -66,6 +74,9 @@ volatile int native_powervr_metal_status;
 
 namespace {
 IOLock *gLock;
+// a04br3-gpu-metal-hide=1: the processes that see the plugin keys (the grant), set once before the accelerator is registered.
+char gPluginVisibleTo[128];
+bool gPluginHidden;
 
 // The plugin's text lines and markers, per process (first four names).
 struct Talker {char name[20]; char line[72]; unsigned length; uint32_t marks, gpuOpens;};
@@ -162,6 +173,11 @@ void publish(void)
   char grant[128] = "backboardd";
   PE_parse_boot_argn("a04br3-gpu-metal-grant", grant, sizeof grant);
   accelerator->setProperty("NativeSandboxGrantProcess", grant);
+  if (bootArg("a04br3-gpu-metal-hide", 0) == 1) {
+    strlcpy(gPluginVisibleTo, grant, sizeof gPluginVisibleTo);
+    __atomic_store_n(&gPluginHidden, true, __ATOMIC_RELEASE);
+    IOLog("powervr-metal: plugin keys visible only to %s (a04br3-gpu-metal-hide=1)\n", gPluginVisibleTo);
+  }
   if (!accelerator->attach(IOService::getPlatform())) {
     accelerator->release();
     native_powervr_metal_status = kIOReturnNotAttached;
@@ -191,16 +207,24 @@ extern "C" void native_powervr_metal_publish(void)
   if (kernel_thread_start(publishThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 
-extern "C" void native_powervr_metal_note_property_read(const char *key)
+// Every property read of the accelerator (NativePowerVRAccelerator.cpp); false: the key reads as absent in this process.
+extern "C" bool native_powervr_metal_note_property_read(const char *key)
 {
-  if (key && !strcmp(key, "MetalPluginName")) {
-    char name[20] = {};
-    proc_selfname(name, sizeof name);
+  if (!key) return true;
+  const bool pluginName = !strcmp(key, "MetalPluginName");
+  if (!pluginName && strcmp(key, "MetalPluginClassName")) return true;
+  char name[20] = {};
+  proc_selfname(name, sizeof name);
+  // Kernel reads (pid 0) always see the keys; only user processes outside the grant are refused.
+  const bool visible = !__atomic_load_n(&gPluginHidden, __ATOMIC_ACQUIRE) || proc_selfpid() == 0 ||
+                       native_powervr_name_listed(gPluginVisibleTo, name);
+  if (pluginName) {
     // Unlocked counter: the discovery runs at process start; the first reads say which processes look for a Metal device.
     const uint32_t reads = native_powervr_metal_name_reads;
     native_powervr_metal_name_reads = reads + 1;
-    if (reads < 32) IOLog("powervr-metal: MetalPluginName read by %s pid=%d\n", name, proc_selfpid());
+    if (reads < 32) IOLog("powervr-metal: MetalPluginName read by %s pid=%d%s\n", name, proc_selfpid(), visible ? "" : " (hidden)");
   }
+  return visible;
 }
 
 extern "C" IOReturn native_powervr_metal_new_user_client(IOService *provider, task_t owningTask, void *securityID, UInt32 type,
