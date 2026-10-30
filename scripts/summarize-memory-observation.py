@@ -71,6 +71,7 @@ def assess(data, result, expected, size=None, boot_run=False):
   if not rows or rows[0]!={'phase':'waiting','delay_seconds':'180','profile':'low_impact_64k'}:
    raise ValueError('missing or invalid boot-run waiting record')
   rows=rows[1:]
+  if any(row.get('phase')=='waiting' for row in rows):raise ValueError('duplicate boot-run waiting record')
  begins=[(i,f) for i,f in enumerate(rows) if f.get('phase')=='begin']
  ends=[(i,f) for i,f in enumerate(rows) if f.get('phase')=='end']
  status='missing'
@@ -105,7 +106,7 @@ def assess(data, result, expected, size=None, boot_run=False):
      if pv['size_bytes']!=size or cv['reported_free_bytes']!=v['free_pages']*v['page_size'] or cv['speculative_bytes']!=v['speculative_pages']*v['page_size'] or cv['free_bytes']!=sample['free_excluding_speculative_bytes'] or cv['threshold_bytes']!=size*2+32*1048576 or cv['free_bytes']<cv['threshold_bytes'] or check.get('cache_freshness')!='unknown':raise ValueError('inconsistent memory guard')
     status='success'
    elif actual=='skip':
-    if expected!='copy' or len(result['skips'])!=1 or 'reason=insufficient_free_pages' not in result['skips'][0] or result['errors'] or result['copies']:raise ValueError('inconsistent skip')
+    if expected!='copy' or len(result['skips'])!=1 or parse_fields(result['skips'][0])!={'phase':'skip','reason':'insufficient_free_pages'} or result['errors'] or result['copies']:raise ValueError('inconsistent skip')
     status='skip'
    else:status='error'
  elif result['errors']:status='error'

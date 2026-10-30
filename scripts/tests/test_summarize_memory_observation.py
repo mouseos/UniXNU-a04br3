@@ -38,7 +38,7 @@ class ProtocolTests(unittest.TestCase):
   r=self.run_cli(wait+body,'copy',65536,True)
   self.assertEqual(r.returncode,2,r.stderr)
   self.assertEqual(json.loads(r.stdout)['assessment']['status'],'skip')
-  for bad in (body,wait+wait+body,wait.replace('180','179')+body,wait.replace('64k','1m')+body):
+  for bad in (body,wait+wait,wait+wait+body,wait.replace('180','179')+body,wait.replace('64k','1m')+body,wait+body.replace('insufficient_free_pages','insufficient_free_pages_spoof')):
    self.assertEqual(self.run_cli(bad,'copy',65536,True).returncode,1)
   self.assertEqual(self.run_cli(wait+body,'copy',65536).returncode,1)
   self.assertEqual(self.run_cli(wait+body,'observe',None,True).returncode,1)
