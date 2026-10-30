@@ -10,7 +10,8 @@ actual_source=source
 source=source.replace(needle,'static bool a04br3_pmu_access_qualified(unsigned cpu) { return cpu < 4 && testQualified; }')
 main='''
 int main(){uint64_t gen=0;assert(!a04br3_pmu_qualification_available(0));
- assert(a04br3_runtime_probe_begin());assert(!a04br3_pmu_lease_acquire(0,&gen));assert(a04br3_runtime_probe_end_checked());
+ assert(a04br3_runtime_probe_begin());assert(!a04br3_pmu_lease_acquire(0,&gen));
+ gRtcCaptureActive=1;assert(!a04br3_runtime_probe_end_checked());assert(a04br3_runtime_probe_active);gRtcCaptureActive=0;assert(a04br3_runtime_probe_end_checked());
  testQualified=true;assert(a04br3_pmu_qualification_available(0));assert(a04br3_runtime_probe_begin());assert(a04br3_pmu_lease_acquire(0,&gen)&&gen);
  assert(!a04br3_runtime_probe_end_checked());a04br3_runtime_probe_end();assert(a04br3_runtime_probe_active);
  assert(!a04br3_pmu_lease_release(1,gen));assert(a04br3_pmu_lease_valid(0,gen));
@@ -26,7 +27,7 @@ int main(){uint64_t gen=0;assert(!a04br3_pmu_qualification_available(0));
 }
 '''
 with tempfile.TemporaryDirectory(prefix='pmu-gate-integration-') as d:
- p=Path(d);cpp=p/'test.cpp';exe=p/'test';cpp.write_text('#include <cassert>\n#include <atomic>\n#include <thread>\n#include "A04BR3WatchdogGate.h"\n#include "A04BR3PmuLease.h"\nstatic A04BR3WatchdogGate gWatchdogGate={};\nstatic volatile uint32_t a04br3_runtime_probe_active=0;\nstatic bool testQualified=false;\n'+source+main)
+ p=Path(d);cpp=p/'test.cpp';exe=p/'test';cpp.write_text('#include <cassert>\n#include <atomic>\n#include <thread>\n#include "A04BR3WatchdogGate.h"\n#include "A04BR3PmuLease.h"\nstatic A04BR3WatchdogGate gWatchdogGate={};\nstatic volatile uint32_t a04br3_runtime_probe_active=0;\nstatic uint32_t gRtcCaptureActive=0;\nstatic bool testQualified=false;\n'+source+main)
  subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all','-pthread','-I',str(root/'package'),str(cpp),'-o',str(exe)],check=True)
  subprocess.run([str(exe)],check=True)
 # Exercise the actual (unmocked) qualification and wrapper with both builds.
@@ -46,7 +47,7 @@ int main() {
 """
 with tempfile.TemporaryDirectory(prefix='pmu-gate-actual-') as d:
  p=Path(d); cpp=p/'actual.cpp'; exe=p/'actual'
- cpp.write_text('#include <cassert>\n#include "A04BR3WatchdogGate.h"\n#include "A04BR3PmuLease.h"\nstatic A04BR3WatchdogGate gWatchdogGate={};\nstatic volatile uint32_t a04br3_runtime_probe_active=0;\n'+actual_source+actual_main)
+ cpp.write_text('#include <cassert>\n#include "A04BR3WatchdogGate.h"\n#include "A04BR3PmuLease.h"\nstatic A04BR3WatchdogGate gWatchdogGate={};\nstatic volatile uint32_t a04br3_runtime_probe_active=0;\nstatic uint32_t gRtcCaptureActive=0;\n'+actual_source+actual_main)
  for mode in (0,1):
   subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror',f'-DA04BR3_PMUV3_EXPERIMENT={mode}','-I',str(root/'package'),str(cpp),'-o',str(exe)],check=True)
   subprocess.run([str(exe)],check=True)

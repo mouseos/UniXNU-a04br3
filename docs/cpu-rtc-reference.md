@@ -23,8 +23,8 @@ AutoReset no longer clears an unknown response and waits for write idle. That qu
 known local users from touching a possibly pending transaction, but may disable
 touch, GPU power or recovery paths which use WACS2. The RTC worker reserves the existing board probe/watchdog gate over the entire
 capture, blocking cooperating runtime probes and normal watchdog feeding. It
-releases the gate only after a complete valid capture; failure, panic or a stuck
-worker leaves normal feeding disabled. This is a recovery attempt, not proof of
+releases the gate after a complete clean capture, even if bounds are inconclusive; failure, panic or a stuck
+worker or exhausted bounded release retry leaves normal feeding disabled. The retry count is not a wall-clock guarantee. This is a recovery attempt, not proof of
 a watchdog reset. The periodic software-reset thread and external watchdog
 agents are separate; actual reset/recovery is unverified. The poll bound is not a
 wall-time guarantee and an MMIO trap or hang may never return. There is no

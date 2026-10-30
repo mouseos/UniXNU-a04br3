@@ -350,10 +350,12 @@ static void rtcCaptureThread(void *, wait_result_t)
   const bool complete = n==64 && allOk && !state.invalid &&
       __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE) &&
       __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE);
-  // Resume feeding only after a complete, clean capture and gate-protected release.
+  // Resume feeding after a complete, clean capture even if bounds are inconclusive.
   // Failure, panic, and inability to acquire the gate all remain fail-closed.
   bool released=false;
-  if (complete && b.valid && gWatchdogGate.lock()) {
+  bool gateLocked=false;
+  if (complete) for (unsigned i=0; i<4096 && !gateLocked; ++i) gateLocked=gWatchdogGate.lock();
+  if (gateLocked) {
     if (!panic_active() && __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE) &&
         __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)) {
       __atomic_store_n(&gRtcCaptureActive,0U,__ATOMIC_RELEASE);

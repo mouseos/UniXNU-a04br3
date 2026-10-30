@@ -8,6 +8,8 @@ a=s.index('struct RtcCaptureIO {'); b=s.index('\n#endif\n\nvoid cycleThread',a)
 probe=s[s.index('static bool a04br3_pmu_gate_lock_bounded(void)'):s.index('// The lock coordinates known board WACS2 users')]
 probe=probe[:probe.index('extern "C" bool a04br3_pmu_lease_acquire')] + probe[probe.index('extern "C" bool a04br3_runtime_probe_begin'): ]
 s=s[a:b]
+# Inject temporary gate contention at the actual bounded retry call.
+s=s.replace("gateLocked=gWatchdogGate.lock()", "gateLocked=test_gate_lock()")
 original='uint64_t timer() { uint64_t v; __asm__ volatile("isb\\n\\tmrs %0, cntvct_el0" : "=r"(v) :: "memory"); return v; }'
 assert s.count(original)==1
 s=s.replace(original,'uint64_t timer() { return mockTimer(); }')
@@ -20,8 +22,9 @@ pre=r'''
 #include "A04BR3WatchdogGate.h"
 static A04BR3WatchdogGate gWatchdogGate={}; static uint32_t gRtcCaptureActive;
 using wait_result_t=int;
-static unsigned commands=0, clears=0, slept=0, rows=0, finished=0, expectedValid=1, expectedCount=64, failAt=0, panicAt=0, fault=0, stateAt=0, summaries=0;
+static unsigned commands=0, clears=0, slept=0, rows=0, finished=0, expectedValid=1, expectedCount=64, failAt=0, panicAt=0, fault=0, stateAt=0, summaries=0, gateFailures=0, gateAttempts=0;
 static bool held=false, issued=false, cleared=false;
+static bool test_gate_lock(){++gateAttempts;if(gateFailures){--gateFailures;return false;}return gWatchdogGate.lock();}
 struct MockLease {uint32_t state;}; static MockLease gRuntimePmuLease={};
 extern "C" bool a04br3_runtime_probe_end_checked(void);
 static volatile uint8_t *gPwrap=nullptr;
@@ -29,7 +32,7 @@ static volatile uint32_t a04br3_runtime_probe_active=0,a04br3_runtime_recovery_r
 static constexpr unsigned kWacsRdata=0xa4,kWacsCmd=0xa0,kWacsVldclr=0xa8;
 static bool a04br3_pwrap_try_lock(){if(held || (fault==1 && commands==63))return false;held=true;return true;}
 static void a04br3_pwrap_unlock(){assert(held);held=false;}
-static uint32_t rd(volatile uint8_t *,unsigned){assert(held);if(!issued || cleared){if(fault==2 && commands==63 && !issued)return (1u<<21)|(6u<<16); if(fault==3 && commands==64 && cleared)return (1u<<21)|(6u<<16); return 1u<<21;}if(failAt && commands==failAt)return 1u<<21;if(fault==4 && commands==64)return (1u<<21)|(6u<<16)|60u;return (1u<<21)|(6u<<16)|((commands-1)/20);}
+static uint32_t rd(volatile uint8_t *,unsigned){assert(held);if(!issued || cleared){if(fault==2 && commands==63 && !issued)return (1u<<21)|(6u<<16); if(fault==3 && commands==64 && cleared)return (1u<<21)|(6u<<16); return 1u<<21;}if(failAt && commands==failAt)return 1u<<21;if(fault==4 && commands==64)return (1u<<21)|(6u<<16)|60u;return (1u<<21)|(6u<<16)|(fault==7?0:((commands-1)/20));}
 static void wr(volatile uint8_t *,unsigned off,uint32_t v){assert(held);if(off==kWacsCmd){assert((v>>31)==0 && ((v>>16)&0x7fffU)*2U==0x800aU && (v&0xffffU)==0);++commands;issued=true;cleared=false;}else{assert(off==kWacsVldclr && v==1);++clears;cleared=true;}}
 static uint64_t ticks=0; static uint64_t mockTimer(){return ticks+=10;}
 static unsigned panic_active(){return panicAt && slept>=panicAt;}
@@ -38,12 +41,15 @@ static int current_thread(){return 1;} static void thread_terminate(int){++finis
 static void IOLog(const char *fmt,...){va_list ap;va_start(ap,fmt);if(strstr(fmt,"samples=%u")){++summaries;unsigned count=va_arg(ap,unsigned);unsigned valid=va_arg(ap,unsigned);assert(valid==expectedValid);assert(count==expectedCount);}else {assert(strstr(fmt,"rtc-ref-row"));++rows;}va_end(ap);}
 '''
 main=r'''
-static void reset(){commands=clears=slept=rows=finished=summaries=0;held=issued=cleared=false;failAt=panicAt=fault=stateAt=0;expectedCount=64;expectedValid=0;a04br3_runtime_probe_active=0;gRtcCaptureActive=0;gWatchdogGate.busy=0;a04br3_runtime_recovery_ready=1;}
+static void reset(){commands=clears=slept=rows=finished=summaries=0;held=issued=cleared=false;failAt=panicAt=fault=stateAt=gateFailures=gateAttempts=0;expectedCount=64;expectedValid=0;a04br3_runtime_probe_active=0;gRtcCaptureActive=0;gWatchdogGate.busy=0;a04br3_runtime_recovery_ready=1;}
 int main(){
  reset();expectedValid=1;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==64 && rows==64 && summaries==1 && finished==1);
  reset();failAt=1;expectedCount=1;rtcCaptureThread(nullptr,0);assert(commands==1 && clears==0 && rows==1 && held && summaries==1 && a04br3_runtime_probe_active && gRtcCaptureActive);
  reset();failAt=64;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==63 && rows==64 && held && summaries==1 && a04br3_runtime_probe_active && gRtcCaptureActive);
  for(unsigned kind=1;kind<=4;kind++){reset();fault=kind;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && finished==1);if(kind==3)assert(held);}
+ reset();fault=7;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
+ reset();gateFailures=3;expectedValid=1;rtcCaptureThread(nullptr,0);assert(gateAttempts==4 && !a04br3_runtime_probe_active && summaries==1);
+ reset();gateFailures=4096;rtcCaptureThread(nullptr,0);assert(gateAttempts==4096 && a04br3_runtime_probe_active && gRtcCaptureActive && summaries==1);
  reset();fault=5;stateAt=64;expectedValid=1;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && !a04br3_runtime_probe_active);
  reset();fault=6;stateAt=64;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && a04br3_runtime_probe_active);
  reset();panicAt=64;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==0 && finished==1 && a04br3_runtime_probe_active && gRtcCaptureActive);
