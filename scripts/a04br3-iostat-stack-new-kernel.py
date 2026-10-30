@@ -29,6 +29,7 @@ NEW_DEVICE = '2066e1832a770a7c64cda79f9b03d953bcd04752'
 ROUTE_DEVICE = 'c968ba1863b061d39f39ef882b8a0a6daa1ca2d8'
 ALLTASK_DEVICE = 'f2dee958a180ae6fee7b84a44baf9d74dcd22aff'
 LIVE_PC_KERNEL_SHA256 = '17904eca68b4c7e5f99350f4ddc57a671efc0357a93c984db9bb7f799336a4d1'
+ALLTASK_BASELINE_BOOT_SHA256 = '00e2adb5cbd58f0d01384a807336a0eb99f92c84c3dd514e3c4bb7ab65bab881'
 UEFI = 'd3d4f28a89b29553ede7d7523c6af86d7e2459e8'
 FIXED = ('scratch-data.img', 'kernel.macho.trustcache', 'kernel.macho.gpuaddon')
 BOOT_MAGIC = b'ANDROID!'
@@ -93,6 +94,45 @@ def payload_config(payload, target):
     subprocess.run(['mcopy', '-i', str(payload), '::/EFI/UniXNU/unixnu.toml', str(target)],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return tomllib.loads(target.read_text())
+
+
+def validate_source_config(config, pair_args):
+    if not isinstance(pair_args, str): raise ValueError('missing source boot arguments')
+    entries = config.get('entry')
+    if not isinstance(entries, list): raise ValueError('source FAT has no boot entries')
+    entries = [entry for entry in entries if isinstance(entry, dict) and entry.get('id') == 'xnu']
+    if len(entries) != 1 or entries[0].get('args') != pair_args:
+        raise ValueError('pair arguments differ from source FAT boot configuration')
+    words = pair_args.split()
+    required = ('a04br3-gpu=2', 'sheng-gpu-addon=1', 'a04br3-gpu-metal=1',
+                'a04br3-gpu-bo-wc=1', 'a04br3-gpu-bo-map=1', 'a04br3-gpu-tq-low=1',
+                'sheng-fb-gpu=1', 'a04br3-gpu-clock=380', 'a04br3-autoreset=720')
+    keys = [word.partition('=')[0] for word in words]
+    if len(keys) != len(set(keys)) or any(words.count(word) != 1 for word in required):
+        raise ValueError('source profile lacks required GPU or recovery arguments')
+
+
+def validate_control_pair(baseline, control):
+    fields = ('source_commit', 'old_device_commit', 'new_device_commit', 'uefi_commit',
+              'old_boot_sha256', 'old_pair_sha256', 'seed_provenance_sha256',
+              'fd_sha256', 'dtb_sha256', 'owner_data_volume_uuid', 'adt_identity_sha256',
+              'kernel_build_record', 'fixed_payload_sha256')
+    for key in fields:
+        if key not in baseline or key not in control or baseline[key] != control[key]:
+            raise ValueError('comparison fixed input mismatch: ' + key)
+    if baseline.get('boot_sha256') != ALLTASK_BASELINE_BOOT_SHA256:
+        raise ValueError('comparison baseline is not the pinned all-task boot')
+    if baseline.get('all_task_sampling') is not True or baseline.get('live_pc_pid1', False) is not False:
+        raise ValueError('comparison baseline has wrong diagnostic profile')
+    if baseline.get('native_cs_stream') is not False or baseline.get('clock_meter') is not False or baseline.get('clock_meter_route') is not False:
+        raise ValueError('comparison baseline has incompatible diagnostic mode')
+    if baseline.get('kernel_args') != control.get('kernel_args', '') + ' atp=1':
+        raise ValueError('comparison arguments differ beyond atp=1')
+    for name, value in control['fixed_payload_sha256'].items():
+        if baseline.get('output_fat_files_sha256', {}).get(name) != value:
+            raise ValueError('comparison baseline FAT hash mismatch: ' + name)
+    if baseline.get('output_fat_files_sha256', {}).get('kernel.macho') != control['kernel_build_record']['sha256']:
+        raise ValueError('comparison baseline FAT kernel mismatch')
 
 
 def fat_listing(payload):
@@ -291,9 +331,15 @@ def main():
     parser.add_argument('--meter-route', action=Once, help='enable the experimental vendor clock route trial')
     parser.add_argument('--all-task', action=Once, help='enable opt-in all-process resource sampling')
     parser.add_argument('--all-task-control', action=Once, help='use the all-task profile without atp=1')
+    parser.add_argument('--comparison-manifest', type=Path, help='manifest of the pinned all-task comparison boot')
+    parser.add_argument('--comparison-boot', type=Path, help='pinned all-task comparison boot image')
     parser.add_argument('--live-pc', action=Once, help='enable PID 1 live PC sampling with --all-task')
     args = parser.parse_args()
     if args.live_pc and not args.all_task: parser.error('--live-pc requires --all-task')
+    if args.all_task_control != bool(args.comparison_manifest and args.comparison_boot):
+        parser.error('--all-task-control requires both --comparison-manifest and --comparison-boot; other modes reject them')
+    if not args.all_task_control and (args.comparison_manifest or args.comparison_boot):
+        parser.error('comparison inputs are only valid with --all-task-control')
     if args.stream and (args.all_task or args.all_task_control or args.meter or args.meter_route) or sum((args.all_task, args.all_task_control, args.meter, args.meter_route)) > 1:
         parser.error('conflicting diagnostic modes')
     source, old_device, new_device, uefi, old_boot, old_pair, kernel, record_path, fd, out, seed_provenance = (getattr(args, name.replace('-', '_')).resolve() for name in ('source','old_device','new_device','uefi','old_boot','old_pair','kernel','kernel_record','fd','out','seed_provenance'))
@@ -315,6 +361,8 @@ def main():
     try:
         source_payload, old_dir, new_dir = stage/'old.img', stage/'old', stage/'new'
         boot_ramdisk(old_boot, source_payload); old_files = fat_files(source_payload, old_dir)
+        old_config = payload_config(source_payload, stage/'old.toml')
+        validate_source_config(old_config, original_args)
         if not set(FIXED).issubset(old_files) or 'kernel.macho.adt' not in old_files: raise ValueError('old payload misses required files')
         for name in FIXED:
             if old_files[name] != declared[name]: raise ValueError('old pair hash mismatch: ' + name)
@@ -322,6 +370,29 @@ def main():
         data_uuid = check_owner_seed(record, json.loads(seed_provenance.read_text()), old_dir/'kernel.macho', kernel, old_files['scratch-data.img'])
         if old_files.get('kernel.macho') != declared['kernel.macho']:
             raise ValueError('old pair kernel hash mismatch')
+        baseline = None
+        if args.all_task_control:
+            baseline_bytes = args.comparison_manifest.read_bytes()
+            baseline_manifest_sha = hashlib.sha256(baseline_bytes).hexdigest()
+            baseline = json.loads(baseline_bytes)
+            if sha(args.comparison_boot) != ALLTASK_BASELINE_BOOT_SHA256:
+                raise ValueError('comparison boot hash mismatch')
+            comparison_payload = stage/'comparison.img'
+            boot_ramdisk(args.comparison_boot, comparison_payload)
+            comparison_config = payload_config(comparison_payload, stage/'comparison.toml')
+            validate_source_config(comparison_config, baseline.get('kernel_args'))
+            comparison_files = fat_files(comparison_payload, stage/'comparison')
+            if comparison_files != baseline.get('output_fat_files_sha256'):
+                raise ValueError('comparison manifest does not match baseline FAT payload')
+            candidate = {'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE,
+                         'new_device_commit': expected_device, 'uefi_commit': UEFI,
+                         'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair),
+                         'seed_provenance_sha256': sha(seed_provenance), 'fd_sha256': sha(fd),
+                         'dtb_sha256': sha(dtb), 'owner_data_volume_uuid': data_uuid,
+                         'adt_identity_sha256': compare_adt(old_dir/'kernel.macho.adt', old_dir/'kernel.macho.adt'),
+                         'kernel_build_record': {k: record[k] for k in ('sha256','device_commit','source_commit','run_id')},
+                         'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'kernel_args': rewritten}
+            validate_control_pair(baseline, candidate)
         identities = [value for _, props in adt_tree(old_dir/'kernel.macho.adt') for key, _, value in props if key == 'unique-chip-id']
         if len(identities) != 1 or len(identities[0]) != 8 or identities[0] == bytes(8):
             raise ValueError('invalid old ADT identity')
@@ -341,7 +412,7 @@ def main():
         new_files = fat_files(image, new_dir)
         if fat_listing(source_payload) != fat_listing(image): raise ValueError('complete FAT listing mismatch')
         if new_files.get('kernel.macho') != sha(kernel): raise ValueError('new FAT kernel hash mismatch')
-        compare_config(payload_config(source_payload, stage/'old.toml'), payload_config(image, stage/'new.toml'), rewritten)
+        compare_config(old_config, payload_config(image, stage/'new.toml'), rewritten)
         if set(old_files) != set(new_files) or any(old_files[name] != new_files[name] for name in FIXED): raise ValueError('fixed payload files changed')
         changed = sorted(name for name in old_files if old_files[name] != new_files[name])
         if changed != ['kernel.macho', 'kernel.macho.adt']: raise ValueError('payload differs beyond replacement kernel and ADT')
@@ -354,8 +425,16 @@ def main():
         if sha(boot_payload) != sha(image): raise ValueError('output boot FAT differs from new payload')
         check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, expected_device); check_repo(uefi, UEFI)
         report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'native_cs_stream': bool(args.stream), 'clock_meter': bool(args.meter or args.meter_route), 'clock_meter_route': bool(args.meter_route), 'all_task_sampling': bool(args.all_task), 'all_task_control': bool(args.all_task_control), 'live_pc_pid1': bool(args.live_pc), 'owner_data_volume_uuid': data_uuid, 'seed_provenance_sha256': sha(seed_provenance), 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
+        if baseline is not None:
+            if sha(args.comparison_manifest) != baseline_manifest_sha or sha(args.comparison_boot) != ALLTASK_BASELINE_BOOT_SHA256:
+                raise ValueError('comparison inputs changed during build')
+            validate_control_pair(baseline, report)
+            report['comparison_baseline_boot_sha256'] = ALLTASK_BASELINE_BOOT_SHA256
+            report['comparison_baseline_manifest_sha256'] = baseline_manifest_sha
         shutil.copyfile(image, stage/'payload.img'); (stage/'manifest.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')
         for path in (stage/'work', stage/'boot-work', old_dir, new_dir): shutil.rmtree(path)
+        if baseline is not None:
+            shutil.rmtree(stage/'comparison'); (stage/'comparison.img').unlink(); (stage/'comparison.toml').unlink()
         source_payload.unlink(); boot_payload.unlink(); (stage/'old.toml').unlink(); (stage/'new.toml').unlink(); stage.rename(out)
         print('Prepared diagnostic boot:', out)
     finally:

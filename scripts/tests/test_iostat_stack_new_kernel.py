@@ -14,6 +14,47 @@ def prop(name, value):
     return name.encode().ljust(32, b'\0') + struct.pack('<I', len(value)) + value + bytes((-len(value)) % 4)
 
 class NewKernelContracts(unittest.TestCase):
+    def test_source_fat_is_bound_to_pair_and_requires_gpu_and_recovery(self):
+        import copy
+        args = ('serial=1 a04br3-gpu=2 sheng-gpu-addon=1 a04br3-gpu-metal=1 '
+                'a04br3-gpu-bo-wc=1 a04br3-gpu-bo-map=1 a04br3-gpu-tq-low=1 '
+                'sheng-fb-gpu=1 a04br3-gpu-clock=380 a04br3-autoreset=720')
+        config = {'entry': [{'id':'xnu', 'args':args}]}
+        BUILD.validate_source_config(config, args)
+        for word in args.split()[1:]:
+            changed = ' '.join(w for w in args.split() if w != word)
+            with self.subTest(word=word), self.assertRaises(ValueError):
+                BUILD.validate_source_config(config, changed)
+            bad = {'entry': [{'id':'xnu', 'args':changed}]}
+            with self.subTest(missing=word), self.assertRaises(ValueError):
+                BUILD.validate_source_config(bad, changed)
+        duplicated = copy.deepcopy(config); duplicated['entry'].append(copy.deepcopy(config['entry'][0]))
+        with self.assertRaises(ValueError): BUILD.validate_source_config(duplicated, args)
+        with self.assertRaises(ValueError): BUILD.validate_source_config(config, None)
+
+    def test_control_pair_rejects_each_changed_fixed_input(self):
+        import copy
+        keys = ('source_commit', 'old_device_commit', 'new_device_commit', 'uefi_commit',
+                'old_boot_sha256', 'old_pair_sha256', 'seed_provenance_sha256',
+                'fd_sha256', 'dtb_sha256', 'owner_data_volume_uuid', 'adt_identity_sha256')
+        control = {key: key for key in keys}
+        control.update(kernel_build_record={'sha256':'kernel', 'device_commit':'device', 'source_commit':'source', 'run_id':'1'},
+                       fixed_payload_sha256={name:name for name in BUILD.FIXED}, kernel_args='serial=1')
+        baseline = copy.deepcopy(control)
+        baseline.update(boot_sha256=BUILD.ALLTASK_BASELINE_BOOT_SHA256, all_task_sampling=True,
+                        native_cs_stream=False, clock_meter=False, clock_meter_route=False,
+                        kernel_args='serial=1 atp=1', output_fat_files_sha256={**control['fixed_payload_sha256'], 'kernel.macho':'kernel'})
+        BUILD.validate_control_pair(baseline, control)
+        for key in (*keys, 'kernel_build_record', 'fixed_payload_sha256'):
+            altered = copy.deepcopy(control); altered[key] = 'different'
+            with self.subTest(key=key), self.assertRaises(ValueError): BUILD.validate_control_pair(baseline, altered)
+        for key, value in (('boot_sha256','other'), ('kernel_args','serial=1 atp=1 extra=1'),
+                           ('all_task_sampling',False), ('clock_meter',True), ('live_pc_pid1',True)):
+            altered = copy.deepcopy(baseline); altered[key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError): BUILD.validate_control_pair(altered, control)
+        altered = copy.deepcopy(baseline); altered['output_fat_files_sha256']['kernel.macho'] = 'other'
+        with self.assertRaises(ValueError): BUILD.validate_control_pair(altered, control)
+
     def test_all_task_control_changes_only_atp_and_preserves_gpu(self):
         line = ('serial=1 a04br3-gpu=2 sheng-gpu-addon=1 a04br3-gpu-metal=1 '
                 'a04br3-home-perf=1 pl=1 native-msdc-iostat=1 a04br3-autoreset=720')
@@ -94,9 +135,16 @@ class NewKernelContracts(unittest.TestCase):
                       ['--all-task-control','--all-task'], ['--all-task-control','--meter'],
                       ['--all-task-control','--meter-route'], ['--all-task-control','--stream'],
                       ['--all-task-control','--live-pc']):
+            if '--all-task-control' in flags:
+                flags = flags + ['--comparison-manifest','/nonexistent', '--comparison-boot','/nonexistent']
             result = subprocess.run([sys.executable, str(script), *required, *flags], capture_output=True, text=True)
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertTrue(any(word in result.stderr for word in ('more than once', 'requires --all-task', 'conflicting diagnostic modes')))
+        for flags in (['--all-task-control'], ['--all-task-control','--comparison-boot','/nonexistent'],
+                      ['--comparison-manifest','/nonexistent'], ['--all-task','--comparison-boot','/nonexistent']):
+            result = subprocess.run([sys.executable, str(script), *required, *flags], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn('comparison', result.stderr)
 
     def test_adt_allows_only_seed_and_preserved_identity(self):
         identity = bytes.fromhex('0123456789abcdef')
