@@ -186,3 +186,38 @@ Even widely spaced calls cannot prove freshness when other tasks use the shared
 cache. The query timestamps are not interchangeable with the kernel heartbeat
 clock without checking the relationship. These readings add no extra VM statistics call and do not
 force reclaim, though console output itself has a cost.
+
+## Explicit low-impact observation
+
+`--observe` performs one `host_statistics64` query and emits `phase=vm_usage`
+with query begin/end times in user `CLOCK_MONOTONIC`, page size and the free,
+active, inactive, wired and speculative page counts. It allocates no copy
+buffers and performs no copy. Existing activity counters are printed from the
+same reply. When the full revision is present, compressor, external and
+internal page counts are also printed; older replies mark them unavailable.
+Each field remains an independent, possibly cached snapshot:
+`cache_freshness=unknown` does not indicate a fresh read. Free includes
+speculative; subtract speculative only when identifying the conservative
+unoccupied count. Do not sum active, inactive, wired and compressor categories
+as a total. The query itself is not zero-cost and is subject to host API limits.
+
+`--run-kib 64`, `--run-kib 256` and `--run-kib 1024` perform exactly one
+single-threaded verified copy, with two buffers of that size and the existing
+32 MiB reserve and non-speculative free check. No retry, wait loop or automatic
+boot launch is added. A small buffer can fit cache; results at different sizes
+are not interchangeable, and no DRAM bandwidth claim follows. To compare, use
+the same binary hash, size, boot image, workload phase, thermal/power state and
+number of separate runs; retain skips and timings instead of weakening the
+reserve when free memory is low. The existing `--run 1` is the matching 1 MiB
+size; boot mode remains unchanged. `--observe` is available only on Apple
+platforms; no Linux VM estimate is substituted.
+
+For a fixed, independently identified first-boot raw file, the offline
+`scripts/summarize-memory-observation.py` requires the expected raw SHA-256 and
+an explicitly supplied image SHA-256. It refuses multiple preloader markers,
+invalid arithmetic and inconsistent VM data; it reports the supplied image hash
+as a claim, not independent proof. Kernel VM records use the following heartbeat
+only as a later log marker; its timestamp is not the VM sample time. User and
+kernel clock epochs, cache freshness, background workload and free-memory
+safety are not established by these reports. Successful host fixtures do not
+establish iOS compilation, signing, target execution, or performance.

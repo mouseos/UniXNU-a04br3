@@ -22,6 +22,12 @@ class MemoryCopyBenchTest(unittest.TestCase):
             self.assertEqual(int(row['logical_bytes']), 1048576)
             self.assertEqual(int(row['elapsed_ns']), int(row['end_monotonic_ns']) - int(row['start_monotonic_ns']))
             self.assertGreater(int(row['elapsed_ns']), 0)
+            for size in (64, 256, 1024):
+                sample = subprocess.run([str(binary), '--run-kib', str(size)], capture_output=True, text=True, check=True)
+                self.assertIn(f'logical_bytes={size * 1024} verified=1', sample.stdout)
+            for value in ('0', '65', '-64', '1025', '64x'):
+                self.assertEqual(subprocess.run([str(binary), '--run-kib', value], capture_output=True).returncode, 2)
+            self.assertEqual(subprocess.run([str(binary), '--observe'], capture_output=True).returncode, 1)
 
     def test_boot_stages_and_memory_guard(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -31,7 +37,7 @@ class MemoryCopyBenchTest(unittest.TestCase):
 #include <stdint.h>
 typedef int mach_port_t; typedef unsigned long vm_size_t;
 typedef unsigned mach_msg_type_number_t; typedef int kern_return_t;
-typedef struct { unsigned free_count, speculative_count, purgeable_count;
+typedef struct { unsigned free_count, speculative_count, purgeable_count, active_count, inactive_count, wire_count, compressor_page_count, external_page_count, internal_page_count;
  uint64_t pageins,pageouts,reactivations,faults,purges,compressions,decompressions,swapins,swapouts;
 } vm_statistics64_data_t;
 typedef void *host_info64_t;
@@ -50,11 +56,14 @@ kern_return_t mach_port_deallocate(mach_port_t, mach_port_t);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 static unsigned waits[32], nw, calls; static int scenario;
+static int fake_clock_gettime(clockid_t c,struct timespec *t) {if(scenario==12){t->tv_sec=1;t->tv_nsec=0;return 0;}return clock_gettime(c,t);}
 static FILE *fake_freopen(const char *p,const char *m,FILE *f) {(void)p;(void)m;return f;}
 static unsigned fake_sleep(unsigned n) {waits[nw++]=n; return 0;}
 #define freopen fake_freopen
 #define sleep fake_sleep
+#define clock_gettime fake_clock_gettime
 #define main bench_main
 #include "SOURCE_PATH"
 #undef main
@@ -65,12 +74,14 @@ kern_return_t host_page_size(mach_port_t p,vm_size_t *n) {(void)p;*n=4096;return
 kern_return_t host_statistics64(mach_port_t p,int f,host_info64_t out,mach_msg_type_number_t *n) {
  (void)p;(void)f; ++calls;
  if (scenario==3) return 1;
- unsigned pages = scenario==1 ? 8703 : scenario==2 && calls<=2 ? 10239 : scenario>=4 ? 11264 : 10240;
+ unsigned pages = scenario==11 ? 8192 : scenario==1 ? 8703 : scenario==2 && calls<=2 ? 10239 : scenario>=4 ? 11264 : 10240;
  unsigned spec = scenario==4 ? 1024 : scenario==5 ? 1025 : scenario==6 ? 11265 : 0;
  ((vm_statistics64_data_t *)out)->free_count=pages;
  ((vm_statistics64_data_t *)out)->speculative_count=spec;
  vm_statistics64_data_t *st=(vm_statistics64_data_t *)out;
  st->pageins=11;st->pageouts=12;st->reactivations=13;st->faults=14;st->purgeable_count=15;st->purges=16;
+ st->active_count=21;st->inactive_count=22;st->wire_count=23;
+ st->compressor_page_count=24;st->external_page_count=25;st->internal_page_count=26;
  st->compressions=17;st->decompressions=18;st->swapins=19;st->swapouts=20;
  if(scenario==7)*n=HOST_VM_INFO64_REV0_COUNT;
  if(scenario==8)*n=0;
@@ -78,7 +89,8 @@ kern_return_t host_statistics64(mach_port_t p,int f,host_info64_t out,mach_msg_t
 }
 int main(int argc,char **argv) {
  scenario=argc>1 ? atoi(argv[1]) : 0;
- char *args[]={"bench","--boot-run",0}; int result=bench_main(2,args);
+ char *args[]={"bench",scenario==9 ? "--observe" : scenario>=10 ? "--run-kib" : "--boot-run", "64",0};
+ int result=bench_main(scenario>=10 ? 3 : 2,args);
  fprintf(stderr,"test waits=%u first=%u second=%u calls=%u result=%d\n",nw,waits[0],waits[1],calls,result);
  return result;
 }
@@ -102,9 +114,12 @@ int main(int argc,char **argv) {
                     self.assertLessEqual(int(match.group(1)), int(match.group(2)))
                     self.assertIn('threshold_bytes=41943040 cache_freshness=unknown', result.stdout)
                     self.assertIn('page_size=4096 pageins=11 pageouts=12 reactivations=13 faults=14 purgeable_pages=15 purges=16 non_atomic=1', result.stdout)
+                    self.assertIn('active_pages=21 inactive_pages=22 wired_pages=23 cache_freshness=unknown non_atomic=1', result.stdout)
                 if scenario == 0:
+                    self.assertIn('phase=vm_usage_extended compressor_pages=24 external_pages=25 internal_pages=26 non_atomic=1', result.stdout)
                     self.assertIn('phase=vm_activity_extended compressions=17 decompressions=18 swapins=19 swapouts=20 non_atomic=1', result.stdout)
                 if scenario == 7:
+                    self.assertIn('phase=vm_usage_extended status=unavailable', result.stdout)
                     self.assertIn('phase=vm_activity_extended status=unavailable', result.stdout)
                 if scenario == 8:
                     self.assertIn('reason=vm_statistics_unavailable', result.stderr)
@@ -124,6 +139,22 @@ int main(int argc,char **argv) {
                     self.assertEqual(result.stdout.count('size_bytes=1048576 start_monotonic_ns='), 3)
                 if scenario == 6:
                     self.assertIn('reason=vm_statistics_inconsistent', result.stderr)
+            observed = subprocess.run([str(binary), '9'], text=True, capture_output=True, check=True)
+            self.assertIn('phase=vm_usage', observed.stdout)
+            self.assertNotIn('phase=prepare', observed.stdout)
+            self.assertIn('waits=0', observed.stderr)
+            self.assertIn('calls=1 result=0', observed.stderr)
+            small = subprocess.run([str(binary), '10'], text=True, capture_output=True, check=True)
+            self.assertIn('threshold_bytes=33685504', small.stdout)
+            self.assertIn('logical_bytes=65536 verified=1', small.stdout)
+            refused = subprocess.run([str(binary), '11'], text=True, capture_output=True)
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn('reason=insufficient_free_pages', refused.stderr)
+            self.assertNotIn('logical_bytes=', refused.stdout)
+            invalid = subprocess.run([str(binary), '12'], text=True, capture_output=True)
+            self.assertEqual(invalid.returncode, 1)
+            self.assertIn('phase=error reason=invalid_elapsed', invalid.stdout)
+            self.assertNotIn('logical_bytes=', invalid.stdout)
 
 if __name__ == '__main__':
     unittest.main()
