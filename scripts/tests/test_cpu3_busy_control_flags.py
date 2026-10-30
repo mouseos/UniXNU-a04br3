@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
-from a04br3_busy_control_config import busy_control_flags
+from a04br3_busy_control_config import busy_control_flags, switch_abi_probe_flags
 source = (root / 'build-arm-driver.py').read_text()
 tree = ast.parse(source)
 node = next(node for node in ast.walk(tree) if isinstance(node, ast.If)
@@ -17,7 +17,7 @@ code = compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[]
 def builder_gate(component, env):
     command = []
     exec(code, {'component': component, 'os': SimpleNamespace(environ=env),
-                'busy_control_flags': busy_control_flags, 'command': command})
+                'busy_control_flags': busy_control_flags, 'switch_abi_probe_flags': switch_abi_probe_flags, 'command': command})
     return command
 keys = ('XNU_ARMCPU_GICV2', 'XNU_ARMCPU_A04BR3_RUNTIME', 'XNU_ARMCPU_RUNTIME_WINDOW', 'XNU_ARMCPU_IDLE_EPOCH', 'XNU_PMUV3_ACTIVE', 'XNU_ARMCPU_SWITCH_OBSERVER')
 assert busy_control_flags({}) == []
@@ -46,4 +46,14 @@ for value in ('yes', '', '2'):
         pass
     else:
         raise AssertionError(value)
-print('PASS CPU3 build flag: default off, prerequisites and invalid values')
+assert switch_abi_probe_flags({}) == []
+for observer in ('0','1'):
+ for value in ('0','1','invalid'):
+  env={'XNU_ARMCPU_SWITCH_OBSERVER':observer,'XNU_ARMCPU_SWITCH_ABI_PROBE':value}
+  rejected=value=='invalid' or (value=='1' and observer!='1')
+  try: actual=builder_gate('ArmCpu',env)
+  except SystemExit: assert rejected
+  else:
+   assert not rejected
+   assert actual==(['-DARMCPU_SWITCH_ABI_PROBE=1'] if value=='1' else [])
+print('PASS CPU3 and ABI flags: defaults off, prerequisites and invalid values')

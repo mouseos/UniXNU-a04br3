@@ -8,7 +8,7 @@ from pathlib import Path
 import struct
 import subprocess
 from a04br3_runtime_config import require_cpu_counters_disabled
-from a04br3_busy_control_config import busy_control_flags
+from a04br3_busy_control_config import busy_control_flags, switch_abi_probe_flags
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -130,6 +130,7 @@ if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_RUNTIME_WINDOW') == '1' 
 if component == 'ArmCpu':
     try:
         command += busy_control_flags(os.environ)
+        command += switch_abi_probe_flags(os.environ)
     except ValueError as error:
         raise SystemExit(str(error)) from error
 # a04br3 eMMC (MSDC0, github.com/mouseos/NativeMsdc). CONFIG_XNU_NATIVE_MSDC_BLOCK=y builds the userdata windows as

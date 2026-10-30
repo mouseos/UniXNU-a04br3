@@ -13,3 +13,14 @@ def busy_control_flags(env):
     if missing:
         raise ValueError('XNU_ARMCPU_BUSY_CONTROL=1 requires ' + ', '.join(missing))
     return ['-DARMCPU_RUNTIME_BUSY_CONTROL=1']
+
+
+def switch_abi_probe_flags(env):
+    value = env.get('XNU_ARMCPU_SWITCH_ABI_PROBE', '0')
+    if value not in ('0', '1'):
+        raise ValueError('XNU_ARMCPU_SWITCH_ABI_PROBE must be 0 or 1')
+    if value == '0':
+        return []
+    if env.get('XNU_ARMCPU_SWITCH_OBSERVER') != '1':
+        raise ValueError('XNU_ARMCPU_SWITCH_ABI_PROBE=1 requires XNU_ARMCPU_SWITCH_OBSERVER=1')
+    return ['-DARMCPU_SWITCH_ABI_PROBE=1']
