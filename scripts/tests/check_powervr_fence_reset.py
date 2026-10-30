@@ -250,6 +250,20 @@ int main(){
  Job pending{};pending.file=closing;list_add_tail(&pending.file_link,&closing->jobs);
  recordFailed(closing,1);recordFailed(closing,2);assert(liveAlloc==1&&closing->failedCount==1);
  native_powervr_jobs_file_destroy(closing);assert(pending.file==nullptr&&liveAlloc==0&&list_empty(&gJobs.files));
+ // Quarantined-only close does not sleep and leaves FW-visible job retained.
+ closing=static_cast<native_powervr_jobs_file*>(kzalloc(sizeof(native_powervr_jobs_file),GFP_KERNEL));
+ assert(closing);INIT_LIST_HEAD(&closing->jobs);INIT_LIST_HEAD(&gJobs.files);list_add_tail(&closing->link,&gJobs.files);
+ Job quarantined{};quarantined.file=closing;quarantined.quarantined=true;list_add_tail(&quarantined.file_link,&closing->jobs);
+ unsigned beforeSleep=sleeps;unsigned beforeRelease=released;
+ native_powervr_jobs_file_destroy(closing);
+ assert(sleeps==beforeSleep&&released==beforeRelease&&!quarantined.file&&liveAlloc==0);
+ // A mixed file still waits for the non-quarantined job up to the existing bound.
+ closing=static_cast<native_powervr_jobs_file*>(kzalloc(sizeof(native_powervr_jobs_file),GFP_KERNEL));
+ assert(closing);INIT_LIST_HEAD(&closing->jobs);INIT_LIST_HEAD(&gJobs.files);list_add_tail(&closing->link,&gJobs.files);
+ Job q{},normal{};q.file=normal.file=closing;q.quarantined=true;
+ list_add_tail(&q.file_link,&closing->jobs);list_add_tail(&normal.file_link,&closing->jobs);
+ beforeSleep=sleeps;native_powervr_jobs_file_destroy(closing);
+ assert(sleeps==beforeSleep+kMaxDeadlineMs&&!q.file&&!normal.file&&liveAlloc==0);
  puts("PASS actual FWCCB/WaitFence/close: compressed ranges, saturation fail-closed, concurrent waits, close, reset and timeout; ASan/UBSan");
 }
 '''

@@ -79,7 +79,7 @@ for signature in ('extern "C" int native_powervr_vm_map_sg(',
 h += r'''
 struct native_powervr_bo{const native_powervr_sg *sg;uint32_t nents;uint64_t flags;void *hostMap;unsigned refs=1;};
 struct Mapping {uint64_t addr,range,offset;native_powervr_bo *bo;};
-struct native_powervr_vm_context{native_powervr_vm *vm;Mapping entries[4]{};Mapping *maps=entries;uint32_t count=0;};
+struct native_powervr_vm_context{native_powervr_vm *vm;bool quarantined=false;Mapping entries[4]{};Mapping *maps=entries;uint32_t count=0;};
 static int vmReserve(native_powervr_vm_context *,unsigned n){assert(n==2);return 0;}
 static uint32_t vmFirstEndingAfter(const native_powervr_vm_context *c,uint64_t a){unsigned i=0;while(i<c->count&&c->maps[i].addr+c->maps[i].range<=a)++i;return i;}
 static void vmInsertAt(native_powervr_vm_context *c,unsigned i,Mapping m){assert(i==c->count&&c->count<4);c->maps[c->count++]=m;}
@@ -125,6 +125,13 @@ int main(){
   assert(barriers==(authenticated&&bypass?1u:0u));
   if(!r){assert(ctx.maps[0].addr==expectedVA&&ctx.maps[0].range==expectedSize&&ctx.maps[0].offset==expectedOffset&&ctx.maps[0].bo==&bo);}
   ++fixtures;
+ }
+ // A quarantined VM rejects both ordinary and scanout mapping before any side effect.
+ for(bool authenticated:{false,true}){
+  reset(); native_powervr_bo bo{spans,2,DRM_PVR_BO_BYPASS_DEVICE_CACHE,authenticated?(void*)1:nullptr};
+  native_powervr_vm_context ctx{&vm};ctx.quarantined=true;
+  assert(vmMapLocked(&ctx,&bo,expectedOffset,expectedVA,expectedSize)==-EIO);
+  assert(ctx.count==0&&bo.refs==1&&!allocs&&!creates&&!maps&&!flushes&&!dataSyncs&&!barriers);++fixtures;
  }
  printf("PASS %u actual-function cases: regular DMA retained, authenticated scanout barrier-only, BYPASS required, MMU backing sync/flush retained, args/failures/refcounts/routing\n",fixtures);
 }

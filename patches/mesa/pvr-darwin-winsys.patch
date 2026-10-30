@@ -2637,9 +2637,9 @@ index 0000000..32176f8
 +                        &reply,
 +                        sizeof(reply));
 +   if (kr != KERN_SUCCESS) {
-+      /* VK_ERROR_OUT_OF_DEVICE_MEMORY as the powervr winsys returns, to match pvrsrv. */
++      /* An I/O failure can mean a KICK was enqueued but its completion is unknown. */
 +      return vk_errorf(NULL,
-+                       VK_ERROR_OUT_OF_DEVICE_MEMORY,
++                       kr == kIOReturnIOError ? VK_ERROR_DEVICE_LOST : VK_ERROR_OUT_OF_DEVICE_MEMORY,
 +                       "Failed to submit %s job: 0x%x",
 +                       what,
 +                       kr);

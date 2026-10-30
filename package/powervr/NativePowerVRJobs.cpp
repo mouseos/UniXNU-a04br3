@@ -2088,7 +2088,11 @@ extern "C" void native_powervr_jobs_file_destroy(struct native_powervr_jobs_file
   bool empty = false;
   for (uint32_t ms = 0; ms < kMaxDeadlineMs; ms++) {
     IOLockLock(gJobs.lock);
-    empty = list_empty(&file->jobs);
+    empty = true;
+    Job *pending;
+    list_for_each_entry(pending, &file->jobs, file_link) {
+      if (!pending->quarantined) { empty = false; break; }
+    }
     IOLockUnlock(gJobs.lock);
     if (empty) break;
     IOSleep(1);
