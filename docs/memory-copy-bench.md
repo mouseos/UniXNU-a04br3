@@ -221,3 +221,23 @@ only as a later log marker; its timestamp is not the VM sample time. User and
 kernel clock epochs, cache freshness, background workload and free-memory
 safety are not established by these reports. Successful host fixtures do not
 establish iOS compilation, signing, target execution, or performance.
+
+
+The offline parser requires `--expect kernel-vm|observe|copy`. Kernel VM
+mode only reports whether kernel VM rows were found; it does not claim a
+standalone diagnostic succeeded. The new single-shot protocol records begin
+and end with kind and size. Observe and copy success require one complete
+ordered sequence, VM records, and for copy a consistent reserve check and a
+verified result of the expected `--size-bytes`. Missing, partial, error and
+explicit skip are distinct non-success statuses (exit 2); malformed input is
+an error (exit 1). An earlier binary without begin/end cannot prove success.
+Combine stdout and stderr in original write order for the capture; UART loss,
+interleaving or buffering can make the record incomplete.
+
+To bind a first boot to existing capture evidence provide all of
+`--capture-json`, `--flash-json`, `--snapshot` and `--flash-log`. The parser
+checks recorded hashes, flash log success markers, offsets, exact raw slice
+and the next preloader. This is evidence of the recorded flash operation and
+boot segmentation, not independent authentication of the runtime image or a
+proof that UART lost no bytes. Without the files, image identity remains a
+caller claim and end-of-boot closure is unverified.

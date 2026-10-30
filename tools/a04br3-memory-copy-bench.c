@@ -78,7 +78,7 @@ static uint64_t now_ns(void) {
 static int run_copy(size_t size, int checked) {
     printf("a04br3_mem_copy synthetic=1 phase=prepare size_bytes=%zu monotonic_ns=%" PRIu64 "\n", size, now_ns());
 #ifdef __APPLE__
-    if (!checked && enough_free_memory(size, 0) != 1) return 1;
+    if (!checked) { int available = enough_free_memory(size, 0); if (available != 1) return available == 0 ? 2 : 1; }
 #endif
     (void)checked;
     unsigned char *src = malloc(size), *dst = malloc(size);
@@ -109,13 +109,18 @@ static void wait_seconds(unsigned seconds) {
     while (seconds) seconds = sleep(seconds);
 }
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
     if (argc == 2 && !strcmp(argv[1], "--observe")) {
+        printf("a04br3_mem_copy phase=begin kind=observe size_bytes=0\n");
 #ifdef __APPLE__
-        return enough_free_memory(0, 1) == 1 ? 0 : 1;
+        int rc = enough_free_memory(0, 1) == 1 ? 0 : 1;
 #else
         fprintf(stderr, "a04br3_mem_copy phase=skip reason=vm_statistics_unavailable\n");
-        return 1;
+        int rc = 1;
 #endif
+        printf("a04br3_mem_copy phase=end kind=observe status=%s\n", rc ? "error" : "ok");
+        return rc;
     }
     if (argc == 2 && !strcmp(argv[1], "--boot-run")) {
         if (!freopen("/dev/console", "w", stdout) || !freopen("/dev/console", "w", stderr)) return 1;
@@ -163,5 +168,9 @@ int main(int argc, char **argv) {
         (kib ? (mib != 64 && mib != 256 && mib != 1024) : (mib < 1 || mib > 64))) {
         fprintf(stderr, "invalid copy size\n"); return 2;
     }
-    return run_copy((size_t)mib * (kib ? 1024 : 1024 * 1024), 0);
+    size_t size = (size_t)mib * (kib ? 1024 : 1024 * 1024);
+    printf("a04br3_mem_copy phase=begin kind=copy size_bytes=%zu\n", size);
+    int rc = run_copy(size, 0);
+    printf("a04br3_mem_copy phase=end kind=copy status=%s\n", rc == 0 ? "ok" : rc == 2 ? "skip" : "error");
+    return rc ? 1 : 0;
 }

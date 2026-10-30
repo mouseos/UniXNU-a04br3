@@ -16,7 +16,7 @@ class MemoryCopyBenchTest(unittest.TestCase):
             for args in [[], ['--run', '0'], ['--run', '65'], ['--run', '-1'], ['--run', '1x'], ['1']]:
                 self.assertEqual(subprocess.run([str(binary), *args], capture_output=True).returncode, 2)
             result = subprocess.run([str(binary), '--run', '1'], capture_output=True, text=True, check=True)
-            row = dict(item.split('=', 1) for item in result.stdout.splitlines()[-1].split()[1:])
+            row = dict(item.split('=', 1) for item in next(line for line in result.stdout.splitlines() if ' threads=' in line).split()[1:])
             self.assertEqual(row['synthetic'], '1')
             self.assertEqual(row['verified'], '1')
             self.assertEqual(int(row['logical_bytes']), 1048576)
