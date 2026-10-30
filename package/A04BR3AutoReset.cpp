@@ -333,7 +333,7 @@ static void rtcCaptureThread(void *, wait_result_t)
     if (!panic_active()) IOLog("a04br3 rtc-ref unavailable=gate-busy\n");
     thread_terminate(current_thread()); return;
   }
-  const bool acquired = !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE);
+  const bool acquired = !panic_active() && !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE);
   if (acquired) {
     __atomic_store_n(&gRtcCaptureActive,1U,__ATOMIC_RELEASE);
     __atomic_store_n(&a04br3_runtime_probe_active,1U,__ATOMIC_RELEASE);
@@ -363,7 +363,8 @@ static void rtcCaptureThread(void *, wait_result_t)
   // lost, or panic is active. Safe data/lock failures do not poison the gate.
   bool released=false;
   if (!quarantined && __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) {
-    while (!panic_active() && __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) {
+    for (unsigned retry=0; retry<1000 && !panic_active() &&
+         __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE); ++retry) {
       if (!gWatchdogGate.lock()) { IOSleep(1); continue; }
       if (!panic_active() && __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE) &&
           __atomic_load_n(&gRtcCaptureActive,__ATOMIC_ACQUIRE) &&
@@ -377,7 +378,8 @@ static void rtcCaptureThread(void *, wait_result_t)
     }
   }
   if (panic_active()) { thread_terminate(current_thread()); return; }
-  IOLog("a04br3 rtc-ref samples=%u valid=%u reason=%u rtc_seconds=%u min_ticks=%llu max_ticks=%llu owner=unverified timebase=uncalibrated rtc_rate=unverified alias=unverified recovery=unverified\n",n,static_cast<unsigned>(complete && b.valid && released),stopReason,b.rtcSeconds,static_cast<unsigned long long>(b.minTicks),static_cast<unsigned long long>(b.maxTicks));
+  if (!released && !quarantined && !stopReason) stopReason=5;
+  IOLog("a04br3 rtc-ref samples=%u valid=%u reason=%u released=%u rtc_seconds=%u min_ticks=%llu max_ticks=%llu owner=unverified timebase=uncalibrated rtc_rate=unverified alias=unverified recovery=unverified\n",n,static_cast<unsigned>(complete && b.valid && released),stopReason,static_cast<unsigned>(released),b.rtcSeconds,static_cast<unsigned long long>(b.minTicks),static_cast<unsigned long long>(b.maxTicks));
   thread_terminate(current_thread());
 }
 #endif

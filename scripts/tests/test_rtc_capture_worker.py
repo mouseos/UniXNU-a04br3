@@ -23,9 +23,9 @@ pre=r'''
 #include "A04BR3WatchdogGate.h"
 static A04BR3WatchdogGate gWatchdogGate={}; static uint32_t gRtcCaptureActive;
 using wait_result_t=int;
-static unsigned commands=0, clears=0, slept=0, rows=0, finished=0, expectedValid=1, expectedCount=64, failAt=0, panicAt=0, fault=0, stateAt=0, summaries=0, gateFailures=0, gateAttempts=0, releaseFailures=0, retrySleeps=0, unavailable=0;
+static unsigned commands=0, clears=0, slept=0, rows=0, finished=0, expectedValid=1, expectedCount=64, failAt=0, panicAt=0, fault=0, stateAt=0, summaries=0, gateFailures=0, gateAttempts=0, releaseFailures=0, retrySleeps=0, unavailable=0, panicOnAcquire=0, manualPanic=0;
 static bool held=false, issued=false, cleared=false;
-static bool test_gate_lock(){++gateAttempts;if(gateFailures){--gateFailures;return false;}return gWatchdogGate.lock();}
+static bool test_gate_lock(){++gateAttempts;if(gateFailures){--gateFailures;return false;}bool ok=gWatchdogGate.lock();if(ok && !gRtcCaptureActive && panicOnAcquire)manualPanic=1;return ok;}
 struct MockLease {uint32_t state;}; static MockLease gRuntimePmuLease={};
 extern "C" bool a04br3_runtime_probe_end_checked(void);
 static volatile uint8_t *gPwrap=nullptr;
@@ -36,13 +36,13 @@ static void a04br3_pwrap_unlock(){assert(held);held=false;}
 static uint32_t rd(volatile uint8_t *,unsigned){assert(held);if(!issued || cleared){if(fault==2 && commands==63 && !issued)return (1u<<21)|(6u<<16); if(fault==3 && commands==64 && cleared)return (1u<<21)|(6u<<16); return 1u<<21;}if(failAt && commands==failAt)return 1u<<21;if(fault==4 && commands==64)return (1u<<21)|(6u<<16)|60u;return (1u<<21)|(6u<<16)|(fault==7?0:((commands-1)/20));}
 static void wr(volatile uint8_t *,unsigned off,uint32_t v){assert(held);if(off==kWacsCmd){assert((v>>31)==0 && ((v>>16)&0x7fffU)*2U==0x800aU && (v&0xffffU)==0);++commands;issued=true;cleared=false;}else{assert(off==kWacsVldclr && v==1);++clears;cleared=true;}}
 static uint64_t ticks=0; static uint64_t mockTimer(){return ticks+=10;}
-static unsigned panic_active(){return panicAt && slept>=panicAt;}
+static unsigned panic_active(){return manualPanic || (panicAt && slept>=panicAt);}
 static void IOSleep(unsigned x){if(x==1){++retrySleeps;return;}assert(x==50 && !held);++slept;if(slept==64)gateFailures=releaseFailures;if(stateAt && slept==stateAt){if(fault==5){assert(!gWatchdogGate.begin(&a04br3_runtime_probe_active));assert(!a04br3_runtime_probe_end_checked());bool kicked=false;assert(!gWatchdogGate.feed(&a04br3_runtime_probe_active,true,[&]{kicked=true;}));assert(!kicked);}if(fault==6)a04br3_runtime_recovery_ready=0;}issued=false;}
 static int current_thread(){return 1;} static void thread_terminate(int){++finished;}
-static void IOLog(const char *fmt,...){va_list ap;va_start(ap,fmt);if(strstr(fmt,"samples=%u")){++summaries;unsigned count=va_arg(ap,unsigned);unsigned valid=va_arg(ap,unsigned);assert(valid==expectedValid);assert(count==expectedCount);}else if(strstr(fmt,"unavailable=")){++unavailable;}else {assert(strstr(fmt,"rtc-ref-row"));++rows;}va_end(ap);}
+static void IOLog(const char *fmt,...){va_list ap;va_start(ap,fmt);if(strstr(fmt,"samples=%u")){++summaries;unsigned count=va_arg(ap,unsigned);unsigned valid=va_arg(ap,unsigned);assert(valid==expectedValid);assert(count==expectedCount);unsigned reason=va_arg(ap,unsigned);unsigned released=va_arg(ap,unsigned);assert(released==unsigned(!gRtcCaptureActive));if(releaseFailures>=1000)assert(reason==5 && !released);}else if(strstr(fmt,"unavailable=")){++unavailable;}else {assert(strstr(fmt,"rtc-ref-row"));++rows;}va_end(ap);}
 '''
 main=r'''
-static void reset(){commands=clears=slept=rows=finished=summaries=retrySleeps=unavailable=releaseFailures=0;held=issued=cleared=false;failAt=panicAt=fault=stateAt=gateFailures=gateAttempts=0;expectedCount=64;expectedValid=0;a04br3_runtime_probe_active=0;gRtcCaptureActive=0;gWatchdogGate.busy=0;a04br3_runtime_recovery_ready=1;}
+static void reset(){commands=clears=slept=rows=finished=summaries=retrySleeps=unavailable=releaseFailures=panicOnAcquire=manualPanic=0;held=issued=cleared=false;failAt=panicAt=fault=stateAt=gateFailures=gateAttempts=0;expectedCount=64;expectedValid=0;a04br3_runtime_probe_active=0;gRtcCaptureActive=0;gWatchdogGate.busy=0;a04br3_runtime_recovery_ready=1;}
 int main(){
  reset();expectedValid=1;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==64 && rows==64 && summaries==1 && finished==1);
  reset();failAt=1;expectedCount=1;rtcCaptureThread(nullptr,0);assert(commands==1 && clears==0 && rows==1 && held && summaries==1 && a04br3_runtime_probe_active && gRtcCaptureActive);
@@ -50,7 +50,9 @@ int main(){
  for(unsigned kind=1;kind<=4;kind++){reset();fault=kind;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && finished==1);if(kind==2 || kind==3)assert(held && a04br3_runtime_probe_active);else assert(!held && !a04br3_runtime_probe_active);}
  reset();fault=7;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  reset();gateFailures=3;expectedValid=1;rtcCaptureThread(nullptr,0);assert(gateAttempts==5 && retrySleeps==3 && !a04br3_runtime_probe_active && summaries==1);
- reset();releaseFailures=4097;expectedValid=1;rtcCaptureThread(nullptr,0);assert(gateAttempts==4099 && retrySleeps==4097 && !a04br3_runtime_probe_active && summaries==1);
+ reset();releaseFailures=999;expectedValid=1;rtcCaptureThread(nullptr,0);assert(gateAttempts==1001 && retrySleeps==999 && !a04br3_runtime_probe_active && summaries==1);
+ reset();releaseFailures=1000;rtcCaptureThread(nullptr,0);assert(gateAttempts==1001 && retrySleeps==1000 && a04br3_runtime_probe_active && summaries==1);
+ reset();panicOnAcquire=1;rtcCaptureThread(nullptr,0);assert(!commands && !summaries && !unavailable && !gRtcCaptureActive && !a04br3_runtime_probe_active && finished==1);
  reset();gateFailures=100;rtcCaptureThread(nullptr,0);assert(gateAttempts==100 && retrySleeps==100 && unavailable==1 && !a04br3_runtime_probe_active);
  reset();fault=5;stateAt=64;expectedValid=1;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && !a04br3_runtime_probe_active);
  reset();fault=6;stateAt=64;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && a04br3_runtime_probe_active);
