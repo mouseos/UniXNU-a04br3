@@ -114,8 +114,13 @@ if pmuv3 == '1':
         require_cpu_counters_disabled(config)
     except ValueError as error:
         raise SystemExit(str(error)) from error
+rtc_ref = os.environ.get('XNU_A04BR3_RTC_REF', '0')
+if rtc_ref not in ('0', '1'):
+    raise SystemExit('XNU_A04BR3_RTC_REF must be 0 or 1')
 for name in CXX_SOURCES:
     extra = ['-DA04BR3_PMUV3_EXPERIMENT=1'] if pmuv3 == '1' and name == 'A04BR3AutoReset.cpp' else []
+    if rtc_ref == '1' and name == 'A04BR3AutoReset.cpp':
+        extra += ['-DA04BR3_RTC_REF=1']
     objects.append(compile_one(cxx_record, KIT / name, CXX_FLAGS + extra))
 c_record = record('bsd/DEVELOPMENT/kern_exec.o.json')
 for name in C_SOURCES:

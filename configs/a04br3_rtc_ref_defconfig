@@ -1,0 +1,60 @@
+# Kernel configuration of the a04br3 image. CONFIG_XNU_<NAME> becomes XNU_<NAME> for the kernel build.
+# Starts from configs/sheng_defconfig of UniXNU-sheng without the Qualcomm board drivers (UFS, Adreno, PMGR).
+# MT8167 is a Cortex-A35 (ARMv8.0): no PAN, so NATIVE_PAN stays off.
+
+CONFIG_XNU_BUILD_ARCHIVES=y
+CONFIG_XNU_SOURCE_CORECRYPTO14=y
+CONFIG_XNU_SOURCE_PTHREAD=y
+CONFIG_XNU_ARM_DT_PLATFORM=y
+CONFIG_XNU_ARMCPU=y
+CONFIG_XNU_NATIVE_AES=y
+CONFIG_XNU_NATIVE_RAM_BLOCK=y
+# Owner root chain of UniXNU-sheng and UniXNU-tb128fu: the root is accepted when NativeMsdc has verified it against the
+# owner-signed policy (board.toml archives, scripts/make-a04br3-root-policy.py).
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK=y
+CONFIG_XNU_VERIFIED_ROOT_PROBE=y
+CONFIG_XNU_OWNER_ROOT_AUDIT=y
+CONFIG_XNU_OWNER_ROOT_TRUST=y
+# After the root: the SystemOS cryptex (dyld cache) and the Data volume of the payload's Data seed, as on sheng. The Data
+# volume UUID changes with every seed, so a04br3-pre-build.sh exports XNU_OWNER_DATA_VOLUME_UUID of the seed it makes.
+CONFIG_XNU_OWNER_CACHE_MOUNT=y
+CONFIG_XNU_OWNER_CACHE_STARTUP=y
+CONFIG_XNU_OWNER_BOOT_MANIFEST=y
+CONFIG_XNU_OWNER_DATA_MOUNT=y
+CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
+# The original-PMGR bridge (board.toml archives: build-platform-power.py).
+CONFIG_XNU_SHENG_PMGR=y
+CONFIG_XNU_TRUST_CACHE_RUNTIME=y
+CONFIG_XNU_SOURCE_MOCKFS=y
+CONFIG_XNU_NATIVE_CS_HASH_CACHE=y
+CONFIG_XNU_DT_PANIC_REGION=y
+CONFIG_XNU_NATIVE_ARCH_TIMER=y
+
+CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/native-virtio-block-verified/libNativeVirtioBlock.a"
+CONFIG_XNU_VERIFIED_ROOT_ARCHIVE="{tree}/build/a04br3-root-key/libA04BR3RootKey.a"
+CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/a04br3-board/libA04BR3Board.a"
+CONFIG_XNU_NATIVE_PAN=n
+CONFIG_XNU_NATIVE_UFS=n
+CONFIG_XNU_NATIVE_ADRENO=n
+CONFIG_XNU_NATIVE_MOBILE_DISPLAY=n
+# The display as on UniXNU-tb128fu: NativeLegacyDisplay (a subclass of the original IOMobileFramebufferLegacy) on the firmware
+# frame buffer, QuartzCore's CPU renderer and the HID input (board.toml archives: scripts/build-a04br3-legacy-display.py).
+CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
+CONFIG_XNU_ARMVIRT_PLATFORM=n
+CONFIG_XNU_ARMCPU_GICV2=y
+# Runtime PMU experiments require the explicit a04br3_pmu_defconfig.
+CONFIG_XNU_ARMCPU_A04BR3_RUNTIME=n
+CONFIG_XNU_NS16550_UART=y
+CONFIG_XNU_BOARD_INIT=y
+# The pre-launchd board hook (unixnu_board_launch, package/A04BR3Board.cpp): the launchd disabled-jobs policy. It takes
+# effect once UniXNU carries upstream/UniXNU (patch native-board-launch-hook); until then the flag is not read and
+# scripts/a04br3-seed-launch-policy.py writes the same policy into the Data seed.
+CONFIG_XNU_BOARD_LAUNCH=y
+# eMMC (MSDC0) driver, UniXNU drivers/NativeMsdc. Inert unless native-msdc-root or native-msdc-persist is set.
+# CONFIG_XNU_NATIVE_MSDC_BLOCK=y adds the userdata windows as block devices, bound to the original IOBlockStorageDevice (board.toml).
+CONFIG_XNU_NATIVE_MSDC=y
+CONFIG_XNU_NATIVE_MSDC_BLOCK=y
+
+# Opt-in RTC seconds and generic timer capture; hardware qualification remains unverified.
+CONFIG_XNU_A04BR3_RTC_REF=y

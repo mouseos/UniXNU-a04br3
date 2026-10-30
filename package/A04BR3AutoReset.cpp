@@ -25,6 +25,10 @@
 #include "A04BR3RegisterLock.h"
 #include "A04BR3WatchdogGate.h"
 #include "A04BR3PmuLease.h"
+#if defined(A04BR3_RTC_REF) && A04BR3_RTC_REF
+#include "A04BR3RtcWacs.h"
+#include "A04BR3RtcReference.h"
+#endif
 #include <IOKit/IOPlatformExpert.h>
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
@@ -301,6 +305,47 @@ void sendShot(void)
   uartPuts("A04BR3SHOT END\r\n");
 }
 
+#if defined(A04BR3_RTC_REF) && A04BR3_RTC_REF
+// Experimental MT6392 seconds read. Local PWRAP serialization only; neither
+// firmware exclusion nor RTC/counter calibration is established.
+struct RtcCaptureIO {
+  bool lock() { return a04br3_pwrap_try_lock(); }
+  void unlock() { a04br3_pwrap_unlock(); }
+  uint32_t status() { return rd(gPwrap, kWacsRdata); }
+  void command(uint32_t v) { wr(gPwrap,kWacsCmd,v); }
+  void clear() { wr(gPwrap,kWacsVldclr,1); }
+  uint64_t timer() { uint64_t v; __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(v) :: "memory"); return v; }
+};
+struct RtcCaptureRow { uint64_t before, after; unsigned sec, status, quarantine, initial, last, response; };
+static void rtcCaptureThread(void *, wait_result_t)
+{
+  RtcCaptureIO io; A04BR3RtcReference state={}; RtcCaptureRow rows[64]={};
+  unsigned n=0, stopReason=0; bool allOk=true;
+  for (; n<64; ++n) {
+    if (panic_active()) {stopReason=1;break;}
+    if (__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)) {stopReason=2;break;}
+    if (!__atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) {stopReason=3;break;}
+    rows[n].before=io.timer();
+    A04BR3RtcWacsResult r=a04br3_rtc_wacs_read(io);
+    rows[n].after=io.timer(); rows[n].sec=r.second; rows[n].status=r.status; rows[n].quarantine=r.quarantined; rows[n].initial=r.initial; rows[n].last=r.last; rows[n].response=r.response;
+    const bool observed = r.status==rtcOk && a04br3_rtc_observe(state,{rows[n].before,rows[n].after,r.second});
+    if (panic_active()) { thread_terminate(current_thread()); return; }
+    IOLog("a04br3 rtc-ref-row n=%u before=%llu after=%llu sec=%u status=%u quarantine=%u initial=%08x last=%08x response=%08x\n",n,static_cast<unsigned long long>(rows[n].before),static_cast<unsigned long long>(rows[n].after),rows[n].sec,rows[n].status,rows[n].quarantine,rows[n].initial,rows[n].last,rows[n].response);
+    if (!observed) {stopReason=4;allOk=false;++n;break;}
+    IOSleep(50);
+  }
+  if (panic_active()) { thread_terminate(current_thread()); return; }
+  if (!stopReason && __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)) stopReason=2;
+  if (!stopReason && !__atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) stopReason=3;
+  const auto b=a04br3_rtc_bounds(state);
+  const bool complete = n==64 && allOk && !state.invalid &&
+      !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE) &&
+      __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE);
+  IOLog("a04br3 rtc-ref samples=%u valid=%u reason=%u rtc_seconds=%u min_ticks=%llu max_ticks=%llu owner=unverified timebase=uncalibrated rtc_rate=unverified alias=unverified recovery=unverified\n",n,static_cast<unsigned>(complete && b.valid),stopReason,b.rtcSeconds,static_cast<unsigned long long>(b.minTicks),static_cast<unsigned long long>(b.maxTicks));
+  thread_terminate(current_thread());
+}
+#endif
+
 void cycleThread(void *, wait_result_t)
 {
   const uint64_t started = mach_absolute_time();
@@ -433,5 +478,23 @@ extern "C" void a04br3_autoreset_init(void)
     thread_deallocate(thread);
   } else {
     IOLog("a04br3-autoreset: thread start failed; the watchdog still resets\n");
+    return;
   }
+#if defined(A04BR3_RTC_REF) && A04BR3_RTC_REF
+  unsigned request=0, cm=0, arw=0, longArw=0, arc=0, longArc=0, cc=0, longCc=0;
+  const bool requested=PE_parse_boot_argn("rtc-ref",&request,sizeof(request)) && request==1;
+  PE_parse_boot_argn("cm",&cm,sizeof(cm));
+  PE_parse_boot_argn("arw",&arw,sizeof(arw));
+  PE_parse_boot_argn("armcpu-runtime-window",&longArw,sizeof(longArw));
+  PE_parse_boot_argn("arc",&arc,sizeof(arc));
+  PE_parse_boot_argn("armcpu-runtime-cycle",&longArc,sizeof(longArc));
+  PE_parse_boot_argn("cc",&cc,sizeof(cc));
+  PE_parse_boot_argn("armcpu-cycle-clock",&longCc,sizeof(longCc));
+  if (requested && !cm && !arw && !longArw && !arc && !longArc && !cc && !longCc && seconds>=30 &&
+      __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) {
+    thread_t capture=nullptr;
+    if (kernel_thread_start(rtcCaptureThread,nullptr,&capture)==KERN_SUCCESS) thread_deallocate(capture);
+    else IOLog("a04br3 rtc-ref unavailable=thread-create\n");
+  } else if (requested) IOLog("a04br3 rtc-ref unavailable=precondition\n");
+#endif
 }

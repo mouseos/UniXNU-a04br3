@@ -1,21 +1,38 @@
 # RTC reference prototype for generic timer
 
-`A04BR3RtcReference.h` is a disconnected, single-step sampling prototype. It
-has no production caller, timer/RTC adapter, boot argument, register access or
-loop. It cannot currently measure hardware. The caller must provide a bounded,
-serialized seconds read bracketed by monotonic timer reads, and collect points
-with interrupts and preemption enabled. It returns outer timer-tick bounds for
-the elapsed number of RTC seconds between two observed transitions, not Hz.
+`A04BR3RtcReference.h` computes conservative intervals. This revision adds
+an experimental board adapter and worker in `A04BR3AutoReset.cpp`. The build
+script defaults `XNU_A04BR3_RTC_REF=0`; set it to `1` explicitly to compile.
+The `configs/a04br3_rtc_ref_defconfig` supplies that setting through the
+UniXNU XNU configuration environment. At boot, `rtc-ref=1`, `a04br3-autoreset` >= 30 and recovery-ready are required;
+any nonzero `cm`, `arw`, `armcpu-runtime-window`, `arc`,
+`armcpu-runtime-cycle`, `cc` or `armcpu-cycle-clock` refuses the request.
+It samples 64 times with scheduler sleeps of 50 ms and emits each raw CNTVCT
+brackets, RTC seconds and status, plus conditional aggregate ticks. It does not
+operate the CPU PMU or hardware frequency meter. The current PMU qualification
+remains unconditionally refused; this is not yet direct CPU clock measurement.
 
 The vendor MT6392 RTC driver reads the seconds register without RTC reload.
-Its WACS2 transport still issues command and valid-clear writes. The existing
-board WACS2 helper has a local lock but does not exclude secure firmware,
-other bus users, clock changes, stuck access or RTC time adjustment. Its loop
-is iteration bounded, not a proved wall-clock timeout. Do not connect this
-prototype to it or enable measurement until shared ownership, transactions,
-watchdog scheduling and recovery have been independently established.
+Each diagnostic transaction takes the existing board WACS2 nonblocking lock,
+requires idle/initialized state without clearing a foreign valid response,
+issues one read of 0x800a, waits up to 2048 polls for valid and clears only
+its own response. If the command was issued and completion or return to idle
+is uncertain, it retains the shared lock for the boot. That quarantine prevents
+known local users from touching a possibly pending transaction, but may disable
+touch, GPU power or recovery paths which use WACS2. The watchdog feeder runs
+independently; actual reset/recovery is unverified. The poll bound is not a
+wall-time guarantee and an MMIO trap or hang may never return. There is no
+exclusive lease against secure firmware, EL2/EL3 or debug agents. An opt-in
+is not proof of ownership, access safety, RTC source precision or completion.
+The worker holds no lock between samples and does not disable preemption.
+If interrupted, timed out or otherwise incomplete, the aggregate valid flag is
+zero. Even a valid aggregate is conditional on the assumptions below and is
+never a certified clock result. Each completed row is logged before the next sample; the summary follows
+only a non-panic exit. Missing summary means interrupted, not a valid result.
+UART delivery and flush are not guaranteed, and panic can lose the current
+row or any buffered data. Logging itself perturbs sampling and scheduling.
 
-A later adapter must identify RTC 0x800a on the actual PMIC, prove that each
+Before hardware use one must verify RTC 0x800a on the actual PMIC, prove that each
 read's returned value was sampled within its timer bracket (including caching
 and bridge latency), and independently prove that fewer than 60 RTC second updates occur between
 every pair of actual RTC sampling instants. A wall-clock gap below 60 seconds
@@ -30,8 +47,9 @@ record intervals and observed elapsed RTC ticks; do not label them a calibrated
 13 MHz or CPU frequency unless an independent RTC rate bound exists. The
 `clk32k` device-tree value is 32000 Hz, not a measured oscillator frequency.
 
-This candidate never overlaps the meter with PMU, and the existing board PMU
-qualification remains unconditionally refused. A calibrated RTC candidate
+The requested boot arguments exclude known meter and PMU modes; they cannot
+exclude an external owner or a separately started agent. The existing board
+PMU qualification remains unconditionally refused. A calibrated RTC candidate
 alone does not establish EL3/debug ownership, PMU trap safety or cycle-counter
 semantics. All hardware behavior, RTC accuracy and watchdog recovery remain
-unverified; no images or hardware use are authorized by these host tests.
+unverified. Host tests are not evidence that the hardware path is safe.
