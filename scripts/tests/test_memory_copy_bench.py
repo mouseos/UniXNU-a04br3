@@ -73,8 +73,8 @@ kern_return_t mach_port_deallocate(mach_port_t p,mach_port_t q) {(void)p;(void)q
 kern_return_t host_page_size(mach_port_t p,vm_size_t *n) {(void)p;*n=4096;return 0;}
 kern_return_t host_statistics64(mach_port_t p,int f,host_info64_t out,mach_msg_type_number_t *n) {
  (void)p;(void)f; ++calls;
- if (scenario==3) return 1;
- unsigned pages = scenario==11 ? 8192 : scenario==1 ? 8703 : scenario==2 && calls<=2 ? 10239 : scenario>=4 ? 11264 : 10240;
+ if (scenario==3 || scenario==15) return 1;
+ unsigned pages = (scenario==11 || scenario==14) ? 8192 : scenario==1 ? 8703 : scenario==2 && calls<=2 ? 10239 : scenario>=4 ? 11264 : 10240;
  unsigned spec = scenario==4 ? 1024 : scenario==5 ? 1025 : scenario==6 ? 11265 : 0;
  ((vm_statistics64_data_t *)out)->free_count=pages;
  ((vm_statistics64_data_t *)out)->speculative_count=spec;
@@ -89,8 +89,8 @@ kern_return_t host_statistics64(mach_port_t p,int f,host_info64_t out,mach_msg_t
 }
 int main(int argc,char **argv) {
  scenario=argc>1 ? atoi(argv[1]) : 0;
- char *args[]={"bench",scenario==9 ? "--observe" : scenario>=10 ? "--run-kib" : "--boot-run", "64",0};
- int result=bench_main(scenario>=10 ? 3 : 2,args);
+ char *args[]={"bench",scenario==9 ? "--observe" : scenario>=10 && scenario<=12 ? "--run-kib" : scenario>=13 ? "--boot-run" : "--legacy-boot-run", "64",0};
+ int result=bench_main(scenario>=10 && scenario<=12 ? 3 : 2,args);
  fprintf(stderr,"test waits=%u first=%u second=%u calls=%u result=%d\n",nw,waits[0],waits[1],calls,result);
  return result;
 }
@@ -151,6 +151,22 @@ int main(int argc,char **argv) {
             self.assertEqual(refused.returncode, 1)
             self.assertIn('reason=insufficient_free_pages', refused.stderr)
             self.assertNotIn('logical_bytes=', refused.stdout)
+            boot = subprocess.run([str(binary), '13'], text=True, capture_output=True, check=True)
+            self.assertIn('profile=low_impact_64k', boot.stdout)
+            self.assertIn('phase=begin kind=copy size_bytes=65536', boot.stdout)
+            self.assertIn('logical_bytes=65536 verified=1', boot.stdout)
+            self.assertIn('phase=end kind=copy status=ok', boot.stdout)
+            self.assertEqual(boot.stdout.count('logical_bytes='), 1)
+            self.assertIn('waits=1 first=180', boot.stderr)
+            self.assertIn('calls=1 result=0', boot.stderr)
+            for scenario, reason, status in ((14, 'insufficient_free_pages', 'skip'),
+                                              (15, 'vm_statistics_unavailable', 'error')):
+                boot_fail = subprocess.run([str(binary), str(scenario)], text=True, capture_output=True)
+                self.assertEqual(boot_fail.returncode, 1)
+                self.assertIn('reason=' + reason, boot_fail.stderr)
+                self.assertIn('phase=end kind=copy status=' + status, boot_fail.stdout)
+                self.assertNotIn('logical_bytes=', boot_fail.stdout)
+                self.assertIn('calls=1 result=1', boot_fail.stderr)
             invalid = subprocess.run([str(binary), '12'], text=True, capture_output=True)
             self.assertEqual(invalid.returncode, 1)
             self.assertIn('phase=error reason=invalid_elapsed', invalid.stdout)

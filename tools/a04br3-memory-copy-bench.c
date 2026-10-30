@@ -105,6 +105,13 @@ static int run_copy(size_t size, int checked) {
     return 0;
 }
 
+static int run_single_copy(size_t size) {
+    printf("a04br3_mem_copy phase=begin kind=copy size_bytes=%zu\n", size);
+    int rc = run_copy(size, 0);
+    printf("a04br3_mem_copy phase=end kind=copy status=%s\n", rc == 0 ? "ok" : rc == 2 ? "skip" : "error");
+    return rc ? 1 : 0;
+}
+
 static void wait_seconds(unsigned seconds) {
     while (seconds) seconds = sleep(seconds);
 }
@@ -123,6 +130,13 @@ int main(int argc, char **argv) {
         return rc;
     }
     if (argc == 2 && !strcmp(argv[1], "--boot-run")) {
+        if (!freopen("/dev/console", "w", stdout) || !freopen("/dev/console", "w", stderr)) return 1;
+        setvbuf(stdout, NULL, _IOLBF, 0);
+        printf("a04br3_mem_copy phase=waiting delay_seconds=180 profile=low_impact_64k\n");
+        wait_seconds(180);
+        return run_single_copy(64 * 1024);
+    }
+    if (argc == 2 && !strcmp(argv[1], "--legacy-boot-run")) {
         if (!freopen("/dev/console", "w", stdout) || !freopen("/dev/console", "w", stderr)) return 1;
         setvbuf(stdout, NULL, _IOLBF, 0);
         printf("a04br3_mem_copy synthetic=1 phase=waiting delay_seconds=180\n");
@@ -169,8 +183,5 @@ int main(int argc, char **argv) {
         fprintf(stderr, "invalid copy size\n"); return 2;
     }
     size_t size = (size_t)mib * (kib ? 1024 : 1024 * 1024);
-    printf("a04br3_mem_copy phase=begin kind=copy size_bytes=%zu\n", size);
-    int rc = run_copy(size, 0);
-    printf("a04br3_mem_copy phase=end kind=copy status=%s\n", rc == 0 ? "ok" : rc == 2 ? "skip" : "error");
-    return rc ? 1 : 0;
+    return run_single_copy(size);
 }

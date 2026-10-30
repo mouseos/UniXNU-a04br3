@@ -81,7 +81,7 @@ on macOS, and GPU functionality of its output is not verified.
 The board hook spawns `/private/var/ngpu/bin/a04br3-memory-copy-bench` only
 when `a04br3-membench=1` (or the matched profile's `mb=1`) is present. After
 the process reaches its entry point and opens `/dev/console`, it waits 180
-seconds. It tries 4 MiB and then 1 MiB per buffer, up to three single-copy
+seconds. `--boot-run` now performs one 64 KiB copy after this wait, with one VM snapshot and the same reserve guard; its output goes to `/dev/console`. The former sequence remains available explicitly as `--legacy-boot-run`; it tries 4 MiB and then 1 MiB per buffer, up to three single-copy
 samples per size, with at least 10 seconds between samples. Each attempt checks
 memory before allocation. If insufficient, it retries twice at 15-second
 intervals, then skips the remainder of that size and tries the next size.
@@ -203,13 +203,12 @@ as a total. The query itself is not zero-cost and is subject to host API limits.
 
 `--run-kib 64`, `--run-kib 256` and `--run-kib 1024` perform exactly one
 single-threaded verified copy, with two buffers of that size and the existing
-32 MiB reserve and non-speculative free check. No retry, wait loop or automatic
-boot launch is added. A small buffer can fit cache; results at different sizes
+32 MiB reserve and non-speculative free check. Explicit invocations have no retry or wait loop. A small buffer can fit cache; results at different sizes
 are not interchangeable, and no DRAM bandwidth claim follows. To compare, use
 the same binary hash, size, boot image, workload phase, thermal/power state and
 number of separate runs; retain skips and timings instead of weakening the
 reserve when free memory is low. The existing `--run 1` is the matching 1 MiB
-size; boot mode remains unchanged. `--observe` is available only on Apple
+size. The opt-in boot hook invokes the 64 KiB profile through `--boot-run`; the off profile does not start this binary. `--observe` is available only on Apple
 platforms; no Linux VM estimate is substituted.
 
 For a fixed, independently identified first-boot raw file, the offline
