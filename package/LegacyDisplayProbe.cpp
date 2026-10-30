@@ -52,6 +52,103 @@ static bool publishOrMatchWord(IORegistryEntry *entry,const char *key,uint32_t v
     OSData *data=OSData::withBytes(&value,sizeof(value));
     bool result=data && entry->setProperty(key,data);OSSafeReleaseNULL(data);added=result;return result;
 }
+// ---- Input-to-display latency (a04br3-input-latency=1, default off) ------------------------------------------------------------
+// One sample at a time, all times from mach_absolute_time on the kernel's clock:
+//   rx      the host's UART request was received (A04BR3AutoReset.cpp: A04BR3!HOME, A04BR3!SWR)
+//   hid     the request left the board for iPadOS (HidInputProbe.cpp hands Home to NativeHidInput; A04BR3Input.cpp starts the swipe)
+//   swap    the first swap the compositor submitted and the display accepted after rx
+//   present the first frame completed into the scanout after rx (CPU copy or GPU hand-off), and the frames in the 2 s after it
+// The sample closes 2 s after its first present, or after 60 s without one, and prints one "a04br3 latency:" line. A request that
+// arrives while a sample is open is passed on to iPadOS but not measured (the line says so). The idle time before rx shows whether
+// unrelated frames (the lock screen clock) were near. scripts/a04br3-input-latency.py drives the inputs and summarizes the lines.
+namespace {
+struct LatencySample {
+    uint32_t seq,kind,framesAfter;bool open;
+    uint64_t rx,hid,swap,present,idle;
+};
+LatencySample gLatency;
+IOSimpleLock *gLatencyLock;
+int gLatencyEnabled=-1;
+volatile uint64_t gLatencyLastPresent;
+bool latencyEnabled(void) {
+    if(gLatencyEnabled<0){unsigned v=0;PE_parse_boot_argn("a04br3-input-latency",&v,sizeof v);gLatencyEnabled=(v==1);}
+    return gLatencyEnabled==1;
+}
+uint64_t latencyMs1000(uint64_t from,uint64_t to) {   // microseconds between two absolute times, 0 when to is unset
+    if(!to || to<from)return 0;
+    uint64_t ns=0;absolutetime_to_nanoseconds(to-from,&ns);return ns/1000;
+}
+const char *latencyKind(uint32_t kind) {return kind==1?"home":kind==2?"swipe":"other";}
+}
+extern "C" {
+volatile uint32_t a04br3_latency_samples,a04br3_latency_skipped;
+// Opens a sample for a host input of the given kind (1 Home, 2 swipe). Returns its sequence number, 0 when not measured.
+unsigned a04br3_latency_input(unsigned kind) {
+    if(!latencyEnabled())return 0;
+    if(!gLatencyLock)gLatencyLock=IOSimpleLockAlloc();   // first caller is the single UART thread
+    if(!gLatencyLock)return 0;
+    const uint64_t now=mach_absolute_time();
+    IOSimpleLockLock(gLatencyLock);
+    unsigned seq=0;
+    if(!gLatency.open) {
+        const uint64_t last=gLatencyLastPresent;
+        a04br3_latency_samples=a04br3_latency_samples+1;
+        gLatency=LatencySample{a04br3_latency_samples,kind,0,true,now,0,0,0,last?now-last:0};
+        seq=gLatency.seq;
+    } else a04br3_latency_skipped=a04br3_latency_skipped+1;
+    IOSimpleLockUnlock(gLatencyLock);
+    if(!seq)IOLog("a04br3 latency: kind=%s input not measured, sample %u still open\n",latencyKind(kind),gLatency.seq);
+    return seq;
+}
+void a04br3_latency_hid(void) {
+    if(!gLatencyLock)return;
+    const uint64_t now=mach_absolute_time();
+    IOSimpleLockLock(gLatencyLock);
+    if(gLatency.open && !gLatency.hid)gLatency.hid=now;
+    IOSimpleLockUnlock(gLatencyLock);
+}
+void a04br3_latency_swap(void) {
+    if(!gLatencyLock)return;
+    const uint64_t now=mach_absolute_time();
+    IOSimpleLockLock(gLatencyLock);
+    if(gLatency.open && !gLatency.swap)gLatency.swap=now;
+    IOSimpleLockUnlock(gLatencyLock);
+}
+void a04br3_latency_present(void) {
+    const uint64_t now=mach_absolute_time();
+    gLatencyLastPresent=now;
+    if(!gLatencyLock)return;
+    IOSimpleLockLock(gLatencyLock);
+    if(gLatency.open) {
+        if(!gLatency.present)gLatency.present=now;
+        else gLatency.framesAfter++;
+    }
+    IOSimpleLockUnlock(gLatencyLock);
+}
+// Called every 100 ms by the UART thread: closes and prints the open sample when it is complete or has timed out.
+void a04br3_latency_poll(void) {
+    if(!gLatencyLock)return;
+    uint64_t twoSeconds=0,minute=0;
+    nanoseconds_to_absolutetime(2ull*NSEC_PER_SEC,&twoSeconds);nanoseconds_to_absolutetime(60ull*NSEC_PER_SEC,&minute);
+    const uint64_t now=mach_absolute_time();
+    LatencySample done{};bool report=false;
+    IOSimpleLockLock(gLatencyLock);
+    if(gLatency.open && ((gLatency.present && now-gLatency.present>=twoSeconds) || now-gLatency.rx>=minute)) {
+        gLatency.open=false;done=gLatency;report=true;
+    }
+    IOSimpleLockUnlock(gLatencyLock);
+    if(!report)return;
+    uint64_t rxNs=0;absolutetime_to_nanoseconds(done.rx,&rxNs);
+    const uint64_t hid=latencyMs1000(done.rx,done.hid),swap=latencyMs1000(done.rx,done.swap),present=latencyMs1000(done.rx,done.present);
+    const uint64_t idle=latencyMs1000(0,done.idle);
+    IOLog("a04br3 latency: seq=%u kind=%s %s rx_ns=%llu hid_ms=%llu.%03llu swap_ms=%llu.%03llu present_ms=%llu.%03llu frames_2s=%u idle_before_ms=%llu\n",
+          done.seq,latencyKind(done.kind),done.present?"ok":"timeout",(unsigned long long)rxNs,
+          (unsigned long long)(hid/1000),(unsigned long long)(hid%1000),(unsigned long long)(swap/1000),(unsigned long long)(swap%1000),
+          (unsigned long long)(present/1000),(unsigned long long)(present%1000),done.present?done.framesAfter+1:0,
+          (unsigned long long)(idle/1000));
+}
+}
+
 extern "C" {
 volatile uint32_t native_legacy_stage;
 volatile int native_legacy_meta_status=-1;
@@ -238,6 +335,7 @@ extern "C" unsigned native_legacy_prepare_report(char *out,unsigned cap) {
         (unsigned long long)vsyncEvents[2],(unsigned long long)vsyncEvents[3],(unsigned long long)vsyncEvents[4],(unsigned long long)vsyncEvents[5]);
 }
 void native_legacy_swap_validation_observed(bool accepted,unsigned reason,const void *request,const void *surface) {
+    if(accepted)a04br3_latency_swap();
     if(accepted)native_legacy_swap_stage(0);
     if(accepted)native_legacy_swap_accepted_count=native_legacy_swap_accepted_count+1;
     else {native_legacy_swap_rejected_count=native_legacy_swap_rejected_count+1;recordRejectedSwap(reason,request,surface);}
@@ -254,6 +352,7 @@ void native_legacy_copy_timing_observed(uint64_t ticks,uint64_t bytes) {
     if(ticks>native_legacy_copy_max)native_legacy_copy_max=ticks;
 }
 __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status,const void *request,uint64_t bytes) {
+    if(status==kIOReturnSuccess)a04br3_latency_present();
     native_legacy_transfer_calls=native_legacy_transfer_calls+1;
     if(status==kIOReturnSuccess)native_legacy_swap_stage(2);
     native_legacy_transfer_status=status;native_legacy_transfer_request=(uintptr_t)request;native_legacy_transfer_bytes=bytes;
