@@ -38,6 +38,9 @@ void a04br3_input_start(void);
 void native_buttons_set_sink(void (*sink)(void *, uint32_t), void *context);
 volatile uint32_t a04br3_input_stage, a04br3_touch_contacts, a04br3_key_presses;
 volatile int a04br3_touch_error = -1;
+// A04BR3AutoReset.cpp sets 1 for one swipe (a04br3-input-latency=1); LegacyDisplayProbe.cpp times it.
+volatile uint32_t a04br3_swipe_request;
+void a04br3_latency_hid(void);
 }
 
 namespace {
@@ -337,6 +340,25 @@ void start(void (*fn)(void *, wait_result_t))
   if (kernel_thread_start(fn, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 
+// a04br3-input-latency=1 (default off): the host's "A04BR3!SWR" (A04BR3AutoReset.cpp) sets a04br3_swipe_request; this thread then
+// sends the same rightward swipe as the selftest above (41 points 20 ms apart across the middle of the panel) and stamps the
+// sample's hand-off time at its first point. On the first home screen page it opens the widget view; Home returns from it.
+void swipeThread(void *, wait_result_t)
+{
+  for (;;) {
+    if (a04br3_swipe_request) {
+      a04br3_swipe_request = 0;
+      a04br3_latency_hid();
+      for (unsigned i = 0; i <= 40; i++) {
+        publish(true, 100 + i * 15, 640);
+        IOSleep(20);
+      }
+      publish(false, 700, 640);
+    }
+    IOSleep(20);
+  }
+}
+
 }  // namespace
 
 // Only this board opts into physical Home in the existing Consumer report.
@@ -375,4 +397,6 @@ void a04br3_input_start(void)
   start(touchThread);
   start(keyThread);
   if (PE_parse_boot_argn("a04br3-input-selftest", &gSelftestSeconds, sizeof(gSelftestSeconds)) && gSelftestSeconds) start(selftestThread);
+  unsigned latency = 0;
+  if (PE_parse_boot_argn("a04br3-input-latency", &latency, sizeof(latency)) && latency == 1) start(swipeThread);
 }

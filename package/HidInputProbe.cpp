@@ -35,6 +35,7 @@ extern volatile uint32_t native_legacy_transfer_calls;
 static unsigned autoConfigured,autoFirst,autoCount,autoInterval,autoSent;
 static uint64_t autoNext,autoFrequency;
 static uint64_t counterNow(void){uint64_t v;__asm__ volatile("isb\n\tmrs %0, cntpct_el0":"=r"(v));return v;}
+extern "C" void a04br3_latency_hid(void);   // LegacyDisplayProbe.cpp (a04br3-input-latency=1; no work otherwise)
 bool native_hid_input_requested(void) {
     if(native_legacy_transfer_calls<2)return false;
     if(!autoConfigured) {
@@ -50,7 +51,7 @@ bool native_hid_input_requested(void) {
         ++autoSent;autoNext+=(uint64_t)autoInterval*autoFrequency;return true;
     }
     if(native_hid_input_command!=1)return false;
-    native_hid_input_command=0;return true;
+    native_hid_input_command=0;a04br3_latency_hid();return true;
 }
 static void describeInput(IORegistryEntry *entry,unsigned depth,size_t &used) {
     if(depth>4 || used>=sizeof(native_hid_input_registry)-128)return;
