@@ -5,15 +5,22 @@ import subprocess
 import tempfile
 import unittest
 
-DEVICE = Path(__file__).resolve().parents[2]
+DEVICE = Path(os.environ.get('A04BR3_DEVICE_ROOT', Path(__file__).resolve().parents[2])).resolve()
 GPU = (DEVICE / 'package/powervr/NativePowerVRGpu.cpp').read_text()
 JOBS = (DEVICE / 'package/powervr/NativePowerVRJobs.cpp').read_text()
-GOP = (DEVICE.parent / 'UniXNU/drivers/NativeMobileDisplay/NativeGOPPresenter.cpp').read_text()
+BASE = Path(os.environ.get('UNIXNU_BASE_ROOT', DEVICE.parent / 'UniXNU')).resolve()
+GOP_DIR = BASE / 'drivers/NativeMobileDisplay'
+GOP_COMMIT = os.environ.get('NATIVE_MOBILE_DISPLAY_COMMIT')
+GOP = (subprocess.check_output(['git', '-C', str(GOP_DIR), 'show', GOP_COMMIT + ':NativeGOPPresenter.cpp'], text=True)
+       if GOP_COMMIT else (GOP_DIR / 'NativeGOPPresenter.cpp').read_text())
 
 
 def function(source, signature):
     start = source.index(signature)
     brace = source.index('{', start)
+    while ';' in source[start:brace]:
+        start = source.index(signature, start + len(signature))
+        brace = source.index('{', start)
     depth = 1
     end = brace + 1
     while depth:
@@ -27,7 +34,7 @@ def run_cpp(body):
         source, binary = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
         source.write_text(body)
         subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
-                        '-fsanitize=address,undefined', '-g', str(source), '-o', str(binary)], check=True)
+                        '-fsanitize=address,undefined', '-fno-pie', '-no-pie', '-g', str(source), '-o', str(binary)], check=True)
         subprocess.run([str(binary)], check=True, timeout=30)
 
 
@@ -62,6 +69,7 @@ extern void disable_preemption();extern void enable_preemption();
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 #include <string>
 using vm_offset_t=uintptr_t;
@@ -88,15 +96,27 @@ void enable_preemption(){assert(preemptDisabled);preemptDisabled=false;}
 vm_offset_t phystokv(uint64_t p){assert(p>=gPhysBase&&p-gPhysBase<gPhysSize);return p+0x10000000;}
 void cacheOp(uintptr_t p){assert(preemptDisabled&&p>=0x10100000);++cacheOps;}
 ''' + put + snapshot + sync + r'''
-struct Queue {bool reached=false;};
-struct Context {int faulty=0;};
+struct Queue {bool reached=false;struct {uint32_t *value=nullptr;} timeline_ufo;};
+struct Context {int faulty=0;uint32_t ctx_id=1;};
 struct Job {native_powervr_host_sync *hosts=nullptr;bool hosts_completed=false,failed=false;uint64_t fence=1;
  Queue *queue=nullptr;uint32_t seqno=1;Context *ctx=nullptr;uint32_t type=0,id=1;};
 struct list_head {std::vector<Job *> items;};
 struct native_powervr_jobs_file {uint64_t nextFence=2;list_head jobs;bool failed=false;};
 #define list_for_each_entry(j,h,m) for(auto *cursor:(h)->items) if((j=cursor))
 IOLock jobsLock;
-struct {IOLock *lock=&jobsLock;} gJobs;
+struct Ctl {uint32_t read_offset=0,write_offset=0;}; Ctl ctl;
+struct {IOLock *lock=&jobsLock;Ctl *fwccbCtl=&ctl;uint32_t fwccbActive=0;} gJobs;
+struct {unsigned enabled=0,mode=0;} gNativeWaitSeries;
+struct {unsigned busy=0,suppressed=0,evicted=0;} gNativeWaitReason;
+#define READ_ONCE(x) (x)
+void proc_selfname(char *p,size_t){*p=0;} int proc_selfpid(){return 0;}
+void *current_thread(){return nullptr;} uint64_t thread_tid(void*){return 0;}
+void absolutetime_to_nanoseconds(uint64_t n,uint64_t *p){*p=n;}
+bool native_wait_reason_claim(decltype(gNativeWaitReason)*,unsigned,uint64_t,uint64_t,uintptr_t,uint64_t,uint64_t){return false;}
+void IOLog(const char *,...){}
+bool tryLockJobsAfterResets(bool *ready,unsigned *reason){IOLockLock(gJobs.lock);*ready=true;if(reason)*reason=0;return true;}
+void unlockJobsAfterResets(){IOLockUnlock(gJobs.lock);}
+bool fwccbPendingLocked(){return false;}
 constexpr uint32_t NativePowerVRTunnelMagic=0x4e544e4c;
 uint64_t ticks=0;uint64_t nowAbs(){return ticks;}
 void nanoseconds_to_absolutetime(uint64_t n,uint64_t *p){*p=n;}
@@ -119,7 +139,7 @@ int main(){
  vm.count=0;native_powervr_bo_put(&host); // handles/mappings go away; the job still pins the import
  assert(host.refs==1&&native_powervr_hosts_sync(held)==0);
  assert(cacheOps==65*4096/64&&batches==3&&!preemptDisabled); // scanout is never passed to phystokv
- Queue q;Context ctx;Job job;job.hosts=held;job.queue=&q;job.ctx=&ctx;job.type=DRM_PVR_JOB_TYPE_FRAGMENT;
+ uint32_t ufo=1;Queue q;q.timeline_ufo.value=&ufo;Context ctx;Job job;job.hosts=held;job.queue=&q;job.ctx=&ctx;job.type=DRM_PVR_JOB_TYPE_FRAGMENT;
  native_powervr_jobs_file file;file.jobs.items.push_back(&job);
  auto before=cacheOps;
  assert(native_powervr_fence_wait(&file,1,0)==-ETIMEDOUT&&cacheOps==before&&!job.hosts_completed);
@@ -147,7 +167,8 @@ int main(){
         self.assertLess(worker.index('complete_job_hosts(j)'), worker.index('list_del(&j->file_link)'))
         submit = function(JOBS, 'extern "C" int native_powervr_submit_jobs(')
         self.assertLess(submit.index('native_powervr_hosts_sync'), submit.index('file->nextFence++'))
-        self.assertLess(submit.index('native_powervr_hosts_sync'), submit.index('run_job(j,'))
+        kick = submit.index('kickJobs(') if 'kickJobs(' in submit else submit.index('run_job(j,')
+        self.assertLess(submit.index('native_powervr_hosts_sync'), kick)
 
     def test_late_reset_marks_idle_context(self):
         harness = r'''
@@ -155,7 +176,7 @@ int main(){
 #include <cstdint>
 #include <vector>
 #include <string>
-struct pvr_context {uint32_t ctx_id;int faulty=0;};
+struct pvr_context {uint32_t ctx_id;int faulty=0;uint64_t generation=7;};
 struct xarray {bool held=false;pvr_context *contexts[8]{};};
 void xa_lock(xarray *x){assert(!x->held);x->held=true;}
 void xa_unlock(xarray *x){assert(x->held);x->held=false;}
@@ -163,9 +184,14 @@ void *xa_load(xarray *x,uint32_t id){assert(x->held);return id<8?x->contexts[id]
 void atomic_set(int *p,int v){*p=v;}
 struct Job {pvr_context *ctx;uint32_t id;bool failed=false;};
 struct list_head {std::vector<Job *> items;};
-struct {struct {xarray ctx_ids;} dev;list_head jobs;} gJobs;
+struct RetiredFence {uint64_t fence,generation;uint32_t ctx,job,dm;bool eligible;};
+struct native_powervr_jobs_file {RetiredFence retired[2]{};unsigned failed=0;};
+struct FileList {std::vector<native_powervr_jobs_file *> items;};
+struct {struct {xarray ctx_ids;} dev;list_head jobs;FileList files;} gJobs;
+uint64_t contextGeneration(const pvr_context *ctx){return ctx->generation;}
+void recordFailed(native_powervr_jobs_file *f,uint64_t){++f->failed;}
 #define list_for_each_entry(j,h,m) for(auto *cursor:(h)->items) if((j=cursor))
-struct ResetNote {uint32_t ctx_id,job_ref,reason,flags;};
+struct ResetNote {uint32_t ctx_id,job_ref,reason,flags,dm=3;};
 constexpr uint32_t ROGUE_CONTEXT_RESET_REASON_GUILTY_LOCKUP=1,
  ROGUE_CONTEXT_RESET_REASON_GUILTY_OVERRUNING=2,
  ROGUE_FWIF_FWCCB_CMD_CONTEXT_RESET_FLAG_PF=1,
@@ -182,11 +208,13 @@ int main(){
  gJobs.jobs.items={&failed,&following,&unrelated};applyResets(&late,1);
  assert(idle.faulty&&failed.failed&&!following.failed&&!unrelated.failed&&!other.faulty);
  ResetNote missing{7,99,1,0};applyResets(&missing,1);assert(!other.faulty&&!gJobs.dev.ctx_ids.held);
+ native_powervr_jobs_file file;file.retired[0]={20,7,1,99,3,true};gJobs.files.items={&file};
+ ResetNote receipt{1,99,1,0,3};applyResets(&receipt,1);assert(file.failed==1);
 }
 '''
         run_cpp(harness)
 
-    def test_readonly_import_refused(self):
+    def test_readonly_import_fallback(self):
         source = function(GPU, 'int boImportHost(')
         # Execute the actual prepare/error path; the rest of import is compiled against descriptor mocks.
         harness = r'''
@@ -195,29 +223,37 @@ int main(){
 #include <cstdint>
 #include <cstdlib>
 using IOReturn=int;using IOByteCount=uint64_t;
-constexpr int kIOReturnSuccess=0,kIODirectionInOut=3,kIOMemoryMapperNone=0;
+constexpr int kIOReturnSuccess=0,kIODirectionInOut=3,kIODirectionOut=1,kIOMemoryMapperNone=0,KERN_PROTECTION_FAILURE=3;
 constexpr uint64_t kDevicePageSize=4096,kDevicePageMask=~4095ULL;
-int prepared=0,released=0;int prepareStatus=2;
+int prepared=0,released=0;int prepareStatus=2,roStatus=0,direction=0;
 void IOLog(const char *,...){}
+int proc_selfpid(){return 1;} bool gBoLiveEnabled=false;
+int hostImportFailure(const char *,uint64_t,uint64_t,int e,uint64_t=0,uint64_t=0,uint64_t=0,uint64_t=0){return e;}
 struct IOMemoryDescriptor;
 struct IOMemoryMap {IOMemoryDescriptor *getMemoryDescriptor(){return nullptr;}
  uint64_t getPhysicalSegment(uint64_t,IOByteCount *,int){assert(false);return 0;}};
 int scanoutHostRange(void *,uint64_t,uint64_t,IOMemoryMap **out){*out=nullptr;return -ENOENT;}
-constexpr uint64_t DRM_PVR_BO_BYPASS_DEVICE_CACHE=1;
-struct IOMemoryDescriptor {void retain(){}int prepare(){++prepared;return prepareStatus;}void release(){++released;}
+constexpr uint64_t DRM_PVR_BO_BYPASS_DEVICE_CACHE=1,NATIVE_POWERVR_BO_READ_ONLY=2;
+struct IOMemoryDescriptor {void retain(){}int prepare(){++prepared;return direction==kIODirectionOut?roStatus:prepareStatus;}void release(){++released;}
  uint64_t getLength(){return 4096;}uint64_t getPhysicalSegment(uint64_t,IOByteCount *n,int){*n=4096;return 0x100000;}} md;
 struct native_powervr_sg {uint64_t phys,size;};
 struct native_powervr_bo {uint32_t refs;uint64_t size,flags;IOMemoryDescriptor *host;bool hostPrepared;
  uint32_t sgCapacity,nents;native_powervr_sg *sg;IOMemoryMap *hostMap;};
 void *kzallocBytes(size_t n){return calloc(1,n);}
-IOMemoryDescriptor *hostRange(void *,uint64_t,uint64_t,int direction){assert(direction==kIODirectionInOut);return &md;}
+IOMemoryDescriptor *hostRange(void *,uint64_t,uint64_t,int d){assert(d==kIODirectionInOut||d==kIODirectionOut);direction=d;return &md;}
 void boDestroy(native_powervr_bo *b){if(b->host)b->host->release();free(b->sg);free(b);}
+void boLiveAdd(native_powervr_bo *,bool){}
 using task_t=void *;
 ''' + source + r'''
 int main(){native_powervr_bo *out=nullptr;
  assert(boImportHost(nullptr,4096,4096,0,&out)==-EFAULT&&!out&&prepared==1&&released==1);
  prepareStatus=0;assert(boImportHost(nullptr,4096,4096,0,&out)==0&&out->hostPrepared&&out->nents==1);
  boDestroy(out);assert(prepared==2&&released==2);
+ prepareStatus=KERN_PROTECTION_FAILURE;roStatus=0;out=nullptr;
+ assert(boImportHost(nullptr,4096,4096,0,&out)==0&&out&&(out->flags&NATIVE_POWERVR_BO_READ_ONLY));
+ boDestroy(out);assert(prepared==4&&released==4);
+ roStatus=2;out=nullptr;assert(boImportHost(nullptr,4096,4096,0,&out)==-EFAULT&&!out);
+ assert(prepared==6&&released==6);
 }
 '''
         run_cpp(harness)
@@ -248,6 +284,7 @@ void clock_interval_to_deadline(uint32_t n,int,uint64_t *p){*p=n;}
 uint64_t mach_absolute_time(){return 0;}
 void absolutetime_to_nanoseconds(uint64_t n,uint64_t *p){*p=n;}
 uint64_t native_gop_wait_stats[7]={},native_gop_gpu_failures=0,native_gop_gpu_completions=0,native_gop_gpu_abandoned=0;
+void latencyEvent(unsigned,uint64_t){}
 unsigned completions=0;int lastCompletion=-1;
 void native_legacy_gpu_complete(void *,int s){++completions;lastCompletion=s;}
 struct IOMemoryDescriptor;
