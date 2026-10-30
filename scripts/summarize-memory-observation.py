@@ -53,6 +53,7 @@ def analyze(data,image_sha):
  return result
 def assess(data, result, expected, size=None, boot_run=False):
  """Explicit single invocation protocol; incomplete data cannot be success."""
+ if boot_run and (expected!='copy' or size!=65536):raise ValueError('boot-run requires 64KiB copy')
  if expected == 'kernel-vm':
   result['assessment']={'expected':expected,'status':'observed' if result['kernel_vm'] else 'missing','copy_test_success_claimed':False}
   return bool(result['kernel_vm'])
@@ -67,7 +68,6 @@ def assess(data, result, expected, size=None, boot_run=False):
   if len(f)!=len(pairs):raise ValueError('duplicate diagnostic field')
   rows.append(f)
  if boot_run:
-  if expected!='copy' or size!=65536:raise ValueError('boot-run requires 64KiB copy')
   if not rows or rows[0]!={'phase':'waiting','delay_seconds':'180','profile':'low_impact_64k'}:
    raise ValueError('missing or invalid boot-run waiting record')
   rows=rows[1:]

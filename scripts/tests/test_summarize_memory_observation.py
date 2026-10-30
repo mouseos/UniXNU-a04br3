@@ -69,6 +69,7 @@ class ProtocolTests(unittest.TestCase):
  def test_kernel_only(self):
   self.assertNotEqual(self.run_cli('','kernel-vm').returncode,0)
   self.assertEqual(self.run_cli(VM+'a04br3 perf sample ns=300 tasks=2\n','kernel-vm').returncode,0)
+  self.assertNotEqual(self.run_cli(VM+'a04br3 perf sample ns=300 tasks=2\n','kernel-vm',boot_run=True).returncode,0)
  def test_capture_evidence(self):
   sha=lambda x:hashlib.sha256(x).hexdigest()
   data=raw(VM+'a04br3 perf sample ns=300 tasks=2\n');prefix=b'old\n';snap=prefix+data+m.ANCHOR+b'\n';log=b"Sending 'boot' (129680 KB) OKAY [  3.828s]\nWriting 'boot' OKAY [  6.861s]\nFinished. Total time: 10.818s\n";image='a'*64
