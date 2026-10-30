@@ -55,9 +55,9 @@ int main(){
  reset();fault=8;stateAt=64;expectedValid=1;rtcCaptureThread(nullptr,0);assert(!gRtcCaptureActive && summaries==1);assert(!a04br3_runtime_probe_begin());gWatchdogGate.unlock();assert(a04br3_runtime_probe_begin());assert(a04br3_runtime_probe_end_checked());
  reset();fault=5;stateAt=64;expectedValid=1;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && !a04br3_runtime_probe_active);
  reset();fault=6;stateAt=64;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
- reset();panicAt=64;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==0 && finished==1 && !a04br3_runtime_probe_active && gRtcCaptureActive);
+ reset();panicAt=64;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==0 && finished==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  reset();a04br3_runtime_probe_active=1;rtcCaptureThread(nullptr,0);assert(!commands && !summaries && unavailable==1 && finished==1 && !gRtcCaptureActive);
- reset();panicAt=1;rtcCaptureThread(nullptr,0);assert(rows==1 && summaries==0 && finished==1 && !a04br3_runtime_probe_active && gRtcCaptureActive);
+ reset();panicAt=1;rtcCaptureThread(nullptr,0);assert(rows==1 && summaries==0 && finished==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='rtc-worker-') as d:
