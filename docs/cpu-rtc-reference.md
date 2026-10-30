@@ -20,7 +20,7 @@ its own response. If command completion or return to idle is uncertain after iss
 the shared lock for the boot. A foreign initial state is left untouched and the
 lock is released without issuing a command. Known AutoReset, Input
 and GPU WACS2 command paths also retain that lock on uncertain completion;
-AutoReset no longer clears an unknown response. AutoReset and Input require an observed non-idle phase followed by idle for a write; a write too fast to observe that phase is conservatively quarantined. This check is not proof of hardware command acceptance. That quarantine prevents
+AutoReset no longer clears an unknown response. AutoReset and Input accept a write after an observed non-idle phase followed by idle, or after a bounded run of idle polls (INIT_DONE, no pending response) when the write finished before the first poll, as observed on hardware for the fastboot-flag writes; a write that stays busy is quarantined. Neither is proof of hardware command acceptance; callers read the register back. That quarantine prevents
 known local users from touching a possibly pending transaction, but may disable
 touch, GPU power or recovery paths which use WACS2. The RTC worker reserves the existing board probe/watchdog gate over the entire
 capture, blocking cooperating runtime probes while allowing normal watchdog
