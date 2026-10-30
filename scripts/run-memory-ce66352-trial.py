@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """既存の実機controllerを用いたce66352計測。レビュー記録は対象ハッシュと結び付ける。"""
-import argparse, fcntl, hashlib, importlib.util, json, os, re, shutil, subprocess, sys, types
+import argparse, fcntl, hashlib, importlib.util, json, os, re, shutil, subprocess, sys, types, uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[3]
 WORK=ROOT/'port/gsi/logs/ios-feasibility/memory-ce66352-trial'
-SOURCE=ROOT/'port/gsi/logs/ios-feasibility/atp-off-be06c6d-first/run.py'
+SOURCE=ROOT/'unixnu/UniXNU-a04br3-memory-low-impact/scripts/a04br3_trial_base.py'
 ART=ROOT/'port/xnu/out/memory-ce66352-boot'
 MANIFEST=ART/'manifest.json'
 SAFE=ROOT/'port/xnu/out/iostat-ui-stack-stream-20261030/boot.img'
@@ -13,7 +13,7 @@ LAST=ROOT/'port/gsi/logs/ios-feasibility/msdc-adjacency-trial-20261030/adjacency
 REVIEW=WORK/'independent-review.json'
 DEVICE_COMMIT='ce66352db798560ac8c4f380d66bf78876d6c7e2'
 PARSER_COMMIT='ed98bfa1c429e26de66bc42b88859eb923dbda98'
-SUPPORT_COMMIT='a455452df24ab130d2a58f958f7fcdee85f3fa5b'
+SUPPORT_COMMIT='e9c39f2a4bf147ea1dfafb3a91f307bef6e2536f'
 REPO=ROOT/'unixnu/UniXNU-a04br3-memory-low-impact'
 PARSER='scripts/summarize-memory-observation.py'
 DEVICE_FILES=('tools/a04br3-memory-copy-bench.c','package/A04BR3ProbeLaunch.c',
@@ -42,7 +42,7 @@ def check_object_sources(repo=REPO):
  for commit in (DEVICE_COMMIT,PARSER_COMMIT,SUPPORT_COMMIT):
   subprocess.run(['git','-C',str(repo),'cat-file','-e',commit+'^{commit}'],check=True,stdout=subprocess.DEVNULL)
  subprocess.run(['git','-C',str(repo),'merge-base','--is-ancestor',DEVICE_COMMIT,PARSER_COMMIT],check=True)
- for commit,paths in ((DEVICE_COMMIT,DEVICE_FILES),(SUPPORT_COMMIT,('scripts/a04br3_trial_guardian.py','scripts/a04br3_trial_boundaries.py','scripts/a04br3_trial_evidence.py','scripts/a04br3_trial_image_audit.py'))):
+ for commit,paths in ((DEVICE_COMMIT,DEVICE_FILES),(SUPPORT_COMMIT,('scripts/a04br3_trial_guardian.py','scripts/a04br3_trial_boundaries.py','scripts/a04br3_trial_evidence.py','scripts/a04br3_trial_image_audit.py','scripts/a04br3_trial_base.py','scripts/collect-read-batch-uart.py'))):
   for path in paths:
    blob=subprocess.check_output(['git','-C',str(repo),'show',commit+':'+path])
    need(hashlib.sha256(blob).digest()==hashlib.sha256((repo/path).read_bytes()).digest(),'作業ツリーの対象ソース不一致: '+path)
@@ -74,6 +74,7 @@ def main_locked(mode):
  start_guardian()
  spec=importlib.util.spec_from_file_location('original_controller',SOURCE);mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
  mod.WORK=stage;mod.IMAGE=ART/f'{mode}-boot.img';mod.MANIFEST=MANIFEST;mod.BASE=MANIFEST;mod.SAFE=SAFE;mod.UART=UART;mod.REVIEW=REVIEW
+ mod.ROOT=ROOT;mod.COMMON=ROOT/'port/gsi/logs/flash.log';mod.COLLECTOR=REPO/'scripts/collect-read-batch-uart.py'
  mod.IMG_SHA=m['variants'][mode]['boot_sha256'];mod.MANIFEST_SHA=digest(MANIFEST);mod.BASE_SHA=mod.MANIFEST_SHA;mod.SAFE_SHA=digest(SAFE);mod.BUILDER_COMMIT=m['device_commit']
  mod.validate_review=lambda _review,_evidence:check(mode)
  mod.validate_manifest=lambda _manifest,_base:check(mode)['variants'][mode]['kernel_args']
@@ -98,7 +99,10 @@ def main_locked(mode):
    cancel=kwargs.get('cancel')
    if cancel is not None: cancel.check()
    with (stage/'flash.log').open('ab'), (ROOT/'port/gsi/logs/flash.log').open('ab'): pass
-   guardian.write_state(WORK/'recovery-state.json',{'state':'armed','stage':str(stage.resolve()),'image_sha256':mod.IMG_SHA,'safe_sha256':mod.SAFE_SHA})
+   trial_id=uuid.uuid4().hex
+   started_path=stage/'started.json';started=json.loads(started_path.read_text());started['trial_id']=trial_id
+   guardian.write_state(started_path,started)
+   guardian.write_state(WORK/'recovery-state.json',{'state':'armed','stage':str(stage.resolve()),'image_sha256':mod.IMG_SHA,'safe_sha256':mod.SAFE_SHA,'trial_id':trial_id})
   return old_fastboot(arguments,*args,**kwargs)
  mod.logged_fastboot=fastboot_guard
  def capture_with_bench(cap,raw,args,expected,record_sha,raw_sha,snapshot):
@@ -135,6 +139,12 @@ def main_locked(mode):
   result['recovery_write_confirmed']=result.get('recovery_confirmed') is True
   result['recovery_boot_verified']=False
   result['recovery_confirmed_meaning']='legacy field: recovery boot partition write only'
+  state_path=WORK/'recovery-state.json'
+  if state_path.exists():
+   journal=json.loads(state_path.read_text())
+   if journal.get('state')=='armed' and journal.get('image_sha256')==mod.IMG_SHA:
+    result['trial_id']=journal.get('trial_id');result['safe_sha256']=mod.SAFE_SHA
+    if result['recovery_write_confirmed']:result['recovery_log_sha256']=digest(stage/'recovery-flash.log')
   path=stage/'benchmark-analysis.json'
   if path.exists(): result['benchmark_analysis_sha256']=digest(path)
   path=stage/'boot-boundaries.json'
