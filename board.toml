@@ -161,6 +161,9 @@ A04BR3_EMMC_HS200 = "1"
 # CPU 1300 MHz once in SEC: VPROC 1.20 -> 1.30 V read back, then ARMPLL 1001 -> 1300 MHz, the stock CT3 kernel's maximum
 # OPP (uefi-a04br3 867a4163). On hardware the PMU cycle counter gives about 1,300,000 cycles per 13,001 ticks of 13 MHz.
 A04BR3_CPU_1300 = "1"
+# Charger owner (A04BR3ChargerDxe holds the BQ24160 from firmware and hands it to the kernel): every image verified on
+# hardware tonight was built with it. An official FD without it reset by watchdog while the kernel powered the Rogue GPU.
+A04BR3_CHARGER_OWNER = "1"
 
 # The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
 # trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
