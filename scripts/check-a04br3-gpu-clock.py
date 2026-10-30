@@ -32,7 +32,7 @@ using u32=uint32_t;using u64=uint64_t;using u8=uint8_t;
 #define INTEGER_BITS 7
 #define GENMASK(h,l) ((uint32_t)((~0u << (l)) & (~0u >> (31-(h)))))
 struct linux_data{int pcwbits;};struct mtk_clk_pll{linux_data *data;};
-static bool pwrapAvailable=true;struct A04BR3PwrapGuard{explicit A04BR3PwrapGuard(unsigned=0){} explicit operator bool()const{return pwrapAvailable;}};
+static bool pwrapAvailable=true, responseTimeout=false;static unsigned quarantineCalls=0;struct A04BR3PwrapGuard{explicit A04BR3PwrapGuard(unsigned=0){} void quarantine(){++quarantineCalls;} explicit operator bool()const{return pwrapAvailable;}};
 '''
 # Independent arithmetic oracle for MT8167's 21-bit MMPLL PCW / 7 integer bits.
 # Formula documented by MediaTek Linux clk-pll.c __mtk_pll_recalc_rate:
@@ -69,7 +69,7 @@ static bool PE_parse_boot_argn(const char *n,void *v,int size){assert(size==size
 static void IOLog(const char *fmt,...){char t[1024];va_list a;va_start(a,fmt);vsnprintf(t,sizeof t,fmt,a);va_end(a);logs+=t;}
 static void IODelay(unsigned us){assert(us==10);}
 static vm_offset_t ml_io_map(vm_offset_t a,vm_size_t size){++maps;assert(size==4096||size==65536);if(a==0x10018000)return pllMap?(uintptr_t)pll:0;if(a==0x1000f000)return pwrapMap?(uintptr_t)pwrap:0;if(a==0x10000000)return (uintptr_t)top;if(a==0x13000000)return (uintptr_t)core;return (uintptr_t)other;}
-static uint32_t clockDiagnosticRead(volatile uint8_t *base,unsigned off){++reads;if(base==top){assert(off==0||off==4);return 0;}if(base==pll){uint32_t v=off==0x160?con0:off==0x164?con1:power;assert(off==0x160||off==0x164||off==0x170);if(off==unstableOffset&&++unstableSeen==2)v^=1;return v;}assert(base==pwrap);if(off==0x98||off==0x9c)return init?1:0;assert(off==0xa4);return (1u<<21)|((phase==1?6u:0u)<<16)|reply;}
+static uint32_t clockDiagnosticRead(volatile uint8_t *base,unsigned off){++reads;if(base==top){assert(off==0||off==4);return 0;}if(base==pll){uint32_t v=off==0x160?con0:off==0x164?con1:power;assert(off==0x160||off==0x164||off==0x170);if(off==unstableOffset&&++unstableSeen==2)v^=1;return v;}assert(base==pwrap);if(off==0x98||off==0x9c)return init?1:0;assert(off==0xa4);return (1u<<21)|((phase==1 && !responseTimeout?6u:0u)<<16)|reply;}
 static void clockDiagnosticWrite(volatile uint8_t *base,unsigned off,uint32_t v){assert(base==pwrap);++writes;if(off==0xa0){assert(!(v&0x8000ffffu));assert(!failPmic);unsigned addr=(v>>16)*2;unsigned i=addr==0x30a?0:addr==0x30e?1:addr==0x312?2:3;assert(addr==0x30a||addr==0x30e||addr==0x312||addr==0x314);reply=rail[i];phase=1;++pmicReads;}else{assert(off==0xa8&&v==1);phase=2;}}
 '''
 # Use real waits and PMIC reader, changing only the injected failure result through a wrapper.
@@ -95,6 +95,7 @@ h+=r'''
 static void reset(){requested=380;present=pllMap=pwrapMap=init=true;failPmic=muxMismatch=false;maps=reads=writes=pmicReads=powerCalls=fwCalls=phase=unstableOffset=unstableSeen=requestSnapshot=0;con0=0x11;con1=0x020e9d8a;power=5;rail[0]=2;rail[1]=0x3001;rail[2]=rail[3]=0x4e;logs.clear();state=fresh();a04br3_gpu_core_hz=26000000;}
 int main(){
  pwrapAvailable=false;uint16_t blocked=0;assert(clockDiagnosticPmicRead(pwrap,0x30a,&blocked));assert(writes==0);pwrapAvailable=true;
+ responseTimeout=true;assert(clockDiagnosticPmicRead(pwrap,0x30a,&blocked));assert(quarantineCalls==1);responseTimeout=false;phase=writes=0;
  // Independent oracle for the Linux two-roundup formula, across all divisors.
  linux_data data{21};mtk_clk_pll linuxPll{&data};
  const uint32_t pcws[]={0,1,0x40000,0x80000,0xc0000,0xe7000,0xe9d89,0xe9d8a,0xe9d8b,0xf0000,0x100000,0x1fffff};
