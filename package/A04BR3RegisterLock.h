@@ -13,6 +13,8 @@ class A04BR3PwrapGuard {
 public:
   explicit A04BR3PwrapGuard(unsigned retries = 0) : held(a04br3_pwrap_lock_bounded(retries)) {}
   ~A04BR3PwrapGuard() { if (held) a04br3_pwrap_unlock(); }
+  // Deliberately keep the shared lock for the rest of this boot.
+  void quarantine() { held = false; }
   explicit operator bool() const { return held; }
   A04BR3PwrapGuard(const A04BR3PwrapGuard &) = delete;
   A04BR3PwrapGuard &operator=(const A04BR3PwrapGuard &) = delete;

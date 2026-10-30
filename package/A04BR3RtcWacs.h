@@ -13,7 +13,7 @@ template<class IO> static A04BR3RtcWacsResult a04br3_rtc_wacs_read(IO &io)
   if (!io.lock()) return r;
   uint32_t v=io.status(); r.initial=r.last=v;
   // Never clear a transaction whose origin is unknown.
-  if (!(v & (1U<<21)) || ((v>>16)&7U)!=0) {io.unlock();r.status=rtcForeign;return r;}
+  if (!(v & (1U<<21)) || ((v>>16)&7U)!=0) {r.status=rtcForeign;r.quarantined=true;return r;}
   io.command((0x800aU >> 1) << 16);
   bool ready=false;
   for (unsigned n=0;n<2048;++n) {

@@ -93,19 +93,20 @@ void iwr(unsigned o, uint16_t v) { *reinterpret_cast<volatile uint16_t *>(gI2c +
 uint16_t krd(unsigned o) { uint16_t v = *reinterpret_cast<volatile uint16_t *>(gKeypad + o); __asm__ volatile("dmb oshld" ::: "memory"); return v; }
 void kwr(unsigned o, uint16_t v) { *reinterpret_cast<volatile uint16_t *>(gKeypad + o) = v; __asm__ volatile("dsb oshst" ::: "memory"); }
 
-int pwWait(unsigned fsm) { for (unsigned n = 0; n < 1000; n++) { if (((rd(gPwrap, 0xa4) >> 16) & 7) == fsm) return 0; IODelay(10); } return -1; }
+int pwWait(unsigned fsm) { for (unsigned n = 0; n < 1000; n++) { const uint32_t status=rd(gPwrap, 0xa4); if (!(status & (1U<<21))) return -1; if (((status >> 16) & 7) == fsm) return 0; IODelay(10); } return -1; }
 int pwRead(unsigned addr, uint16_t *value)
 {
   A04BR3PwrapGuard guard(10000);
   if (!guard) return -1;
-  if (pwWait(0)) return -1;
+  if (pwWait(0)) { guard.quarantine(); return -1; }
   wr(gPwrap, 0xa0, (addr >> 1) << 16);
-  if (pwWait(6)) return -1;
+  if (pwWait(6)) { guard.quarantine(); return -1; }
   *value = uint16_t(rd(gPwrap, 0xa4));
   wr(gPwrap, 0xa8, 1);
-  return pwWait(0);
+  if (pwWait(0)) { guard.quarantine(); return -1; }
+  return 0;
 }
-int pwWrite(unsigned addr, uint16_t value) { A04BR3PwrapGuard guard(10000); if (!guard) return -1; if (pwWait(0)) return -1; wr(gPwrap, 0xa0, 0x80000000U | ((addr >> 1) << 16) | value); return pwWait(0); }
+int pwWrite(unsigned addr, uint16_t value) { A04BR3PwrapGuard guard(10000); if (!guard) return -1; if (pwWait(0)) { guard.quarantine(); return -1; } wr(gPwrap, 0xa0, 0x80000000U | ((addr >> 1) << 16) | value); if (pwWait(0)) { guard.quarantine(); return -1; } return 0; }
 
 // MT6392 VGP1 to 1.8 V (voltage select 0x530 bits 5..7 = 3) and enabled (0x50a bit 15).
 int powerOn(void)

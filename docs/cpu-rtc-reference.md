@@ -16,15 +16,21 @@ The vendor MT6392 RTC driver reads the seconds register without RTC reload.
 Each diagnostic transaction takes the existing board WACS2 nonblocking lock,
 requires idle/initialized state without clearing a foreign valid response,
 issues one read of 0x800a, waits up to 2048 polls for valid and clears only
-its own response. If the command was issued and completion or return to idle
-is uncertain, it retains the shared lock for the boot. That quarantine prevents
+its own response. If the initial state is foreign, or if command completion or return to idle
+is uncertain, it retains the shared lock for the boot. Known AutoReset, Input
+and GPU WACS2 command paths also retain that lock on uncertain completion;
+AutoReset no longer clears an unknown response and waits for write idle. That quarantine prevents
 known local users from touching a possibly pending transaction, but may disable
-touch, GPU power or recovery paths which use WACS2. The watchdog feeder runs
-independently; actual reset/recovery is unverified. The poll bound is not a
+touch, GPU power or recovery paths which use WACS2. The RTC worker reserves the existing board probe/watchdog gate over the entire
+capture, blocking cooperating runtime probes and normal watchdog feeding. It
+releases the gate only after a complete valid capture; failure, panic or a stuck
+worker leaves normal feeding disabled. This is a recovery attempt, not proof of
+a watchdog reset. The periodic software-reset thread and external watchdog
+agents are separate; actual reset/recovery is unverified. The poll bound is not a
 wall-time guarantee and an MMIO trap or hang may never return. There is no
 exclusive lease against secure firmware, EL2/EL3 or debug agents. An opt-in
 is not proof of ownership, access safety, RTC source precision or completion.
-The worker holds no lock between samples and does not disable preemption.
+The worker holds no WACS lock between successful samples and does not disable preemption; it retains the probe gate throughout.
 If interrupted, timed out or otherwise incomplete, the aggregate valid flag is
 zero. Even a valid aggregate is conditional on the assumptions below and is
 never a certified clock result. Each completed row is logged before the next sample; the summary follows
@@ -47,7 +53,7 @@ record intervals and observed elapsed RTC ticks; do not label them a calibrated
 13 MHz or CPU frequency unless an independent RTC rate bound exists. The
 `clk32k` device-tree value is 32000 Hz, not a measured oscillator frequency.
 
-The requested boot arguments exclude known meter and PMU modes; they cannot
+The probe gate excludes only callers that use the same board protocol; it is not a lease against external agents. The requested boot arguments exclude known meter and PMU modes; they cannot
 exclude an external owner or a separately started agent. The existing board
 PMU qualification remains unconditionally refused. A calibrated RTC candidate
 alone does not establish EL3/debug ownership, PMU trap safety or cycle-counter

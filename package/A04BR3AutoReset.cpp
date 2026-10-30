@@ -55,6 +55,7 @@ volatile uint32_t a04br3_runtime_probe_active = 0;
 namespace {
 
 A04BR3WatchdogGate gWatchdogGate = {};
+static uint32_t gRtcCaptureActive;
 
 constexpr uint64_t kPwrap = 0x1000F000, kToprgu = 0x10007000, kUart0 = 0x11005000;
 constexpr unsigned kUartRbr = 0x00, kUartLsr = 0x14;   // 32-bit register spacing
@@ -116,30 +117,30 @@ void wr(volatile uint8_t *base, unsigned offset, uint32_t value)
   __asm__ volatile("dsb sy" ::: "memory");
 }
 
-// One WACS2 transaction, as the stock LK: wait for the idle FSM (clearing a pending valid), issue, and for a read wait
-// for valid data. Bounded: false on timeout or when the wrapper never finished its initialization.
+// Never clear an unknown response. Uncertain transactions retain the lock.
 bool wacs(bool write, uint32_t address, uint32_t data, uint32_t *out)
 {
   A04BR3PwrapGuard guard;
-  if (!guard) return false;
-  for (unsigned spin = 0;; spin++) {
-    const uint32_t status = rd(gPwrap, kWacsRdata);
-    if ((status & (1U << 21)) == 0 || spin > 1000000) { return false; }  // INIT_DONE
-    const uint32_t fsm = (status >> 16) & 7;
-    if (fsm == 0) { break; }
-    if (fsm == 6) { wr(gPwrap, kWacsVldclr, 1); }
-  }
+  if (!guard || (address & 1) || address > 0xfffe || (!write && !out)) return false;
+  uint32_t status = rd(gPwrap, kWacsRdata);
+  if (!(status & (1U << 21)) || ((status >> 16) & 7U) != 0) { guard.quarantine(); return false; }
   wr(gPwrap, kWacsCmd, (write ? 1U << 31 : 0) | ((address >> 1) << 16) | (data & 0xffff));
-  if (write) { return true; }
-  for (unsigned spin = 0;; spin++) {
-    const uint32_t status = rd(gPwrap, kWacsRdata);
-    if (spin > 1000000) { return false; }
-    if (((status >> 16) & 7) == 6) {
-      *out = status & 0xffff;
+  for (unsigned spin=0; spin<1000000; ++spin) {
+    status=rd(gPwrap, kWacsRdata);
+    if (!(status & (1U << 21))) break;
+    if (((status >> 16) & 7U) == (write ? 0U : 6U)) {
+      if (write) return true;
+      const uint32_t value=status & 0xffffU;
       wr(gPwrap, kWacsVldclr, 1);
-      return true;
+      for (unsigned n=0; n<1000000; ++n) {
+        status=rd(gPwrap, kWacsRdata);
+        if (!(status & (1U << 21))) break;
+        if (((status >> 16) & 7U) == 0) { *out=value; return true; }
+      }
+      break;
     }
   }
+  guard.quarantine(); return false;
 }
 
 bool rtcTrigger(void)
@@ -321,9 +322,18 @@ static void rtcCaptureThread(void *, wait_result_t)
 {
   RtcCaptureIO io; A04BR3RtcReference state={}; RtcCaptureRow rows[64]={};
   unsigned n=0, stopReason=0; bool allOk=true;
+  // Reuse the feeder/probe gate as an exclusive lease across the entire capture.
+  // A stuck worker leaves feeding disabled; hardware reset remains unverified.
+  if (!gWatchdogGate.lock()) { thread_terminate(current_thread()); return; }
+  const bool acquired = !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE);
+  if (acquired) {
+    __atomic_store_n(&gRtcCaptureActive,1U,__ATOMIC_RELEASE);
+    __atomic_store_n(&a04br3_runtime_probe_active,1U,__ATOMIC_RELEASE);
+  }
+  gWatchdogGate.unlock();
+  if (!acquired) { thread_terminate(current_thread()); return; }
   for (; n<64; ++n) {
     if (panic_active()) {stopReason=1;break;}
-    if (__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)) {stopReason=2;break;}
     if (!__atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) {stopReason=3;break;}
     rows[n].before=io.timer();
     A04BR3RtcWacsResult r=a04br3_rtc_wacs_read(io);
@@ -335,13 +345,25 @@ static void rtcCaptureThread(void *, wait_result_t)
     IOSleep(50);
   }
   if (panic_active()) { thread_terminate(current_thread()); return; }
-  if (!stopReason && __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)) stopReason=2;
   if (!stopReason && !__atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) stopReason=3;
   const auto b=a04br3_rtc_bounds(state);
   const bool complete = n==64 && allOk && !state.invalid &&
-      !__atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE) &&
+      __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE) &&
       __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE);
-  IOLog("a04br3 rtc-ref samples=%u valid=%u reason=%u rtc_seconds=%u min_ticks=%llu max_ticks=%llu owner=unverified timebase=uncalibrated rtc_rate=unverified alias=unverified recovery=unverified\n",n,static_cast<unsigned>(complete && b.valid),stopReason,b.rtcSeconds,static_cast<unsigned long long>(b.minTicks),static_cast<unsigned long long>(b.maxTicks));
+  // Resume feeding only after a complete, clean capture and gate-protected release.
+  // Failure, panic, and inability to acquire the gate all remain fail-closed.
+  bool released=false;
+  if (complete && b.valid && gWatchdogGate.lock()) {
+    if (!panic_active() && __atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE) &&
+        __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)) {
+      __atomic_store_n(&gRtcCaptureActive,0U,__ATOMIC_RELEASE);
+      __atomic_store_n(&a04br3_runtime_probe_active,0U,__ATOMIC_RELEASE);
+      released=true;
+    }
+    gWatchdogGate.unlock();
+  }
+  if (panic_active()) { thread_terminate(current_thread()); return; }
+  IOLog("a04br3 rtc-ref samples=%u valid=%u reason=%u rtc_seconds=%u min_ticks=%llu max_ticks=%llu owner=unverified timebase=uncalibrated rtc_rate=unverified alias=unverified recovery=unverified\n",n,static_cast<unsigned>(complete && b.valid && released),stopReason,b.rtcSeconds,static_cast<unsigned long long>(b.minTicks),static_cast<unsigned long long>(b.maxTicks));
   thread_terminate(current_thread());
 }
 #endif
@@ -423,7 +445,8 @@ extern "C" bool a04br3_runtime_probe_begin(void)
 extern "C" bool a04br3_runtime_probe_end_checked(void)
 {
   if (!a04br3_pmu_gate_lock_bounded()) return false;
-  bool ok=__atomic_load_n(&gRuntimePmuLease.state,__ATOMIC_ACQUIRE)==0 &&
+  bool ok=!__atomic_load_n(&gRtcCaptureActive,__ATOMIC_ACQUIRE) &&
+          __atomic_load_n(&gRuntimePmuLease.state,__ATOMIC_ACQUIRE)==0 &&
           __atomic_load_n(&a04br3_runtime_probe_active,__ATOMIC_ACQUIRE)!=0;
   if (ok) __atomic_store_n(&a04br3_runtime_probe_active,0U,__ATOMIC_RELEASE);
   gWatchdogGate.unlock();return ok;
