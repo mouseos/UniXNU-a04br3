@@ -82,7 +82,13 @@ enum {
  *    job. Linux gets the same order from the geometry -> partial render syncobj that Mesa attaches
  *    (pvr_drm_job_render.c) and pairs the two jobs (pvr_job.c can_combine_jobs()). Jobs of one type on one context
  *    run in submission order, as on Linux.
- *  - All jobs are queued or none is; on failure no fence is issued.
+ *  - Validation/preparation can fail before enqueue. A KICK error after CCCB writes
+ *    may leave part of a batch submitted or its eventual execution unknown; a
+ *    failed call returns no fences and does not imply rollback or GPU quiescence.
+ *    kIOReturnIOError is reported as device-lost by the Darwin winsys. A client
+ *    must not infer that shared storage is safe to reuse from this error alone.
+ *    The current driver has no proven cross-client/shared-BO exclusion or GPU
+ *    stop completion contract; this failure path is not approved for hardware.
  *  - Reply: fence[i] identifies jobs.array[i] for i < jobs.count, the rest is zero. */
 struct NativePowerVRAbiSubmitReply {
     uint64_t fence[NativePowerVRAbiMaxJobs];

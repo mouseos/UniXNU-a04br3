@@ -1686,12 +1686,15 @@ IOReturn NativePowerVRUserClient::run(uint32_t method, const void *input, uint32
   const int err = closing_ ? -ENODEV : call(method, args, &reply);
   if (submitPerf) native_powervr_submit_perf_ioctl_end(1, callPerf);
   uint64_t ioEnd = ioStart ? mach_absolute_time() : 0;
+  const bool closedDuringCall = closing_; // protected by lock_, including after the PTE prephase.
   IOLockUnlock(lock_);
   if (ioStart) {
     native_powervr_io_trace_record(ioStart,ioLocked,ioTid,0,ioPid,2,0,0);
     native_powervr_io_trace_record(ioLocked,ioEnd,ioTid,0,ioPid,3,err,0);
   }
-  if (closing_) return kIOReturnNotReady;
+  // Preserve the ambiguous KICK failure even when close raced the unlocked prephase.
+  if (submitPerf && err == -EIO) return ioReturnOf(err);
+  if (closedDuringCall) return kIOReturnNotReady;
   if (err) return ioReturnOf(err);
   if (method == NativePowerVRMethodSubmitJobs) memcpy(output, &reply, sizeof(reply));
   else if (shape->output) memcpy(output, args, shape->output);

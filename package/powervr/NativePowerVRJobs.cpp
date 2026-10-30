@@ -2256,8 +2256,8 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     js[i + 1]->paired = js[i];
     i++;
   }
-  // Space for the whole call in every queue it uses (the CCCB fence of Linux, taken for all jobs at once so that all
-  // are queued or none is), with the largest dependency count a job can have.
+  // Preflight CCCB space for the whole call, with the largest dependency count a job can have.
+  // This does not reserve KCCB slots or guarantee that subsequent kicks cannot fail.
   uint64_t deadline;
   nanoseconds_to_absolutetime(uint64_t(kSchedTimeoutMs) * 1000000ULL, &deadline);
   deadline += nowAbs();
@@ -2310,7 +2310,7 @@ extern "C" int native_powervr_submit_jobs(struct native_powervr_jobs_file *file,
     for (uint32_t i = 0; i < count; i++) pvr_job_release(js[i]);
     return err;
   }
-  // Nothing fails from here on (push_jobs()). Fences increase in array order and never read as the tunnel word.
+  // Reserve fence IDs in array order; a subsequent kick failure records every ID as failed and returns no reply.
   for (uint32_t i = 0; i < count; i++) {
     if (uint32_t(file->nextFence) == NativePowerVRTunnelMagic) file->nextFence++;
     js[i]->fence = file->nextFence++;
