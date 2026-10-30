@@ -232,11 +232,11 @@ def check_owner_seed(record, provenance, old_kernel, new_kernel, scratch_sha):
     return expected
 
 
-def rewrite_args(line, stream=False, meter=False, meter_route=False, all_task=False, live_pc=False):
+def rewrite_args(line, stream=False, meter=False, meter_route=False, all_task=False, live_pc=False, all_task_control=False):
     if live_pc and not all_task: raise ValueError('--live-pc requires --all-task')
-    if sum((bool(meter), bool(meter_route), bool(all_task))) > 1: raise ValueError('select exactly one diagnostic mode')
+    if sum((bool(meter), bool(meter_route), bool(all_task), bool(all_task_control))) > 1: raise ValueError('select exactly one diagnostic mode')
     meter_enabled = meter or meter_route
-    diagnostic_enabled = meter_enabled or all_task
+    diagnostic_enabled = meter_enabled or all_task or all_task_control
     words = line.split(); keys = [word.partition('=')[0] for word in words]
     if len(keys) != len(set(keys)): raise ValueError('duplicate kernel argument keys')
     values = {word.partition('=')[0]: word.partition('=')[2] for word in words if '=' in word}
@@ -252,7 +252,8 @@ def rewrite_args(line, stream=False, meter=False, meter_route=False, all_task=Fa
     changed = [('pl=60' if word.startswith('pl=') else word) for word in words if diagnostic_enabled or not word.startswith('a04br3-home-perf=')]
     if 'a04br3-stacklog' in keys:
         raise ValueError('unexpected existing stacklog argument')
-    changed.append('atp=1' if all_task else 'cm=2' if meter_route else 'cm=1' if meter else 'a04br3-stacklog=1')
+    if not all_task_control:
+        changed.append('atp=1' if all_task else 'cm=2' if meter_route else 'cm=1' if meter else 'a04br3-stacklog=1')
     if live_pc: changed.append('a04br3-live-pc=1')
     if stream:
         if 'native-cs-stream' in keys: raise ValueError('unexpected existing stream argument')
@@ -289,18 +290,19 @@ def main():
     parser.add_argument('--meter', action=Once, help='enable the separate opt-in clock meter trial')
     parser.add_argument('--meter-route', action=Once, help='enable the experimental vendor clock route trial')
     parser.add_argument('--all-task', action=Once, help='enable opt-in all-process resource sampling')
+    parser.add_argument('--all-task-control', action=Once, help='use the all-task profile without atp=1')
     parser.add_argument('--live-pc', action=Once, help='enable PID 1 live PC sampling with --all-task')
     args = parser.parse_args()
     if args.live_pc and not args.all_task: parser.error('--live-pc requires --all-task')
-    if args.stream and (args.all_task or args.meter or args.meter_route) or sum((args.all_task, args.meter, args.meter_route)) > 1:
+    if args.stream and (args.all_task or args.all_task_control or args.meter or args.meter_route) or sum((args.all_task, args.all_task_control, args.meter, args.meter_route)) > 1:
         parser.error('conflicting diagnostic modes')
     source, old_device, new_device, uefi, old_boot, old_pair, kernel, record_path, fd, out, seed_provenance = (getattr(args, name.replace('-', '_')).resolve() for name in ('source','old_device','new_device','uefi','old_boot','old_pair','kernel','kernel_record','fd','out','seed_provenance'))
-    expected_device = ALLTASK_DEVICE if args.all_task else ROUTE_DEVICE if args.meter_route else NEW_DEVICE
+    expected_device = ALLTASK_DEVICE if args.all_task or args.all_task_control else ROUTE_DEVICE if args.meter_route else NEW_DEVICE
     check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, expected_device); check_repo(uefi, UEFI)
     if out.exists(): raise ValueError('refuse to overwrite output')
     if not all(path.is_file() for path in (old_boot, old_pair, kernel, record_path, fd)): raise ValueError('a required input is missing')
     record = load_kernel_record(record_path, kernel, expected_device)
-    if args.live_pc: check_live_pc_kernel(record)
+    if args.live_pc or args.all_task_control: check_live_pc_kernel(record)
     pair = json.loads(old_pair.read_text()); declared = pair_hashes(pair)
     if (pair.get('source_commit'), pair.get('device_commit'), pair.get('uefi_commit')) != (OLD_SOURCE, OLD_DEVICE, UEFI): raise ValueError('old pair pins mismatch')
     if pair.get('variants', {}).get('baseline', {}).get('boot_sha256') != sha(old_boot): raise ValueError('old pair boot hash mismatch')
@@ -308,7 +310,7 @@ def main():
     if sha(fd) != declared['fd'] or not dtb.is_file() or sha(dtb) != declared['dtb']: raise ValueError('FD/DTB pin mismatch with old pair')
     original_args = pair.get('variants', {}).get('baseline', {}).get('kernel_args')
     if not isinstance(original_args, str): raise ValueError('old pair lacks baseline kernel args')
-    rewritten = rewrite_args(original_args, stream=args.stream, meter=args.meter, meter_route=args.meter_route, all_task=args.all_task, live_pc=args.live_pc)
+    rewritten = rewrite_args(original_args, stream=args.stream, meter=args.meter, meter_route=args.meter_route, all_task=args.all_task, live_pc=args.live_pc, all_task_control=args.all_task_control)
     stage = Path(tempfile.mkdtemp(prefix='.' + out.name + '.', dir=out.parent))
     try:
         source_payload, old_dir, new_dir = stage/'old.img', stage/'old', stage/'new'
@@ -351,7 +353,7 @@ def main():
         boot_payload = stage/'boot-payload.img'; boot_ramdisk(output_boot, boot_payload)
         if sha(boot_payload) != sha(image): raise ValueError('output boot FAT differs from new payload')
         check_repo(source, OLD_SOURCE); check_repo(old_device, OLD_DEVICE); check_repo(new_device, expected_device); check_repo(uefi, UEFI)
-        report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'native_cs_stream': bool(args.stream), 'clock_meter': bool(args.meter or args.meter_route), 'clock_meter_route': bool(args.meter_route), 'all_task_sampling': bool(args.all_task), 'live_pc_pid1': bool(args.live_pc), 'owner_data_volume_uuid': data_uuid, 'seed_provenance_sha256': sha(seed_provenance), 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
+        report = {'schema': 1, 'kind': 'a04br3-iostat-stack-new-kernel', 'source_commit': OLD_SOURCE, 'old_device_commit': OLD_DEVICE, 'new_device_commit': git(new_device, 'rev-parse', 'HEAD'), 'uefi_commit': UEFI, 'native_cs_stream': bool(args.stream), 'clock_meter': bool(args.meter or args.meter_route), 'clock_meter_route': bool(args.meter_route), 'all_task_sampling': bool(args.all_task), 'all_task_control': bool(args.all_task_control), 'live_pc_pid1': bool(args.live_pc), 'owner_data_volume_uuid': data_uuid, 'seed_provenance_sha256': sha(seed_provenance), 'kernel_build_record': {'sha256': record['sha256'], 'device_commit': record['device_commit'], 'source_commit': record['source_commit'], 'run_id': record['run_id']}, 'old_boot_sha256': sha(old_boot), 'old_pair_sha256': sha(old_pair), 'fd_sha256': sha(fd), 'dtb_sha256': sha(dtb), 'kernel_args': rewritten, 'fixed_payload_sha256': {name: old_files[name] for name in FIXED}, 'output_fat_files_sha256': new_files, 'output_fat_changed_files': changed, 'adt_identity_sha256': identity_hash, 'adt_comparison': 'identity, structure, and random-seed only; values withheld', 'payload_sha256': sha(image), 'boot_sha256': sha(output_boot), 'build_log_sha256': sha(log), 'hardware_tested': False, 'source_build_bit_reproducible': 'unproven', 'signature_verified': 'unproven', 'historical_private_log_risk': 'older builder used a temporary private log before redaction; this builder does not capture identity-bearing private output'}
         shutil.copyfile(image, stage/'payload.img'); (stage/'manifest.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')
         for path in (stage/'work', stage/'boot-work', old_dir, new_dir): shutil.rmtree(path)
         source_payload.unlink(); boot_payload.unlink(); (stage/'old.toml').unlink(); (stage/'new.toml').unlink(); stage.rename(out)

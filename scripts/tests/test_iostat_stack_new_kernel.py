@@ -14,6 +14,22 @@ def prop(name, value):
     return name.encode().ljust(32, b'\0') + struct.pack('<I', len(value)) + value + bytes((-len(value)) % 4)
 
 class NewKernelContracts(unittest.TestCase):
+    def test_all_task_control_changes_only_atp_and_preserves_gpu(self):
+        line = ('serial=1 a04br3-gpu=2 sheng-gpu-addon=1 a04br3-gpu-metal=1 '
+                'a04br3-home-perf=1 pl=1 native-msdc-iostat=1 a04br3-autoreset=720')
+        baseline = BUILD.rewrite_args(line, all_task=True)
+        control = BUILD.rewrite_args(line, all_task_control=True)
+        self.assertEqual(baseline.split(), control.split() + ['atp=1'])
+        self.assertEqual(control, line.replace('pl=1', 'pl=60'))
+        for bad in (' atp=1', ' atp=0', ' a04br3-live-pc=1', ' cm=0',
+                    ' native-cs-stream=1', ' arc=1', ' a04br3-proclog=1'):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                BUILD.rewrite_args(line + bad, all_task_control=True)
+        for kwargs in ({'all_task':True}, {'live_pc':True}, {'meter':True},
+                       {'meter_route':True}, {'stream':True}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                BUILD.rewrite_args(line, all_task_control=True, **kwargs)
+
     def test_iostat_arguments_remove_home_perf_and_keep_iostat(self):
         line = 'serial=1 a04br3-home-perf=1 pl=1 native-msdc-iostat=1'
         self.assertEqual(BUILD.rewrite_args(line), 'serial=1 pl=60 native-msdc-iostat=1 a04br3-stacklog=1')
@@ -73,7 +89,11 @@ class NewKernelContracts(unittest.TestCase):
         required = [item for name in names for item in ('--'+name, '/nonexistent')]
         for flags in (['--all-task','--all-task'], ['--all-task','--live-pc','--live-pc'],
                       ['--live-pc'], ['--all-task','--live-pc','--meter'],
-                      ['--all-task','--live-pc','--stream']):
+                      ['--all-task','--live-pc','--stream'],
+                      ['--all-task-control','--all-task-control'],
+                      ['--all-task-control','--all-task'], ['--all-task-control','--meter'],
+                      ['--all-task-control','--meter-route'], ['--all-task-control','--stream'],
+                      ['--all-task-control','--live-pc']):
             result = subprocess.run([sys.executable, str(script), *required, *flags], capture_output=True, text=True)
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertTrue(any(word in result.stderr for word in ('more than once', 'requires --all-task', 'conflicting diagnostic modes')))
