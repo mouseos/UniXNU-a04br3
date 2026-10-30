@@ -1,9 +1,15 @@
 #!/bin/bash
 # Build only on the fixed UniXNU tree and its recorded NativeMsdc gitlink.
 set -euo pipefail
+: "${UNIXNU_ROOT:?Set UNIXNU_ROOT to the fixed UniXNU checkout}"
+: "${RUNNER_TEMP:?Set RUNNER_TEMP to the prepared workflow seed directory}"
 : "${DEVICE_DIR:?Set DEVICE_DIR to a clean UniXNU-a04br3 checkout}"
 : "${A04BR3_DEVICE_COMMIT:?Set A04BR3_DEVICE_COMMIT to its full commit ID}"
 : "${XNU_OWNER_DATA_VOLUME_UUID:?Prepare the owner Data seed using the UniXNU workflow}"
+cd "$UNIXNU_ROOT"
+test -s "$RUNNER_TEMP/data.dbr"
+test -s "$RUNNER_TEMP/owner-data/owner-data-32.cdr"
+python3 "$DEVICE_DIR/scripts/a04br3-verify-workflow-seed.py"
 test "$(git rev-parse HEAD)" = 22e49b19f9651e8b0e81c3fb3764d8d3a72c7ff4
 test "$(git -C "$DEVICE_DIR" rev-parse HEAD)" = "$A04BR3_DEVICE_COMMIT"
 test -z "$(git -C "$DEVICE_DIR" status --porcelain --untracked-files=no --ignore-submodules=all)"
@@ -13,8 +19,9 @@ export XNU_IRQ_PC_STATS=1 XNU_MSDC_IRQ_WAIT=1 XNU_MSDC_IRQ_WORKER=1 XNU_MSDC_GIC
 export XNU_PROCESS_EXIT_DIAG=1 XNU_ROOT_TIMING=1 XNU_IO_OVERLAP_TRACE=1
 ./unixnu defconfig a04br3_rtc_ref_defconfig -D "$DEVICE_DIR"
 ./unixnu build kernel -D "$DEVICE_DIR"
-tree=out/a04br3/tree
-kernel=out/a04br3/kernel/kernel.macho
+out_root=$(python3 -c 'import os,pathlib; print(pathlib.Path(os.path.expandvars(os.path.expanduser(os.environ.get("UNIXNU_OUT") or "out"))).resolve())')
+tree="$out_root/a04br3/tree"
+kernel="$out_root/a04br3/kernel/kernel.macho"
 msdc="$tree/build/native-msdc/libNativeMsdc.a"
 grep -q -- '-DNATIVE_MSDC_IRQ_WAIT=1' "$tree/build/native-msdc/compile-command.json"
 grep -q -- '-DA04BR3_RTC_REF=1' "$tree/build/a04br3-board/A04BR3AutoReset.command.json"
