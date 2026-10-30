@@ -736,6 +736,21 @@ extern "C" void native_powervr_submit_perf_report(void)
           (unsigned long long)__atomic_load_n(&gWaitFenceResult[i][2], __ATOMIC_RELAXED));
 }
 
+// Cumulative fence-wait counters for the app launch breakdown (BootProcessProbe.c, a04br3-input-latency=2): other
+// entered/finished/ticks, backboardd entered/finished/ticks/success/timeout, other success/timeout. Zero unless the submit
+// perf counters are enabled (a04br3-gpu-submit-perf=1 or a04br3-home-perf=1; A04BR3Board.cpp also enables them for the
+// breakdown).
+extern "C" void native_powervr_wait_snapshot(uint64_t out[10])
+{
+  const PerfCounter &o = gSubmitPerf[PerfWaitFence], &b = gSubmitPerf[PerfWaitFenceBackboard];
+  out[0] = __atomic_load_n(&o.entered, __ATOMIC_RELAXED); out[1] = __atomic_load_n(&o.finished, __ATOMIC_RELAXED);
+  out[2] = __atomic_load_n(&o.ticks, __ATOMIC_RELAXED);
+  out[3] = __atomic_load_n(&b.entered, __ATOMIC_RELAXED); out[4] = __atomic_load_n(&b.finished, __ATOMIC_RELAXED);
+  out[5] = __atomic_load_n(&b.ticks, __ATOMIC_RELAXED);
+  out[6] = __atomic_load_n(&gWaitFenceResult[1][0], __ATOMIC_RELAXED); out[7] = __atomic_load_n(&gWaitFenceResult[1][1], __ATOMIC_RELAXED);
+  out[8] = __atomic_load_n(&gWaitFenceResult[0][0], __ATOMIC_RELAXED); out[9] = __atomic_load_n(&gWaitFenceResult[0][1], __ATOMIC_RELAXED);
+}
+
 // ---- The Linux API shim (compat/native_powervr_linux_jobs.h) ----
 extern "C" void native_powervr_lock_init(void **lock)
 {

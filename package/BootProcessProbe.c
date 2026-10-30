@@ -651,3 +651,160 @@ static void live_pc_image_report(unsigned pid,uint64_t epoch) {
   printf("a04br3 livepc image epoch=%llu index=%u dyld=%u mapping_at_sample=unknown load=%llx text_vm=%llx text_size=%llx text_valid=%u macho=%u detail_complete=%u uuid_valid=%u uuid=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",(unsigned long long)epoch,i,i==read_count,(unsigned long long)r->addr,(unsigned long long)r->text_vm,(unsigned long long)r->text_size,r->text_valid,r->valid,r->complete,r->uuid_valid,r->uuid[0],r->uuid[1],r->uuid[2],r->uuid[3],r->uuid[4],r->uuid[5],r->uuid[6],r->uuid[7],r->uuid[8],r->uuid[9],r->uuid[10],r->uuid[11],r->uuid[12],r->uuid[13],r->uuid[14],r->uuid[15]);
  }
 }
+
+// ---- App launch breakdown (a04br3-input-latency=2, default off) ------------------------------------------------------------
+// Called only by the launch-trace thread of A04BR3AutoReset.cpp while a timed tap (A04BR3!TAP) is open: every 100 ms with
+// full=0 (process events only) and every second with full=1 (counters, processes and the threads that changed). Times are
+// microseconds after the tap's UART receipt (rx, mach absolute). Nothing is printed while a task or thread lock is held.
+//   a04br3 lt ev   process events: Preferences seen (spawn = its p_stats start, the posix_spawn by launchd), its pthread
+//                  registration (p_threadstart set by bsdthread_register from libSystem's initializer: dyld has bound every
+//                  image and runs initializers), its second thread
+//   a04br3 lt s    system deltas since the previous full sample: VM page-ins/faults/decompressions, eMMC reads of
+//                  NativeMsdc (native-msdc-iostat=1) and GPU fence waits (a04br3 gpu submit perf counters)
+//   a04br3 lt p    per selected process: CPU, faults, page-ins, threads running/waiting (deltas)
+//   a04br3 lt th   per thread that ran or changed its wait: state, wait event, user PC, saved kernel return addresses
+#include <kern/host_statistics.h>
+extern volatile uint64_t native_msdc_transport_stats[36] __attribute__((weak_import));
+extern void native_powervr_wait_snapshot(uint64_t out[10]) __attribute__((weak_import));
+// package/A04BR3LaunchProc.c (kern_exec.c record: proc internals).
+uint64_t a04br3_proc_threadstart(void *);
+uint64_t a04br3_proc_start_abs(void *);
+extern vm_offset_t vm_kernel_slide;
+#define LT_NAMES 6
+#define LT_THREADS 48
+#define LT_SEEN 384
+static const char *const lt_names[LT_NAMES]={"Preferences","SpringBoard","backboardd","runningboardd","launchd","lsd"};
+struct lt_thread { uint64_t tid,event,cont,pc,kernel[3],cpu; unsigned state; int pri; };
+struct lt_proc {
+ int pid; unsigned present,busy,threads,running,waiting,count,decompressions;
+ uint64_t uid,cpu,faults,pageins,cow,messages,resident,threadstart,start;
+ struct lt_thread th[LT_THREADS];
+};
+struct lt_seen { uint64_t tid,cpu,event; unsigned state; };
+static struct lt_proc lt_procs[LT_NAMES];
+static struct lt_seen lt_seen[LT_SEEN];
+static unsigned lt_seen_count,lt_full;
+static uint64_t lt_rx,lt_prev_cpu[LT_NAMES],lt_prev_faults[LT_NAMES],lt_prev_pageins[LT_NAMES],lt_prev_uid[LT_NAMES];
+static uint64_t lt_prev_sys[18];
+static uint64_t lt_pref_uid,lt_pref_dyld,lt_pref_threads;
+static long long lt_us(uint64_t abs) {
+ uint64_t ns=0;
+ if(abs>=lt_rx){absolutetime_to_nanoseconds(abs-lt_rx,&ns);return (long long)(ns/1000);}
+ absolutetime_to_nanoseconds(lt_rx-abs,&ns);return -(long long)(ns/1000);
+}
+static int lt_index(proc_t p) {
+ const char *n=proc_best_name(p);
+ for(int i=0;i<LT_NAMES;++i)if(!strcmp(n,lt_names[i]))return i;
+ return -1;
+}
+static int lt_selected(proc_t p,void *unused){(void)unused;return lt_index(p)>=0;}
+static int lt_capture(proc_t p,void *unused) {
+ (void)unused;int i=lt_index(p);
+ if(i<0)return PROC_RETURNED;
+ struct lt_proc *r=&lt_procs[i];
+ if(r->present || (i==4 && proc_pid(p)!=1))return PROC_RETURNED;   // first match; launchd: pid 1 only
+ memset(r,0,sizeof(*r));
+ r->present=1;r->pid=proc_pid(p);r->uid=proc_uniqueid(p);
+ r->threadstart=a04br3_proc_threadstart(p);r->start=a04br3_proc_start_abs(p);
+ task_t task=proc_task(p);if(!task){r->busy=1;return PROC_RETURNED;}
+ r->cpu=get_task_cpu_time(task);r->resident=get_task_resident_size(task);
+ r->faults=counter_load(&task->faults);r->pageins=counter_load(&task->pageins);
+ r->cow=counter_load(&task->cow_faults);r->messages=counter_load(&task->messages_sent);r->decompressions=task->decompressions;
+ if(!task_lock_try(task)){r->busy=1;return PROC_RETURNED;}
+ r->threads=task->thread_count;
+ thread_t th;unsigned scanned=0;
+ queue_iterate(&task->threads,th,thread_t,task_threads){
+  if(scanned++>=128)break;
+  bool irq=ml_set_interrupts_enabled(false);
+  if(!simple_lock_try(&th->sched_lock,&thread_lck_grp)){++r->busy;ml_set_interrupts_enabled(irq);continue;}
+  unsigned st=(unsigned)th->state;r->running+=(st&TH_RUN)!=0;r->waiting+=(st&TH_WAIT)!=0;
+  if(lt_full && r->count<LT_THREADS) {
+   struct lt_thread *d=&r->th[r->count++];
+   struct recount_times_mach tt=recount_thread_times(th);
+   d->tid=th->thread_id;d->state=st;d->pri=th->sched_pri;d->event=(uint64_t)th->wait_event;
+   d->cont=(uint64_t)th->continuation;d->cpu=tt.rtm_user+tt.rtm_system;
+   arm_saved_state_t *saved=th->machine.upcb;
+   if(saved && is_saved_state64(saved))d->pc=get_saved_state_pc(saved);
+   struct home_perf_thread k={0};home_perf_kernel_stack(th,&k);
+   d->kernel[0]=k.kernel[0];d->kernel[1]=k.kernel[1];d->kernel[2]=k.kernel[2];
+  }
+  thread_unlock(th);ml_set_interrupts_enabled(irq);
+ }
+ task_unlock(task);return PROC_RETURNED;
+}
+static struct lt_seen *lt_seen_find(uint64_t tid) {
+ for(unsigned i=0;i<lt_seen_count;++i)if(lt_seen[i].tid==tid)return &lt_seen[i];
+ if(lt_seen_count>=LT_SEEN)return NULL;
+ struct lt_seen *s=&lt_seen[lt_seen_count++];memset(s,0,sizeof(*s));s->tid=tid;s->state=~0u;return s;
+}
+// System counters: 0..3 VM, 4..7 eMMC reads (calls, bytes, ns, calls <= 4 KiB), 8..17 GPU fence waits
+// (native_powervr_wait_snapshot order: other entered/finished/ticks, backboardd entered/finished/ticks/ok/timeout, other ok/timeout).
+static void lt_system(uint64_t v[18]) {
+ memset(v,0,18*sizeof(v[0]));
+ v[0]=counter_load(&vm_statistics_pageins);v[1]=counter_load(&vm_statistics_faults);
+ v[2]=counter_load(&vm_statistics_decompressions);v[3]=counter_load(&vm_statistics_cow_faults);
+ if(native_msdc_transport_stats) for(unsigned mode=0;mode<2;++mode) for(unsigned bin=0;bin<3;++bin) {
+  unsigned index=(mode*3+bin)*4;
+  v[4]+=__atomic_load_n(&native_msdc_transport_stats[index],__ATOMIC_RELAXED);
+  v[5]+=__atomic_load_n(&native_msdc_transport_stats[index+1],__ATOMIC_RELAXED);
+  v[6]+=__atomic_load_n(&native_msdc_transport_stats[index+3],__ATOMIC_RELAXED);
+  if(!bin)v[7]+=__atomic_load_n(&native_msdc_transport_stats[index],__ATOMIC_RELAXED);
+ }
+ if(native_powervr_wait_snapshot){uint64_t g[10];native_powervr_wait_snapshot(g);for(unsigned i=0;i<10;++i)v[8+i]=g[i];}
+}
+void boot_launch_trace_begin(uint64_t rx) {
+ lt_rx=rx;lt_seen_count=0;lt_pref_uid=lt_pref_dyld=lt_pref_threads=0;
+ memset(lt_prev_uid,0,sizeof(lt_prev_uid));
+ lt_system(lt_prev_sys);
+ uint64_t ns=0;absolutetime_to_nanoseconds(rx,&ns);
+ printf("a04br3 lt begin rx_ns=%llu kslide=%llx msdc=%u gpu=%u\n",(unsigned long long)ns,(unsigned long long)vm_kernel_slide,
+  native_msdc_transport_stats!=NULL,native_powervr_wait_snapshot!=NULL);
+}
+void boot_launch_trace_sample(unsigned full) {
+ lt_full=full;
+ memset(lt_procs,0,sizeof(lt_procs));
+ const uint64_t at=mach_absolute_time();
+ proc_iterate(PROC_ALLPROCLIST|PROC_NOWAITTRANS,lt_capture,NULL,lt_selected,NULL);
+ const long long t=lt_us(at);
+ struct lt_proc *pref=&lt_procs[0];
+ if(pref->present && pref->uid!=lt_pref_uid) {
+  lt_pref_uid=pref->uid;lt_pref_dyld=lt_pref_threads=0;
+  printf("a04br3 lt ev t_us=%lld pref_seen pid=%d spawn_us=%lld threads=%u\n",t,pref->pid,lt_us(pref->start),pref->threads);
+ }
+ if(pref->present && !lt_pref_dyld && pref->threadstart) {
+  lt_pref_dyld=1;printf("a04br3 lt ev t_us=%lld pref_pthread_registered pid=%d\n",t,pref->pid);
+ }
+ if(pref->present && !lt_pref_threads && pref->threads>1) {
+  lt_pref_threads=1;printf("a04br3 lt ev t_us=%lld pref_threads pid=%d threads=%u\n",t,pref->pid,pref->threads);
+ }
+ if(!full)return;
+ uint64_t v[18],d[18];lt_system(v);
+ for(unsigned i=0;i<18;++i){d[i]=v[i]-lt_prev_sys[i];lt_prev_sys[i]=v[i];}
+ uint64_t rdns=d[6],bbns=0,otns=0;   // NativeMsdc adds nanoseconds; the GPU counters are mach ticks
+ absolutetime_to_nanoseconds(d[10],&otns);absolutetime_to_nanoseconds(d[13],&bbns);
+ printf("a04br3 lt s t_us=%lld free=%u pageins=%llu faults=%llu decomp=%llu cow=%llu rd_calls=%llu rd_bytes=%llu rd_ms=%llu rd_le4k=%llu "
+  "fence_other=%llu/%llu ms=%llu fence_bb=%llu/%llu ms=%llu fence_bb_ok=%llu timeout=%llu fence_other_ok=%llu timeout=%llu\n",
+  t,vm_page_free_count,d[0],d[1],d[2],d[3],d[4],d[5],rdns/1000000,d[7],d[8],d[9],otns/1000000,d[11],d[12],bbns/1000000,d[14],d[15],d[16],d[17]);
+ for(unsigned i=0;i<LT_NAMES;++i) {
+  struct lt_proc *r=&lt_procs[i];
+  if(!r->present)continue;
+  const bool same=lt_prev_uid[i]==r->uid;
+  uint64_t cpu=same?r->cpu-lt_prev_cpu[i]:r->cpu,cpuns=0;absolutetime_to_nanoseconds(cpu,&cpuns);
+  printf("a04br3 lt p t_us=%lld %s p%d threads=%u run=%u wait=%u busy=%u cpu_ms=%llu faults=%llu pageins=%llu resident_kb=%llu\n",
+   t,lt_names[i],r->pid,r->threads,r->running,r->waiting,r->busy,cpuns/1000000,
+   same?r->faults-lt_prev_faults[i]:r->faults,same?r->pageins-lt_prev_pageins[i]:r->pageins,r->resident/1024);
+  lt_prev_uid[i]=r->uid;lt_prev_cpu[i]=r->cpu;lt_prev_faults[i]=r->faults;lt_prev_pageins[i]=r->pageins;
+  unsigned quiet=0;
+  for(unsigned j=0;j<r->count;++j) {
+   struct lt_thread *h=&r->th[j];struct lt_seen *s=lt_seen_find(h->tid);
+   uint64_t dcpu=s && s->state!=~0u?h->cpu-s->cpu:h->cpu,dns=0;absolutetime_to_nanoseconds(dcpu,&dns);
+   const bool changed=!s || s->state==~0u || dns>=1000000 || (h->state&TH_RUN) || s->event!=h->event;
+   if(s){s->cpu=h->cpu;s->event=h->event;s->state=h->state;}
+   if(!changed){++quiet;continue;}
+   printf("a04br3 lt th t_us=%lld p%d t%llu s=%x pri=%d cpu_us=%llu e=%llx c=%llx u=%llx k=%llx/%llx/%llx\n",t,r->pid,
+    (unsigned long long)h->tid,h->state,h->pri,dns/1000,h->event,h->cont,h->pc,h->kernel[0],h->kernel[1],h->kernel[2]);
+  }
+  if(quiet)printf("a04br3 lt th t_us=%lld p%d unchanged=%u\n",t,r->pid,quiet);
+ }
+}
+

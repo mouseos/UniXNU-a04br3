@@ -489,8 +489,12 @@ extern "C" void unixnu_board_init(void)
   unsigned gpuSubmitPerf = 0;
   // Existing diagnostic option avoids extending a near-capacity boot command line.
   // An explicit GPU setting takes precedence, including 0 to disable it.
-  if (!PE_parse_boot_argn("a04br3-gpu-submit-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf)))
+  if (!PE_parse_boot_argn("a04br3-gpu-submit-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf))) {
     PE_parse_boot_argn("a04br3-home-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf));
+    // The app launch breakdown (a04br3-input-latency=2, BootProcessProbe.c) reports the fence waits of these counters.
+    unsigned launchTrace = 0;
+    if (PE_parse_boot_argn("a04br3-input-latency", &launchTrace, sizeof(launchTrace)) && launchTrace == 2) gpuSubmitPerf = 1;
+  }
   native_powervr_submit_perf_enable(gpuSubmitPerf);
   unsigned gpuIoTrace = 0;
   if (!PE_parse_boot_argn("a04br3-gpu-io-trace", &gpuIoTrace, sizeof(gpuIoTrace)) &&

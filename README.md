@@ -715,3 +715,15 @@ used in a payload. A missing validator, reference, or required definition is a
 build error. `llvm-nm` from the configured LLVM toolchain is required. Record
 the source revisions, build options, reference hash, final hash, and dependency
 versions in the artifact manifest. Do not distribute the reference kernel.
+
+## App launch breakdown (`a04br3-input-latency=2`, default off)
+
+`a04br3-input-latency=1` times each UART input (`A04BR3!HOME`, `A04BR3!SWR`, `A04BR3!TAPx,y`; scripts/a04br3-input-latency.py).
+With `2`, each timed tap also starts a launch trace (package/A04BR3AutoReset.cpp, package/BootProcessProbe.c) that runs in its own
+kernel thread until the tap's sample closes: every 100 ms it looks for Preferences (spawn time from the process start, pthread
+registration = dyld finished, second thread), and every second it prints the VM page-in/fault/decompression deltas, the eMMC reads
+of NativeMsdc (needs `native-msdc-iostat=1`), the GPU fence waits and timeouts (the submit perf counters, enabled by this mode),
+and the CPU, faults and changed threads (state, wait event, continuation, user PC, saved kernel return addresses) of Preferences,
+SpringBoard, backboardd, runningboardd, launchd and lsd. `scripts/a04br3-launch-breakdown.py --log UART --from-offset A
+--to-offset B --kernel KERNEL.macho` turns the `a04br3 lt` lines into the timeline, the per-second table and thread-seconds per wait.
+The walks add load during the launch (about 10 process passes per second); compare launches with the same mode.
