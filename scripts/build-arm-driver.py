@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import subprocess
 from a04br3_runtime_config import require_cpu_counters_disabled
+from a04br3_busy_control_config import busy_control_flags
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -126,6 +127,11 @@ if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_A04BR3_RUNTIME') == '1':
             command += ['-DARMCPU_RUNTIME_ACTIVE=1']
 if component == 'ArmCpu' and os.environ.get('XNU_ARMCPU_RUNTIME_WINDOW') == '1' and os.environ.get('XNU_ARMCPU_A04BR3_RUNTIME') != '1':
     raise SystemExit('runtime window requires a04br3 runtime support')
+if component == 'ArmCpu':
+    try:
+        command += busy_control_flags(os.environ)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 # a04br3 eMMC (MSDC0, github.com/mouseos/NativeMsdc). CONFIG_XNU_NATIVE_MSDC_BLOCK=y builds the userdata windows as
 # IOBlockStorageDevice subclasses; their kernel link needs the audited storage aliases (board.toml, the NativeMsdc bindings
 # entry). Without it the driver serves the persistent store only and links on its own. With the RAM block linked and no
