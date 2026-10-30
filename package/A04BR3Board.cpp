@@ -341,8 +341,11 @@ static void a04br3_free_data_seed(void)
 {
   static bool done;
   if (done) return;
-  unsigned enabled = 0;
-  if (!PE_parse_boot_argn("a04br3-free-data-seed", &enabled, sizeof(enabled)) || enabled != 1) { done = true; return; }
+  unsigned enabled = 0, mp = 0;
+  // Short form for full command lines (1023 bytes): mp bit 8 (0x100).
+  if (!PE_parse_boot_argn("a04br3-free-data-seed", &enabled, sizeof(enabled)) && PE_parse_boot_argn("mp", &mp, sizeof(mp)))
+    enabled = (mp >> 8) & 1;
+  if (enabled != 1) { done = true; return; }
   if (!&native_ram_block_ready || !&native_ram_block_sparse) { done = true; IOLog("a04br3 data-seed free: skipped=no-driver\n"); return; }
   if (!native_ram_block_ready) return;   // retried on the next round
   done = true;
@@ -372,8 +375,10 @@ void procLogThread(void *, wait_result_t)
   if (!PE_parse_boot_argn("a04br3-membench", &memBench, sizeof(memBench)))
     PE_parse_boot_argn("mb", &memBench, sizeof(memBench));
   uint64_t cacheReportSeconds = 0;
-  unsigned wiredTag = 0;
-  PE_parse_boot_argn("a04br3-wiredtag", &wiredTag, sizeof(wiredTag));
+  unsigned wiredTag = 0, mp = 0;
+  // Short form mp=N: bits 0-7 are the a04br3-wiredtag period (rounds), bit 8 is a04br3-free-data-seed.
+  if (!PE_parse_boot_argn("a04br3-wiredtag", &wiredTag, sizeof(wiredTag)) && PE_parse_boot_argn("mp", &mp, sizeof(mp)))
+    wiredTag = mp & 0xff;
   for (unsigned round = 1;; ++round) {
     IOSleep(gProcLogSeconds * 1000);
     a04br3_free_data_seed();
