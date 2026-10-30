@@ -125,15 +125,20 @@ bool wacs(bool write, uint32_t address, uint32_t data, uint32_t *out)
   uint32_t status = rd(gPwrap, kWacsRdata);
   if (!(status & (1U << 21)) || ((status >> 16) & 7U) != 0) return false;
   wr(gPwrap, kWacsCmd, (write ? 1U << 31 : 0) | ((address >> 1) << 16) | (data & 0xffff));
+  // A write may finish before the first poll, so its busy phase is not always visible. After the FSM has stayed idle
+  // (INIT_DONE, no pending response) for a bounded run of polls, the command is complete or was ignored; either way
+  // nothing is pending, so the lock is released. Callers verify the effect by reading the register back.
   bool writeBusy=false;
+  unsigned writeIdle=0;
+  constexpr unsigned kWacsWriteIdlePolls=4096;
   for (unsigned spin=0; spin<1000000; ++spin) {
     status=rd(gPwrap, kWacsRdata);
     if (!(status & (1U << 21))) break;
     const unsigned fsm=(status >> 16) & 7U;
-    if (write && fsm != 0) writeBusy=true;
+    if (write && fsm != 0) { writeBusy=true; writeIdle=0; }
     if (fsm == (write ? 0U : 6U)) {
       if (write && writeBusy) return true;
-      if (write) continue;
+      if (write) { if (++writeIdle >= kWacsWriteIdlePolls) return true; continue; }
       const uint32_t value=status & 0xffffU;
       wr(gPwrap, kWacsVldclr, 1);
       for (unsigned n=0; n<1000000; ++n) {

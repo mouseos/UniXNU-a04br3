@@ -111,12 +111,16 @@ int pwWrite(unsigned addr, uint16_t value)
   A04BR3PwrapGuard guard(10000); if (!guard) return -1;
   if (pwWait(0)) return -1;
   wr(gPwrap, 0xa0, 0x80000000U | ((addr >> 1) << 16) | value);
+  // As AutoReset wacs(): a write may finish before the first poll. A bounded run of idle polls (INIT_DONE, no
+  // response pending) releases the lock; powerOn() reads the voltage register back.
   bool sawBusy=false;
+  unsigned idle=0;
   for (unsigned n=0; n<1000; ++n) {
     const uint32_t status=rd(gPwrap,0xa4);
     if (!(status & (1U<<21))) break;
-    if (((status>>16)&7U)!=0) sawBusy=true;
+    if (((status>>16)&7U)!=0) { sawBusy=true; idle=0; }
     else if (sawBusy) return 0;
+    else if (++idle >= 100) return 0;
     IODelay(10);
   }
   guard.quarantine(); return -1;
