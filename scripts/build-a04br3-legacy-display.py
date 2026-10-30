@@ -283,7 +283,11 @@ while i<len(args):
     elif value=='-Xclang' and args[i+1].startswith('-W'):i+=1
     elif not value.startswith('-W'):cmd.append(value)
     i+=1
-cmd+=['-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unnecessary-virtual-specifier','-Wno-c99-designator','-Wno-reorder-init-list',
+# Older Xcode clang (26.3 and earlier) rejects -Wno-unnecessary-virtual-specifier under -Werror; pass it only when known.
+UNNECESSARY_VIRTUAL = [flag for flag in ['-Wno-unnecessary-virtual-specifier'] if subprocess.run(
+    ['xcrun', 'clang', '-x', 'c++', '-fsyntax-only', '-Werror=unknown-warning-option', flag, '-'],
+    input=b'', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0]
+cmd+=['-Wall','-Wextra','-Werror','-Wno-unused-parameter',*UNNECESSARY_VIRTUAL,'-Wno-c99-designator','-Wno-reorder-init-list',
       '-Wno-deprecated-enum-enum-conversion','-I',str(ROOT/'.cache/xnu-work/osfmk')]
 run(cmd,cwd=r['directory'])
 def compile_like_probe(other_source,other_obj):

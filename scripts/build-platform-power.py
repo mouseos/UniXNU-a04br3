@@ -104,9 +104,13 @@ while i < len(arguments):
     elif not arg.startswith('-W'):
         command.append(arg)
     i += 1
+# Older Xcode clang (26.3 and earlier) rejects -Wno-unnecessary-virtual-specifier under -Werror; pass it only when known.
+UNNECESSARY_VIRTUAL = [flag for flag in ['-Wno-unnecessary-virtual-specifier'] if subprocess.run(
+    ['xcrun', 'clang', '-x', 'c++', '-fsyntax-only', '-Werror=unknown-warning-option', flag, '-'],
+    input=b'', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0]
 command += ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-c99-designator',
             '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion',
-            '-Wno-unnecessary-virtual-specifier', '-I', OUT, '-I', ROOT / '.cache/xnu-work/osfmk']
+            *UNNECESSARY_VIRTUAL, '-I', OUT, '-I', ROOT / '.cache/xnu-work/osfmk']
 run(command, cwd=record['directory'])
 raw = obj.read_bytes()
 info = macho(raw)

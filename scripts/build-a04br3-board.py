@@ -97,8 +97,12 @@ def llvm_objcopy():
 
 
 # The warning set of build-arm-driver.py: the XNU IOKit headers need these exceptions under -Werror.
+# Older Xcode clang (26.3 and earlier) rejects -Wno-unnecessary-virtual-specifier under -Werror; pass it only when known.
+UNNECESSARY_VIRTUAL = [flag for flag in ['-Wno-unnecessary-virtual-specifier'] if subprocess.run(
+    ['xcrun', 'clang', '-x', 'c++', '-fsyntax-only', '-Werror=unknown-warning-option', flag, '-'],
+    input=b'', stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0]
 CXX_FLAGS = ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-c99-designator', '-Wno-reorder-init-list',
-             '-Wno-deprecated-enum-enum-conversion', '-Wno-unnecessary-virtual-specifier', '-I', str(ROOT / '.cache/xnu-work/osfmk')]
+             '-Wno-deprecated-enum-enum-conversion', *UNNECESSARY_VIRTUAL, '-I', str(ROOT / '.cache/xnu-work/osfmk')]
 C_FLAGS = ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror']
 
 objects = []
