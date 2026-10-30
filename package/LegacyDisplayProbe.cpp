@@ -116,6 +116,10 @@ void a04br3_latency_swap(void) {
 }
 void a04br3_latency_present(void) {
     const uint64_t now=mach_absolute_time();
+    if(!gLatencyLastPresent && latencyEnabled()) {   // once per boot: the bench starts its inputs after the first frame
+        uint64_t ns=0;absolutetime_to_nanoseconds(now,&ns);
+        IOLog("a04br3 latency: display ready at_ns=%llu\n",(unsigned long long)ns);
+    }
     gLatencyLastPresent=now;
     if(!gLatencyLock)return;
     IOSimpleLockLock(gLatencyLock);

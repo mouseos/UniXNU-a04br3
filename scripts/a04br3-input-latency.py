@@ -77,8 +77,9 @@ def summarize(samples):
 if not a.parse_only:
     deadline = time.time() + a.ready_timeout
     while time.time() < deadline:
-        counts = [int(m[1]) for m in PRESENTED.finditer(text())]
-        if counts and max(counts) >= 1: break
+        t = text()
+        counts = [int(m[1]) for m in PRESENTED.finditer(t)]
+        if 'a04br3 latency: display ready' in t or (counts and max(counts) >= 1): break
         time.sleep(5)
     else:
         sys.exit('no presented frame in the log within --ready-timeout')
