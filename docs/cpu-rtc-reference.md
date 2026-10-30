@@ -61,3 +61,12 @@ PMU qualification remains unconditionally refused. A calibrated RTC candidate
 alone does not establish EL3/debug ownership, PMU trap safety or cycle-counter
 semantics. All hardware behavior, RTC accuracy and watchdog recovery remain
 unverified. Host tests are not evidence that the hardware path is safe.
+
+For the fixed 22e49b19 UniXNU tree and its NativeMsdc 66d40654 gitlink,
+`scripts/a04br3-rtc-ref-incremental.sh` checks both commits and the caller's
+exact clean device commit, then sets the IRQ and overlap trace build flags.
+It requires the normal workflow's prepared owner Data seed. These flags make
+`native_msdc_irq_stats`, `native_msdc_irq_mask_failures`,
+`native_msdc_worker_stats`, and `native_cs_trace_report` available to the
+static kernel link; weak imports alone did not resolve in the observed link.
+This is a diagnostic build configuration, not a hardware qualification.
