@@ -98,20 +98,31 @@ class LifecyclePinsTest(unittest.TestCase):
             git(device, 'add', 'package')
             fixture_commit(device, 'device fixture')
             device_commit = git(device, 'rev-parse', 'HEAD')
-            env = dict(os.environ, A04BR3_DEVICE_ROOT=str(device), A04BR3_DEVICE_COMMIT=device_commit,
+            env = dict(fixture_git_env(), A04BR3_DEVICE_ROOT=str(device), A04BR3_DEVICE_COMMIT=device_commit,
                        UNIXNU_BASE_ROOT=str(base), UNIXNU_BASE_COMMIT=base_commit,
                        NATIVE_MOBILE_DISPLAY_REPO=str(presenter), NATIVE_MOBILE_DISPLAY_COMMIT=first)
             load = ('import importlib.util,sys;'
                     'spec=importlib.util.spec_from_file_location("fixture",sys.argv[1]);'
                     'module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);'
                     'module.load_pinned_inputs();assert module.GOP=="first"')
-            good = subprocess.run([sys.executable, '-c', load, str(script)], env=env, capture_output=True, text=True)
-            self.assertEqual(good.returncode, 0, good.stderr)
-            self.assertIn('native_mobile_display_commit=' + first, good.stdout)
-            env['NATIVE_MOBILE_DISPLAY_COMMIT'] = second
-            bad = subprocess.run([sys.executable, '-c', load, str(script)], env=env, capture_output=True, text=True)
-            self.assertNotEqual(bad.returncode, 0)
-            self.assertIn('does not match the pinned base gitlink', bad.stderr)
+            poisoned = dict(env, GIT_DIR=str(root/'missing-git-dir'), GIT_WORK_TREE=str(root/'missing-work-tree'),
+                            GIT_INDEX_FILE=str(root/'missing-index'), GIT_OBJECT_DIRECTORY=str(root/'missing-objects'),
+                            GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='core.bare', GIT_CONFIG_VALUE_0='true')
+            for case in (env, poisoned):
+                good = subprocess.run([sys.executable, '-c', load, str(script)], env=case, capture_output=True, text=True)
+                self.assertEqual(good.returncode, 0, good.stderr)
+                self.assertIn('native_mobile_display_commit=' + first, good.stdout)
+                bad_env = dict(case, NATIVE_MOBILE_DISPLAY_COMMIT=second)
+                bad = subprocess.run([sys.executable, '-c', load, str(script)], env=bad_env, capture_output=True, text=True)
+                self.assertNotEqual(bad.returncode, 0)
+                self.assertIn('does not match the pinned base gitlink', bad.stderr)
+
+    def test_gitlink_fixture_ignores_inherited_repository_overrides(self):
+        poisoned = {'GIT_DIR': '/nonexistent/fixture-git', 'GIT_WORK_TREE': '/nonexistent/fixture-tree',
+                    'GIT_INDEX_FILE': '/nonexistent/fixture-index', 'GIT_OBJECT_DIRECTORY': '/nonexistent/fixture-objects',
+                    'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.bare', 'GIT_CONFIG_VALUE_0': 'true'}
+        with mock.patch.dict(os.environ, poisoned):
+            self.test_gitlink_validation_in_fresh_repositories()
 
     def test_git_identity_ignores_inherited_overrides(self):
         poisoned = {'GIT_AUTHOR_NAME': 'Injected Author', 'GIT_AUTHOR_EMAIL': 'author@example.invalid',
