@@ -198,9 +198,12 @@ static bool firmwareHandoff(const void **record, unsigned *length) {
 extern "C" void a04br3_charger_init(void) {
   unsigned enabled = 0;
   unsigned maintainMode = 0;
-  if (PE_parse_boot_argn("a04br3-charger-maintain", &maintainMode, sizeof maintainMode) && maintainMode == 1) {
+  // Short aliases a04br3-cm / a04br3-cl because the boot-args string is limited to 1023 bytes.
+  if ((PE_parse_boot_argn("a04br3-charger-maintain", &maintainMode, sizeof maintainMode) ||
+       PE_parse_boot_argn("a04br3-cm", &maintainMode, sizeof maintainMode)) && maintainMode == 1) {
     unsigned seconds = 0;
-    if (PE_parse_boot_argn("a04br3-charger-log", &seconds, sizeof seconds) && seconds >= 10 && seconds <= 3600) logEvery = seconds / 10;
+    if ((PE_parse_boot_argn("a04br3-charger-log", &seconds, sizeof seconds) ||
+         PE_parse_boot_argn("a04br3-cl", &seconds, sizeof seconds)) && seconds >= 10 && seconds <= 3600) logEvery = seconds / 10;
     IOLog("a04br3 charger: maintain mode: stock ceiling IN 1.5 A, ICHRG 1.3 A, VBREG 4.32 V, 6 h timer; kick 10 s; log %u s%s\n",
           logEvery * 10, PE_parse_boot_argn("a04br3-charger-owner", &enabled, sizeof enabled) ? "; a04br3-charger-owner ignored" : "");
     if (!mapAll()) return;
