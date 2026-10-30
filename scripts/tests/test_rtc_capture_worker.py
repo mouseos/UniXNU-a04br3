@@ -48,6 +48,8 @@ int main(){
  reset();expectedValid=1;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==64 && rows==64 && summaries==1 && finished==1);
  reset();failAt=1;expectedCount=1;rtcCaptureThread(nullptr,0);assert(commands==1 && clears==0 && rows==1 && held && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  reset();failAt=64;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==63 && rows==64 && held && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
+ // fault 1 persists from the 64th read: 100 attempts (99 sleeps) are recorded as contention and the capture is invalid.
+ reset();fault=1;expectedValid=0;rtcCaptureThread(nullptr,0);assert(rows==64 && commands==63 && retrySleeps==99 && summaries==1 && !held && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  // fault 9: five transient contentions before the 11th read are retried; the capture completes with 64 rows.
  reset();fault=9;transientContention=0;expectedValid=1;rtcCaptureThread(nullptr,0);assert(transientContention==5 && rows==64 && commands==64 && summaries==1 && !held && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  for(unsigned kind=1;kind<=4;kind++){reset();fault=kind;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && finished==1);if(kind==3)assert(held && !a04br3_runtime_probe_active && !gRtcCaptureActive);else assert(!held && !a04br3_runtime_probe_active);}

@@ -126,7 +126,8 @@ int pwWrite(unsigned addr, uint16_t value)
   guard.quarantine(); return -1;
 }
 
-// MT6392 VGP1 to 1.8 V (voltage select 0x530 bits 5..7 = 3) and enabled (0x50a bit 15).
+// MT6392 VGP1 to 1.8 V (voltage select 0x530 bits 5..7 = 3) and enabled (0x50a bit 15). pwWrite also accepts a write
+// that the wrapper ignored, so both written fields are read back.
 int powerOn(void)
 {
   if (!(rd(gPwrap, 0x9c) & 1)) return -2;
@@ -135,7 +136,9 @@ int powerOn(void)
   if (pwRead(0x50a, &v) || pwWrite(0x50a, uint16_t(v | 0x8000))) return -4;
   IOSleep(20);
   if (pwRead(0x530, &v)) return -5;
-  return (v & 0xe0) == 0x60 ? 0 : -6;
+  if ((v & 0xe0) != 0x60) return -6;
+  if (pwRead(0x50a, &v)) return -7;
+  return (v & 0x8000) ? 0 : -8;
 }
 
 int transfer(bool read, uint8_t *data, unsigned len)
