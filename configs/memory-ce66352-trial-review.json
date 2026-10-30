@@ -1,0 +1,16 @@
+{
+  "manifest_sha256": "73bbd3fa090ffb6f6334b4e8c45a327b76cba45b17a366f685f704a92bb3f335",
+  "off_boot_sha256": "62b822183559e58c519f85af97087cb45045776bf2b808f2643068f553830bf1",
+  "on_boot_sha256": "d42c25b0d709a2ac2009d17f0c71a098355401a5af5709ff01bb73cb1e3732a0",
+  "independent_evidence": [
+    {"name": "memory-ce66352-boot-independent-review-20261030.txt", "sha256": "1ba901988ab07f17702fe45900f6657ff2f16739a5e2f9ebf68f02113f5e6aea"},
+    {"name": "memory-ce66352-gpu-baseline-independent-review-20261030.txt", "sha256": "2d74a8e4a45425fd7152aa568cc1692294f8b50a5350229763640d95966ddf7a"}
+  ],
+  "findings": [
+    "on/offのADT random-seedが異なり、完全な単一変数比較ではない",
+    "seedとGPU addonの完全な配布用出自、端末固有情報の不在、候補の実機trust受理は未証明",
+    "GPU P1の二つの失敗経路は直近復旧bootと共通だが、addon・FD・seedは異なり同等の安全性は未証明",
+    "無人fastboot復帰やGPU異常時の復旧は候補で未検証"
+  ],
+  "scope": "限定診断に関する独立レビューの事実と留保。配布または実機成功を意味しない。"
+}

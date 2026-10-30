@@ -3,6 +3,17 @@ from pathlib import Path
 from unittest.mock import patch
 p=Path(__file__).resolve().parents[1]/'a04br3_trial_guardian.py';s=importlib.util.spec_from_file_location('guardian',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 class Guardian(unittest.TestCase):
+ def test_conflict_filter(self):
+  self.assertFalse(m.conflicts([b'/usr/bin/fastboot',b'devices']))
+  self.assertFalse(m.conflicts([b'fastboot',b'-s',b'other',b'flash',b'boot']))
+  self.assertTrue(m.conflicts([b'fastboot',b'-s',m.SERIAL.encode(),b'flash',b'boot']))
+  self.assertTrue(m.conflicts([b'fastboot',b'flash',b'boot']))
+  self.assertTrue(m.conflicts([b'mtk']))
+ def test_transcript_rejects_wrong_partition_and_extra_lines(self):
+  valid=b"Sending 'boot' (1 KB) OKAY [  1.000s]\nWriting 'boot' OKAY [  1.000s]\nFinished. Total time: 2.000s\n"
+  self.assertTrue(m.flash_transcript(valid))
+  self.assertFalse(m.flash_transcript(valid.replace(b"Writing 'boot'",b"Writing 'recovery'")))
+  self.assertFalse(m.flash_transcript(valid+b'FAILED\n'))
  def test_interruption_and_retry(self):
   with tempfile.TemporaryDirectory() as t:
    state=Path(t)/'state';lock=Path(t)/'lock';m.write_state(state,{'state':'armed','stage':'off'})
@@ -50,7 +61,7 @@ else:
    stage=root/'port/gsi/logs/ios-feasibility/memory-ce66352-trial/off';stage.mkdir(parents=True)
    (stage/'started.json').write_text(json.dumps({'image_sha256':'abc','trial_id':'a'*32}))
    (stage/'fastboot-status.jsonl').write_text(json.dumps({'arguments':['flash','boot',str(safe)],'status':'completed','returncode':0})+'\n')
-   (stage/'recovery-flash.log').write_text("Sending 'boot' OKAY\nWriting 'boot' OKAY\nFinished.\n")
+   (stage/'recovery-flash.log').write_text("Sending 'boot' (1 KB) OKAY [  1.000s]\nWriting 'boot' OKAY [  1.000s]\nFinished. Total time: 2.000s\n")
    loghash=hashlib.sha256((stage/'recovery-flash.log').read_bytes()).hexdigest()
    (stage/'result.json').write_text(json.dumps({'recovery_write_confirmed':True,'trial_id':'a'*32,'safe_sha256':hashlib.sha256(b'fake-image').hexdigest(),'recovery_log_sha256':loghash}))
    with patch.object(m,'SAFE_SHA',hashlib.sha256(b'fake-image').hexdigest()),patch.object(m.subprocess,'run',side_effect=AssertionError('duplicate write')):

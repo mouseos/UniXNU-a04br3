@@ -120,7 +120,7 @@ def serial_ready(cancel=None):
  ids=[line.split()[0] for line in lines if len(line.split())>=2 and line.split()[1]=='fastboot']
  return ids==[SERIAL]
 
-def logged_fastboot(arguments, logfile, timeout, cancel=None, select_device=True):
+def logged_fastboot(arguments, logfile, timeout, cancel=None, select_device=True, on_pre_spawn=None, on_spawn=None, on_launch_error=None):
  command=['fastboot']+(['-s',SERIAL] if select_device else [])+arguments
  chunks=[]; status='launch_error'; rc=None; proc=None; error=None
  with logfile.open('ab',buffering=0) as f, COMMON.open('ab',buffering=0) as common:
@@ -128,7 +128,9 @@ def logged_fastboot(arguments, logfile, timeout, cancel=None, select_device=True
    if chunk: f.write(chunk);common.write(chunk);chunks.append(chunk)
   try:
    if cancel is not None: cancel.check()
+   if on_pre_spawn is not None: on_pre_spawn()
    proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,bufsize=0)
+   if on_spawn is not None: on_spawn()
    deadline=time.monotonic()+timeout; status='completed'
    with selectors.DefaultSelector() as selector:
     selector.register(proc.stdout,selectors.EVENT_READ)
@@ -157,6 +159,7 @@ def logged_fastboot(arguments, logfile, timeout, cancel=None, select_device=True
    rc=proc.returncode if status=='completed' else None
   except BaseException as exc:
    error=type(exc).__name__+': '+str(exc)
+   if proc is None and on_launch_error is not None: on_launch_error()
    if proc is not None:
     status='error'
     try:
@@ -242,8 +245,10 @@ def run_locked():
  previous={s:signal.signal(s,cancel.handle) for s in (signal.SIGTERM,signal.SIGHUP,signal.SIGINT)}
  try:
   cancel.check()
-  started=True
-  rc,out,status=logged_fastboot(['flash','boot',str(IMAGE)],WORK/'flash.log',300,cancel=cancel)
+  def flash_started():
+   nonlocal started
+   started=True
+  rc,out,status=logged_fastboot(['flash','boot',str(IMAGE)],WORK/'flash.log',300,cancel=cancel,on_spawn=flash_started)
   cancel.check()
   require(flash_ok(out,rc),'trial flash '+status+' or unconfirmed')
   record={'uart_offset':point['uart_offset'],'uart_checkpoint':str(WORK/'checkpoint.json'),'flash_completed_uart_offset':UART.stat().st_size,'boot_sha256':IMG_SHA,'flash_success':True,'flash_success_evidence':str(WORK/'flash.log')+' sha256='+sha(WORK/'flash.log')}
