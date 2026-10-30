@@ -112,7 +112,7 @@ int pwWrite(unsigned addr, uint16_t value)
   if (pwWait(0)) return -1;
   wr(gPwrap, 0xa0, 0x80000000U | ((addr >> 1) << 16) | value);
   // As AutoReset wacs(): a write may finish before the first poll. A bounded run of idle polls (INIT_DONE, no
-  // response pending) releases the lock; powerOn() reads the voltage register back.
+  // response pending) releases the lock; powerOn() reads both written fields back.
   bool sawBusy=false;
   unsigned idle=0;
   for (unsigned n=0; n<1000; ++n) {

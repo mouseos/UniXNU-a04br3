@@ -40,7 +40,8 @@ static uint64_t ticks=0; static uint64_t mockTimer(){return ticks+=10;}
 static unsigned panic_active(){return manualPanic || (panicAt && slept>=panicAt);}
 static void IOSleep(unsigned x){if(x==1){++retrySleeps;return;}assert(x==50 && !held);++slept;if(slept==64)gateFailures=releaseFailures;if(stateAt && slept==stateAt){if(fault==8)assert(gWatchdogGate.lock());if(fault==5){assert(!a04br3_runtime_probe_begin());assert(!a04br3_runtime_probe_end_checked());bool kicked=false;assert(gWatchdogGate.feed(&a04br3_runtime_probe_active,true,[&]{kicked=true;}));assert(kicked);}if(fault==6)a04br3_runtime_recovery_ready=0;}issued=false;}
 static int current_thread(){return 1;} static void thread_terminate(int){++finished;}
-static void IOLog(const char *fmt,...){va_list ap;va_start(ap,fmt);if(strstr(fmt,"samples=%u")){++summaries;unsigned count=va_arg(ap,unsigned);unsigned valid=va_arg(ap,unsigned);assert(valid==expectedValid);assert(count==expectedCount);unsigned reason=va_arg(ap,unsigned);unsigned released=va_arg(ap,unsigned);assert(released==unsigned(!gRtcCaptureActive));(void)reason;}else if(strstr(fmt,"unavailable=")){++unavailable;}else {assert(strstr(fmt,"rtc-ref-row"));++rows;}va_end(ap);}
+static unsigned lastReason=0;
+static void IOLog(const char *fmt,...){va_list ap;va_start(ap,fmt);if(strstr(fmt,"samples=%u")){++summaries;unsigned count=va_arg(ap,unsigned);unsigned valid=va_arg(ap,unsigned);assert(valid==expectedValid);assert(count==expectedCount);unsigned reason=va_arg(ap,unsigned);unsigned released=va_arg(ap,unsigned);assert(released==unsigned(!gRtcCaptureActive));lastReason=reason;}else if(strstr(fmt,"unavailable=")){++unavailable;}else {assert(strstr(fmt,"rtc-ref-row"));++rows;}va_end(ap);}
 '''
 main=r'''
 static void reset(){commands=clears=slept=rows=finished=summaries=retrySleeps=unavailable=releaseFailures=panicOnAcquire=manualPanic=0;held=issued=cleared=false;failAt=panicAt=fault=stateAt=gateFailures=gateAttempts=0;expectedCount=64;expectedValid=0;a04br3_runtime_probe_active=0;gRtcCaptureActive=0;gWatchdogGate.busy=0;a04br3_runtime_recovery_ready=1;}
@@ -49,7 +50,7 @@ int main(){
  reset();failAt=1;expectedCount=1;rtcCaptureThread(nullptr,0);assert(commands==1 && clears==0 && rows==1 && held && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  reset();failAt=64;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==63 && rows==64 && held && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  // fault 1 persists from the 64th read: 100 attempts (99 sleeps) are recorded as contention and the capture is invalid.
- reset();fault=1;expectedValid=0;rtcCaptureThread(nullptr,0);assert(rows==64 && commands==63 && retrySleeps==99 && summaries==1 && !held && !a04br3_runtime_probe_active && !gRtcCaptureActive);
+ reset();fault=1;expectedValid=0;lastReason=0;rtcCaptureThread(nullptr,0);assert(rows==64 && commands==63 && retrySleeps==99 && lastReason==4 && summaries==1 && !held && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  // fault 9: five transient contentions before the 11th read are retried; the capture completes with 64 rows.
  reset();fault=9;transientContention=0;expectedValid=1;rtcCaptureThread(nullptr,0);assert(transientContention==5 && rows==64 && commands==64 && summaries==1 && !held && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  for(unsigned kind=1;kind<=4;kind++){reset();fault=kind;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && finished==1);if(kind==3)assert(held && !a04br3_runtime_probe_active && !gRtcCaptureActive);else assert(!held && !a04br3_runtime_probe_active);}
