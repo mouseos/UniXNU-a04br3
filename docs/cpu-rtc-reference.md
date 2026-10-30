@@ -18,7 +18,8 @@ requires idle/initialized state without clearing a foreign valid response,
 issues one read of 0x800a, waits up to 2048 polls for valid and clears only
 its own response. If command completion or return to idle is uncertain after issue, it retains
 the shared lock for the boot. A foreign initial state is left untouched and the
-lock is released without issuing a command. Known AutoReset, Input
+lock is released without issuing a command. If the lock is held by another board client (no command issued), the worker retries that
+sample up to 100 times with 1 ms sleeps before recording it; on hardware the first read met such contention during boot. Known AutoReset, Input
 and GPU WACS2 command paths also retain that lock on uncertain completion;
 AutoReset no longer clears an unknown response. AutoReset and Input accept a write after an observed non-idle phase followed by idle, or after a bounded run of idle polls (INIT_DONE, no pending response) when the write finished before the first poll, as observed on hardware for the fastboot-flag writes; a write that stays busy is quarantined. Neither is proof of hardware command acceptance; callers read the register back. That quarantine prevents
 known local users from touching a possibly pending transaction, but may disable

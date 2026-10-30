@@ -31,7 +31,8 @@ extern "C" bool a04br3_runtime_probe_begin(void);
 static volatile uint8_t *gPwrap=nullptr;
 static volatile uint32_t a04br3_runtime_probe_active=0,a04br3_runtime_recovery_ready=1;
 static constexpr unsigned kWacsRdata=0xa4,kWacsCmd=0xa0,kWacsVldclr=0xa8;
-static bool a04br3_pwrap_try_lock(){if(held || (fault==1 && commands==63))return false;held=true;return true;}
+static unsigned transientContention=0;
+static bool a04br3_pwrap_try_lock(){if(held || (fault==1 && commands==63))return false;if(fault==9 && commands==10 && transientContention<5){++transientContention;return false;}held=true;return true;}
 static void a04br3_pwrap_unlock(){assert(held);held=false;}
 static uint32_t rd(volatile uint8_t *,unsigned){assert(held);if(!issued || cleared){if(fault==2 && commands==63 && !issued)return (1u<<21)|(6u<<16); if(fault==3 && commands==64 && cleared)return (1u<<21)|(6u<<16); return 1u<<21;}if(failAt && commands==failAt)return 1u<<21;if(fault==4 && commands==64)return (1u<<21)|(6u<<16)|60u;return (1u<<21)|(6u<<16)|(fault==7?0:((commands-1)/20));}
 static void wr(volatile uint8_t *,unsigned off,uint32_t v){assert(held);if(off==kWacsCmd){assert((v>>31)==0 && ((v>>16)&0x7fffU)*2U==0x800aU && (v&0xffffU)==0);++commands;issued=true;cleared=false;}else{assert(off==kWacsVldclr && v==1);++clears;cleared=true;}}
@@ -47,6 +48,8 @@ int main(){
  reset();expectedValid=1;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==64 && rows==64 && summaries==1 && finished==1);
  reset();failAt=1;expectedCount=1;rtcCaptureThread(nullptr,0);assert(commands==1 && clears==0 && rows==1 && held && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  reset();failAt=64;rtcCaptureThread(nullptr,0);assert(commands==64 && clears==63 && rows==64 && held && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
+ // fault 9: five transient contentions before the 11th read are retried; the capture completes with 64 rows.
+ reset();fault=9;transientContention=0;expectedValid=1;rtcCaptureThread(nullptr,0);assert(transientContention==5 && rows==64 && commands==64 && summaries==1 && !held && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  for(unsigned kind=1;kind<=4;kind++){reset();fault=kind;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && finished==1);if(kind==3)assert(held && !a04br3_runtime_probe_active && !gRtcCaptureActive);else assert(!held && !a04br3_runtime_probe_active);}
  reset();fault=7;rtcCaptureThread(nullptr,0);assert(rows==64 && summaries==1 && !a04br3_runtime_probe_active && !gRtcCaptureActive);
  reset();gateFailures=3;expectedValid=1;rtcCaptureThread(nullptr,0);assert(gateAttempts==4 && retrySleeps==3 && !a04br3_runtime_probe_active && !gRtcCaptureActive && summaries==1);

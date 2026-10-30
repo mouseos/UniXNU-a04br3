@@ -352,9 +352,17 @@ static void rtcCaptureThread(void *, wait_result_t)
   for (; n<64; ++n) {
     if (panic_active()) {stopReason=1;break;}
     if (!__atomic_load_n(&a04br3_runtime_recovery_ready,__ATOMIC_ACQUIRE)) {stopReason=3;break;}
-    rows[n].before=io.timer();
-    A04BR3RtcWacsResult r=a04br3_rtc_wacs_read(io);
-    rows[n].after=io.timer(); rows[n].sec=r.second; rows[n].status=r.status; rows[n].quarantine=r.quarantined; rows[n].initial=r.initial; rows[n].last=r.last; rows[n].response=r.response;
+    // Contention means another board client held the lock and no command was issued; retry briefly (bounded) instead
+    // of ending the capture. The timer bracket is that of the attempt whose result is recorded.
+    A04BR3RtcWacsResult r;
+    for (unsigned attempt=0;;) {
+      rows[n].before=io.timer();
+      r=a04br3_rtc_wacs_read(io);
+      rows[n].after=io.timer();
+      if (r.status!=rtcContended || ++attempt>=100 || panic_active()) break;
+      IOSleep(1);
+    }
+    rows[n].sec=r.second; rows[n].status=r.status; rows[n].quarantine=r.quarantined; rows[n].initial=r.initial; rows[n].last=r.last; rows[n].response=r.response;
     const bool observed = r.status==rtcOk && a04br3_rtc_observe(state,{rows[n].before,rows[n].after,r.second});
     if (panic_active()) { __atomic_store_n(&gRtcCaptureActive,0U,__ATOMIC_RELEASE); thread_terminate(current_thread()); return; }
     IOLog("a04br3 rtc-ref-row n=%u before=%llu after=%llu sec=%u status=%u quarantine=%u initial=%08x last=%08x response=%08x\n",n,static_cast<unsigned long long>(rows[n].before),static_cast<unsigned long long>(rows[n].after),rows[n].sec,rows[n].status,rows[n].quarantine,rows[n].initial,rows[n].last,rows[n].response);
