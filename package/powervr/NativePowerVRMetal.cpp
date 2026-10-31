@@ -9,7 +9,7 @@
 // and one object is attached to the platform expert with
 //   MetalPluginName           NativePowerVRMetal   (the bundle arrives through the GPU addon union mount, sheng-gpu-addon=1)
 //   MetalPluginClassName      NativePowerVRMetalDevice
-//   NativeSandboxGrantProcess backboardd, or the boot argument a04br3-gpu-metal-grant=<names> (UniXNU patch
+//   NativeSandboxGrantProcess backboardd,iconservicesagent, or the boot argument a04br3-gpu-metal-grant=<names> (UniXNU patch
 //                             zzw-native-adreno-sandbox-grant: the kernel's open path grants the accelerator's user client to these
 //                             processes in place of the sandbox verdict; the original profiles name no class of this driver)
 // It runs from the board launch hook (unixnu_board_launch(), before launchd) under a04br3-gpu-metal=1, on its own thread, which waits
@@ -172,7 +172,11 @@ void publish(void)
   // ours: the bundle exists only through the addon mount, and no Apple device identity is claimed.
   accelerator->setProperty("MetalPluginName", "NativePowerVRMetal");
   accelerator->setProperty("MetalPluginClassName", "NativePowerVRMetalDevice");
-  char grant[128] = "backboardd";
+  // iconservicesagent too: iPadOS 17's CoreImage has no CPU renderer. Without a Metal device, +[CIContext contextWithOptions:]
+  // takes the OpenGL ES path (CIGLIsUsable() is always true) and CI::GLContext::init calls an empty GL table: the agent dies at
+  // PC 0 on every symbol icon (CoreUI +[CUIShapeEffectStack sharedCIContext]) and Settings waits for it forever. The plugin still
+  // serves it only when its .clients names it (scripts/a04br3-gpu-addon-clients.py); granting an unlisted process opens nothing.
+  char grant[128] = "backboardd,iconservicesagent";
   PE_parse_boot_argn("a04br3-gpu-metal-grant", grant, sizeof grant);
   accelerator->setProperty("NativeSandboxGrantProcess", grant);
   if (bootArg("a04br3-gpu-metal", 0) == 2 || bootArg("a04br3-gpu-metal-hide", 0) == 1) {
