@@ -670,17 +670,155 @@ extern void native_powervr_wait_snapshot(uint64_t out[10]) __attribute__((weak_i
 uint64_t a04br3_proc_threadstart(void *);
 uint64_t a04br3_proc_start_abs(void *);
 extern vm_offset_t vm_kernel_slide;
-#define LT_NAMES 6
+
+// ---- Who a waiting thread waits for (a04br3-input-latency=3, default off) ------------------------------------------------------
+// Mode 3 = mode 2 plus IPC owners. For a thread blocked in mach_msg, with only try-locks (never waiting, in the order the kernel
+// itself never uses only because none of these locks is ever waited for here):
+//  - receive on a special reply port (a synchronous request): the pid that holds the send-once reply right (ip_pid, set when the
+//    server copied the request out), or, while the request is still queued, the receiver of the port the reply right is in transit
+//    to (the special reply port's receive turnstile pushes on that port's send turnstile) and its launchd service name;
+//  - send blocked on a full queue: the receiver of that port;
+//  - otherwise (a port set: a run loop or dispatch source) no owner: the thread waits asynchronously.
+// Every full sample also scans the IPC space of every process for receive rights with queued messages and prints the ones whose
+// first message came from a traced client or has stayed first for a second or more ("a04br3 lt q"): an asynchronous request a
+// server (or launchd, holding the port of a job it has not started) has not received yet.
+#include <ipc/ipc_port.h>
+#include <ipc/ipc_space.h>
+#include <ipc/ipc_entry.h>
+#include <ipc/ipc_kmsg.h>
+#include <ipc/ipc_service_port.h>
+#include <kern/turnstile.h>
+#include <kern/waitq.h>
+#include <kern/block_hint.h>
+_Static_assert(sizeof(turnstile_type_t)==1,"turnstile type width");
+static int lt_ipc=-1;
+static unsigned lt_ipc_enabled(void) {
+ if(lt_ipc<0){unsigned v=0;PE_parse_boot_argn("a04br3-input-latency",&v,sizeof(v));lt_ipc=v==3;}
+ return lt_ipc==1;
+}
+struct lt_owner { int pid; unsigned special,hops,queued,flags; char svc[40]; };
+// The port's receiver pid and service name; the port is locked by the caller.
+static void lt_port_owner(ipc_port_t port,struct lt_owner *o) {
+ if(!ip_active(port))return;
+ o->queued=port->ip_messages.imq_msgcount;
+ if(ip_in_a_space(port)) {
+  ipc_space_t space=port->ip_receiver;
+  if(space==ipc_space_kernel)o->pid=0;
+  else if(space && space->is_task)o->pid=pid_from_task(space->is_task);
+ }
+ if(port->ip_service_port && port->ip_splabel) {
+  struct ipc_service_port_label *l=(struct ipc_service_port_label *)port->ip_splabel;
+  if(l->ispl_service_name)strlcpy(o->svc,l->ispl_service_name,sizeof(o->svc));
+ }
+}
+static bool lt_is_port_ts(struct turnstile *ts,ipc_port_t *portp,bool *send) {
+ if((uint8_t)(atomic_load_explicit(&ts->ts_type_gencount,memory_order_relaxed)&0xff)!=TURNSTILE_SYNC_IPC)return false;
+ ipc_port_t port=(ipc_port_t)ts->ts_proprietor;
+ if(!port)return false;
+ if(port_send_turnstile(port)==ts){*portp=port;*send=true;return true;}
+ if(*port_rcv_turnstile_address(port)==ts){*portp=port;*send=false;return true;}
+ return false;
+}
+// Follow the turnstile inheritors (at most 4 hops), hand over hand with try-locks; the last port or thread found names the owner.
+static void lt_follow(struct turnstile *ts,struct lt_owner *o) {
+ if(!ts || !waitq_lock_try(&ts->ts_waitq)){o->flags|=1;return;}
+ for(unsigned hop=0;hop<4;++hop) {
+  o->hops=hop+1;
+  ipc_port_t port=IP_NULL;bool send=false;
+  if(lt_is_port_ts(ts,&port,&send) && send) {
+   if(ip_mq_lock_try(port)){lt_port_owner(port,o);ip_mq_unlock(port);} else o->flags|=2;
+  }
+  struct turnstile *next=TURNSTILE_NULL;
+  if(ts->ts_inheritor_flags & TURNSTILE_INHERITOR_TURNSTILE)next=(struct turnstile *)ts->ts_inheritor;
+  else if((ts->ts_inheritor_flags & TURNSTILE_INHERITOR_THREAD) && ts->ts_inheritor) {
+   task_t t=get_threadtask((thread_t)ts->ts_inheritor);
+   if(t)o->pid=pid_from_task(t);
+   o->flags|=8;
+  } else if(ts->ts_inheritor_flags & TURNSTILE_INHERITOR_WORKQ)o->flags|=16;
+  if(!next || !waitq_lock_try(&next->ts_waitq)){waitq_unlock(&ts->ts_waitq);if(next)o->flags|=1;return;}
+  waitq_unlock(&ts->ts_waitq);ts=next;
+ }
+ waitq_unlock(&ts->ts_waitq);
+}
+// Called with the thread locked and interrupts disabled.
+static void lt_thread_owner(thread_t th,struct lt_owner *o) {
+ memset(o,0,sizeof(*o));o->pid=-1;
+ if(!(th->state&TH_WAIT))return;
+ const unsigned hint=th->block_hint;
+ waitq_t wq=th->waitq;
+ if(waitq_is_null(wq))return;
+ if(hint==kThreadWaitPortReceive && waitq_type(wq)==WQT_PORT) {
+  ipc_port_t port=ip_from_waitq(wq.wq_q);
+  if(!ip_mq_lock_try(port)){o->flags|=2;return;}
+  if(port->ip_specialreply) {
+   o->special=1;
+   if(port->ip_pid>0)o->pid=port->ip_pid;
+   struct turnstile *ts=port->ip_waitq.waitq_ts;
+   ip_mq_unlock(port);
+   if(o->pid<0)lt_follow(ts,o);
+  } else ip_mq_unlock(port);
+ } else if(hint==kThreadWaitPortSend && waitq_type(wq)==WQT_TURNSTILE) {
+  lt_follow(waitq_to_turnstile(wq.wq_q),o);
+ } else if(hint==kThreadWaitWorkloopSyncWait) {
+  struct turnstile *ts=thread_get_waiting_turnstile(th);
+  lt_follow(ts,o);
+ }
+}
+// Queued messages of one IPC space (space unlocked; try-locks only).
+#define LT_Q 256
+struct lt_q { uint64_t port,kmsg; long long since; };
+static struct lt_q lt_q_rows[LT_Q];
+static unsigned lt_q_count;
+static int lt_trace_pids[4];
+static void lt_scan_space(task_t task,int pid,const char *name,long long now) {
+ ipc_space_t space=task->itk_space;
+ if(!space || !lck_ticket_lock_try(&space->is_lock,&ipc_lck_grp))return;
+ if(!is_active(space)){lck_ticket_unlock(&space->is_lock);return;}
+ ipc_entry_table_t table=is_active_table(space);
+ const unsigned count=ipc_entry_table_count(table);
+ char lines[6][200];unsigned nl=0;
+ for(unsigned i=1;i<count && i<16384;++i) {
+  ipc_entry_t e=ipc_entry_table_get_nocheck(table,i);
+  if(!(IE_BITS_TYPE(e->ie_bits)&MACH_PORT_TYPE_RECEIVE) || !e->ie_object)continue;
+  ipc_port_t port=ip_object_to_port(e->ie_object);
+  if(!port->ip_messages.imq_msgcount)continue;   // unlocked peek; rechecked under the lock
+  if(!ip_mq_lock_try(port))continue;
+  ipc_kmsg_t k=ipc_kmsg_queue_first(&port->ip_messages.imq_messages);
+  if(!k || !port->ip_messages.imq_msgcount){ip_mq_unlock(port);continue;}
+  const unsigned n=port->ip_messages.imq_msgcount;
+  const int id=ikm_header(k)->msgh_id;
+  const int from=(int)ipc_kmsg_get_trailer(k)->msgh_audit.val[5];
+  char svc[40]={0};
+  if(port->ip_service_port && port->ip_splabel) {
+   struct ipc_service_port_label *l=(struct ipc_service_port_label *)port->ip_splabel;
+   if(l->ispl_service_name)strlcpy(svc,l->ispl_service_name,sizeof(svc));
+  }
+  ip_mq_unlock(port);
+  struct lt_q *q=NULL;
+  for(unsigned j=0;j<lt_q_count;++j)if(lt_q_rows[j].port==(uint64_t)port){q=&lt_q_rows[j];break;}
+  if(!q && lt_q_count<LT_Q){q=&lt_q_rows[lt_q_count++];q->port=(uint64_t)port;q->kmsg=0;}
+  long long age=0;
+  if(q){if(q->kmsg!=(uint64_t)k){q->kmsg=(uint64_t)k;q->since=now;}age=now-q->since;}
+  bool traced=false;for(unsigned j=0;j<4;++j)if(lt_trace_pids[j]>0 && from==lt_trace_pids[j])traced=true;
+  if((traced || age>=900000) && nl<6)
+   snprintf(lines[nl++],sizeof(lines[0]),"a04br3 lt q t_us=%lld p%d %s idx=%u svc=%s n=%u id=%d from=p%d age_ms=%lld\n",now,pid,name,
+    i,svc[0]?svc:"-",n,id,from,age/1000);
+ }
+ lck_ticket_unlock(&space->is_lock);
+ for(unsigned j=0;j<nl;++j)printf("%s",lines[j]);
+}
+#define LT_NAMES 9
 #define LT_THREADS 48
 #define LT_SEEN 384
-static const char *const lt_names[LT_NAMES]={"Preferences","SpringBoard","backboardd","runningboardd","launchd","lsd"};
-struct lt_thread { uint64_t tid,event,cont,pc,kernel[3],cpu; unsigned state; int pri; };
+static const char *const lt_names[LT_NAMES]={"Preferences","SpringBoard","backboardd","runningboardd","launchd","lsd",
+ "iconservicesagent","installd","containermanagerd"};
+struct lt_thread { uint64_t tid,event,cont,pc,kernel[3],cpu; unsigned state,hint; int pri; struct lt_owner own; };
 struct lt_proc {
  int pid; unsigned present,busy,threads,running,waiting,count,decompressions;
  uint64_t uid,cpu,faults,pageins,cow,messages,resident,threadstart,start;
  struct lt_thread th[LT_THREADS];
 };
-struct lt_seen { uint64_t tid,cpu,event; unsigned state; };
+struct lt_seen { uint64_t tid,cpu,event; unsigned state,same; };
 static struct lt_proc lt_procs[LT_NAMES];
 static struct lt_seen lt_seen[LT_SEEN];
 static unsigned lt_seen_count,lt_full;
@@ -725,6 +863,8 @@ static int lt_capture(proc_t p,void *unused) {
    d->cont=(uint64_t)th->continuation;d->cpu=tt.rtm_user+tt.rtm_system;
    arm_saved_state_t *saved=th->machine.upcb;
    if(saved && is_saved_state64(saved))d->pc=get_saved_state_pc(saved);
+   d->hint=th->block_hint;
+   if(lt_ipc_enabled())lt_thread_owner(th,&d->own); else d->own.pid=-1;
    struct home_perf_thread k={0};home_perf_kernel_stack(th,&k);
    d->kernel[0]=k.kernel[0];d->kernel[1]=k.kernel[1];d->kernel[2]=k.kernel[2];
   }
@@ -780,6 +920,8 @@ void boot_launch_trace_sample(unsigned full) {
   lt_pref_threads=1;printf("a04br3 lt ev t_us=%lld pref_threads pid=%d threads=%u\n",t,pref->pid,pref->threads);
  }
  if(!full)return;
+ lt_trace_pids[0]=lt_procs[0].present?lt_procs[0].pid:0;lt_trace_pids[1]=lt_procs[1].present?lt_procs[1].pid:0;
+ lt_trace_pids[2]=lt_procs[2].present?lt_procs[2].pid:0;lt_trace_pids[3]=0;
  boot_launch_trace_all(0);
  uint64_t v[18],d[18];lt_system(v);
  for(unsigned i=0;i<18;++i){d[i]=v[i]-lt_prev_sys[i];lt_prev_sys[i]=v[i];}
@@ -802,7 +944,12 @@ void boot_launch_trace_sample(unsigned full) {
    struct lt_thread *h=&r->th[j];struct lt_seen *s=lt_seen_find(h->tid);
    uint64_t dcpu=s && s->state!=~0u?h->cpu-s->cpu:h->cpu,dns=0;absolutetime_to_nanoseconds(dcpu,&dns);
    const bool changed=!s || s->state==~0u || dns>=1000000 || (h->state&TH_RUN) || s->event!=h->event;
-   if(s){s->cpu=h->cpu;s->event=h->event;s->state=h->state;}
+   const unsigned same=(s && s->state!=~0u && s->event==h->event && (h->state&TH_WAIT) && !(h->state&TH_RUN))?s->same+1:0;
+   if(s){s->cpu=h->cpu;s->event=h->event;s->state=h->state;s->same=same;}
+   // A synchronous IPC wait seen in two samples in a row (>= 1 s): print whom it waits for.
+   if(same && (h->own.special || h->own.pid>=0 || h->own.flags))
+    printf("a04br3 lt ipc t_us=%lld p%d t%llu hint=%u owner=p%d svc=%s special=%u hops=%u queued=%u flags=%x waited_s=%u\n",t,r->pid,
+     (unsigned long long)h->tid,h->hint,h->own.pid,h->own.svc[0]?h->own.svc:"-",h->own.special,h->own.hops,h->own.queued,h->own.flags,same);
    if(!changed){++quiet;continue;}
    printf("a04br3 lt th t_us=%lld p%d t%llu s=%x pri=%d cpu_us=%llu e=%llx c=%llx u=%llx k=%llx/%llx/%llx\n",t,r->pid,
     (unsigned long long)h->tid,h->state,h->pri,dns/1000,h->event,h->cont,h->pc,h->kernel[0],h->kernel[1],h->kernel[2]);
@@ -823,6 +970,7 @@ static int lt_all_capture(proc_t p,void *unused) {
  const uint64_t uid=proc_uniqueid(p);
  task_t task=proc_task(p);
  if(!uid || !task)return PROC_RETURNED;
+ if(lt_ipc_enabled() && lt_all_pass>1)lt_scan_space(task,proc_pid(p),proc_best_name(p),lt_us(mach_absolute_time()));
  struct lt_all *r=NULL;
  for(unsigned i=0;i<lt_all_count;++i)if(lt_all_rows[i].uid==uid){r=&lt_all_rows[i];break;}
  const uint64_t cpu=get_task_cpu_time(task),faults=counter_load(&task->faults),pageins=counter_load(&task->pageins);
@@ -847,7 +995,7 @@ static int lt_all_capture(proc_t p,void *unused) {
  return PROC_RETURNED;
 }
 void boot_launch_trace_all(unsigned reset) {
- if(reset){lt_all_count=0;lt_all_pass=0;}
+ if(reset){lt_all_count=0;lt_all_pass=0;lt_q_count=0;}
  ++lt_all_pass;
  proc_iterate(PROC_ALLPROCLIST|PROC_NOWAITTRANS,lt_all_capture,NULL,NULL,NULL);
 }

@@ -65,9 +65,10 @@ LatencySample gLatency;
 IOSimpleLock *gLatencyLock;
 int gLatencyEnabled=-1;
 volatile uint64_t gLatencyLastPresent;
-// a04br3-input-latency=2 adds the app launch breakdown to each timed tap (launchTraceThread below).
+// a04br3-input-latency=2 adds the app launch breakdown to each timed tap (launchTraceThread below); 3 also resolves whom the
+// threads blocked in mach_msg wait for (package/BootProcessProbe.c).
 bool latencyEnabled(void) {
-    if(gLatencyEnabled<0){unsigned v=0;PE_parse_boot_argn("a04br3-input-latency",&v,sizeof v);gLatencyEnabled=(v==1||v==2)?int(v):0;}
+    if(gLatencyEnabled<0){unsigned v=0;PE_parse_boot_argn("a04br3-input-latency",&v,sizeof v);gLatencyEnabled=(v>=1 && v<=3)?int(v):0;}
     return gLatencyEnabled>0;
 }
 uint64_t latencyMs1000(uint64_t from,uint64_t to) {   // microseconds between two absolute times, 0 when to is unset
@@ -134,7 +135,7 @@ unsigned a04br3_latency_input(unsigned kind) {
         seq=gLatency.seq;
     } else a04br3_latency_skipped=a04br3_latency_skipped+1;
     IOSimpleLockUnlock(gLatencyLock);
-    if(seq && kind==3 && gLatencyEnabled==2 && !__atomic_load_n(&gLaunchRx,__ATOMIC_ACQUIRE)) {
+    if(seq && kind==3 && gLatencyEnabled>=2 && !__atomic_load_n(&gLaunchRx,__ATOMIC_ACQUIRE)) {
         if(!__atomic_exchange_n(&gLaunchThreadStarted,1u,__ATOMIC_ACQ_REL)) {
             thread_t thread=nullptr;
             if(kernel_thread_start(launchTraceThread,nullptr,&thread)==KERN_SUCCESS)thread_deallocate(thread);

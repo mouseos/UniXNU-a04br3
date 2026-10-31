@@ -70,7 +70,7 @@ uil = []
 for n, l in enumerate(lines):
     m = BEGIN.search(l)
     if m:
-        cur = dict(rx_ns=int(m[1]), slide=int(m[2], 16), ev=[], s=[], p=[], th=[], top=[], metal=[], last_t=0, begin_line=n)
+        cur = dict(rx_ns=int(m[1]), slide=int(m[2], 16), ev=[], s=[], p=[], th=[], top=[], ipc=[], q=[], metal=[], last_t=0, begin_line=n)
         samples.append(cur)
         continue
     m = UIL.search(l)
@@ -105,6 +105,16 @@ for n, l in enumerate(lines):
     elif ' lt p ' in l:
         mm = re.search(r'lt p t_us=-?\d+ (\S+) p(\d+)', l)
         cur['p'].append(dict(t=t, name=mm[1], pid=int(mm[2]), **{k: int(v) for k, v in kv.items() if v.isdigit()}))
+    elif ' lt ipc ' in l:
+        mm = re.search(r'lt ipc t_us=-?\d+ p(\d+) t(\d+) hint=(\d+) owner=p(-?\d+) svc=(\S+) special=(\d) hops=(\d+) queued=(\d+) flags=(\w+) waited_s=(\d+)', l)
+        if mm:
+            cur['ipc'].append(dict(t=t, pid=int(mm[1]), tid=int(mm[2]), hint=int(mm[3]), owner=int(mm[4]), svc=mm[5],
+                                   special=int(mm[6]), hops=int(mm[7]), queued=int(mm[8]), flags=mm[9], waited_s=int(mm[10])))
+    elif ' lt q ' in l:
+        mm = re.search(r'lt q t_us=-?\d+ p(\d+) (\S+) idx=(\d+) svc=(\S+) n=(\d+) id=(-?\d+) from=p(-?\d+) age_ms=(\d+)', l)
+        if mm:
+            cur['q'].append(dict(t=t, pid=int(mm[1]), name=mm[2], idx=int(mm[3]), svc=mm[4], n=int(mm[5]), msgh_id=int(mm[6]),
+                                 sender=int(mm[7]), age_ms=int(mm[8])))
     elif ' lt top ' in l:
         mm = re.search(r'lt top t_us=-?\d+ p(\d+) (\S+)( new)? cpu_ms=(\d+) faults=(\d+) pageins=(\d+)', l)
         if mm:
@@ -227,7 +237,26 @@ for smp in samples:
         if x['new'] and tops[k]['new_at_ms'] is None:
             tops[k]['new_at_ms'] = ms(x['t'])
     top = sorted(tops.items(), key=lambda kv: -(kv[1]['cpu_ms'] + kv[1]['pageins']))[:25]
-    result.append(dict(seq=L.get('seq'), top_to_present=top, rx_ns=rx, latency=L, preferences_pid=pref_pid,
+    # Synchronous waits (who holds the reply right / receives the request) and queued requests, up to the first present.
+    names = {r['pid']: r['name'] for r in smp['p']}
+    names.update({x['pid']: x['name'] for x in smp['top']})
+    ipc = collections.OrderedDict()
+    for x in smp['ipc']:
+        if x['t'] > limit + 1100000:
+            continue
+        k = (names.get(x['pid'], x['pid']), x['tid'], names.get(x['owner'], x['owner']), x['svc'])
+        v = ipc.setdefault(k, dict(first_ms=ms(x['t']), last_ms=ms(x['t']), max_waited_s=0, special=x['special'], hint=x['hint']))
+        v['last_ms'] = ms(x['t']); v['max_waited_s'] = max(v['max_waited_s'], x['waited_s'])
+    queues = collections.OrderedDict()
+    for x in smp['q']:
+        if x['t'] > limit + 1100000:
+            continue
+        k = (x['name'], x['pid'], x['idx'], x['svc'], x['msgh_id'], names.get(x['sender'], x['sender']))
+        v = queues.setdefault(k, dict(first_ms=ms(x['t']), last_ms=ms(x['t']), max_age_ms=0, max_n=0))
+        v['last_ms'] = ms(x['t']); v['max_age_ms'] = max(v['max_age_ms'], x['age_ms']); v['max_n'] = max(v['max_n'], x['n'])
+    result.append(dict(seq=L.get('seq'), top_to_present=top,
+                       ipc_waits=[dict(waiter=k[0], tid=k[1], owner=k[2], service=k[3], **v) for k, v in ipc.items()],
+                       queued=[dict(receiver=k[0], pid=k[1], idx=k[2], service=k[3], msgh_id=k[4], sender=k[5], **v) for k, v in queues.items()], rx_ns=rx, latency=L, preferences_pid=pref_pid,
                        timeline=[dict(event=e, ms=v) for e, v in timeline], per_second=per_second,
                        waits={k: [(w, round(s, 1)) for w, s in c.most_common(12)] for k, c in waits.items()},
                        events=[dict(ms=ms(t), text=x) for t, x in smp['ev']]))
