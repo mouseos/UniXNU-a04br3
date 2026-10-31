@@ -334,7 +334,11 @@ alone is not a successful accelerated frame.
   the CPU renderer; `publish` makes backboardd composite on the GPU. The step fetches the pinned metal2vulkan and Rust 1.98.0.
 - Kernel arguments (not in board.toml yet): `a04br3-gpu-metal=1` publishes the accelerator; `sheng-fb-gpu=1` lets the GPU copy
   the composited frame into the LK frame buffer (NativeLegacyDisplay offers frames to NativeGOPPresenter, which the plugin serves).
-  Optional: `a04br3-gpu-metal-grant=<names>` (default `backboardd`), `a04br3-gpu-metal-opens=<n>` (default 40).
+  Optional: `a04br3-gpu-metal-grant=<names>` (default `backboardd,iconservicesagent`), `a04br3-gpu-metal-opens=<n>` (default 40).
+  iconservicesagent needs its own device: iPadOS 17's CoreImage has no CPU renderer, and without a Metal device
+  `+[CIContext contextWithOptions:]` takes the OpenGL ES path and crashes at PC 0 in `CI::GLContext::init` (no GL driver), on every
+  symbol icon (Settings stays on its launch screen). `scripts/a04br3-gpu-addon-clients.py IN OUT iconservicesagent` adds the plugin's
+  `NativePowerVRMetal.clients` list to a GPU addon without touching the Data seed.
   `a04br3-gpu-metal-hide=1` (default off) makes `MetalPluginName` and `MetalPluginClassName` read as absent in every user
   process the grant does not name: those processes skip the accelerator in the original discovery and never load the plugin bundle
   (the plugin gives them no device anyway); `a04br3-gpu-metal=2` is the same as `=1` with this flag. Name every process of the
