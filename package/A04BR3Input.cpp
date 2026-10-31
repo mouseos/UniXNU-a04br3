@@ -408,5 +408,5 @@ void a04br3_input_start(void)
   start(keyThread);
   if (PE_parse_boot_argn("a04br3-input-selftest", &gSelftestSeconds, sizeof(gSelftestSeconds)) && gSelftestSeconds) start(selftestThread);
   unsigned latency = 0;
-  if (PE_parse_boot_argn("a04br3-input-latency", &latency, sizeof(latency)) && latency == 1) start(swipeThread);
+  if (PE_parse_boot_argn("a04br3-input-latency", &latency, sizeof(latency)) && (latency == 1 || latency == 2)) start(swipeThread);
 }
