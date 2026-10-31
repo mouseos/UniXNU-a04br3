@@ -25,7 +25,9 @@ with tempfile.TemporaryDirectory() as d:
 acc = (root / 'package/powervr/NativePowerVRAccelerator.cpp').read_text()
 assert acc.count('if (!native_powervr_metal_note_property_read(') == 3, 'every copyProperty override honours the visibility check'
 metal = (root / 'package/powervr/NativePowerVRMetal.cpp').read_text()
-assert metal.count('a04br3-gpu-metal-hide') >= 2 and 'bootArg("a04br3-gpu-metal-hide", 0) == 1' in metal, 'default off, enabled only by =1'
+assert 'bootArg("a04br3-gpu-metal", 0) == 2 || bootArg("a04br3-gpu-metal-hide", 0) == 1' in metal, 'default off: a04br3-gpu-metal=2 or the explicit flag'
+assert 'if (started || (mode != 1 && mode != 2)) return;' in metal, 'a04br3-gpu-metal=1 and =2 both publish'
+assert 'if (hidden < 64)' in metal, 'refused reads have their own console budget'
 assert 'proc_selfpid() == 0' in metal, 'kernel reads keep the keys'
 print('powervr name list:', len(cases), 'cases passed')
 
