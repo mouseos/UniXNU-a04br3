@@ -38,7 +38,6 @@ void a04br3_registers_init(void);
 void a04br3_gpu_init(void);
 void boot_memory_snapshot(uint64_t out[7]);
 void boot_home_perf_sample(void);
-void boot_memory_top_sample(void);
 void boot_memory_tag_sample(void);
 void native_powervr_bo_owner_report(void) __attribute__((weak_import));   // package/powervr (a04br3-bo-owner=1, mp 0x200)
 void boot_home_irq_init(unsigned);
