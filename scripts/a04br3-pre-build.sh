@@ -24,6 +24,26 @@
 #   with the probe: pre_build = A04BR3_POWERVR_PROBE=1 bash "$DEVICE_DIR/scripts/a04br3-pre-build.sh", owner_trust_cache = true
 set -euo pipefail
 : "${DEVICE_DIR:?}" "${RUNNER_TEMP:?}"
+# Default (the official macos.yml pre_build without variables): the GPU configuration every GPU image of this tablet ran:
+# the PowerVR probe, the Metal plugin in publish mode (backboardd composites on the GPU) and the GPU addon
+# ($RUNNER_TEMP/gpu-addon, taken by the payload step with the owner trust bundle, $RUNNER_TEMP/trustcache.owner).
+# Explicit A04BR3_POWERVR_PROBE / A04BR3_POWERVR_METAL (a04br3-ssh.yml) keep their meaning; A04BR3_GPU=0 builds the
+# CPU-only seed of earlier images.
+if [ -z "${A04BR3_POWERVR_PROBE+x}" ] && [ -z "${A04BR3_POWERVR_METAL+x}" ]; then
+  case "${A04BR3_GPU:-1}" in
+    1) export A04BR3_POWERVR_PROBE=1 A04BR3_POWERVR_METAL=1 A04BR3_POWERVR_METAL_MODE="${A04BR3_POWERVR_METAL_MODE:-publish}"
+       export A04BR3_GPU_ADDON="${A04BR3_GPU_ADDON:-1}" ;;
+    0) ;;
+    *) echo "A04BR3_GPU must be 0 or 1" >&2; exit 1 ;;
+  esac
+fi
+case "${A04BR3_GPU_ADDON:-0}" in
+  0) ;;
+  1) if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL:-0}" != 1 ]; then
+       echo "A04BR3_GPU_ADDON=1 requires A04BR3_POWERVR_PROBE=1 and A04BR3_POWERVR_METAL=1" >&2; exit 1
+     fi ;;
+  *) echo "A04BR3_GPU_ADDON must be 0 or 1" >&2; exit 1 ;;
+esac
 case "${A04BR3_POWERVR_PIPELINE_TIMING:-0}" in
   0) ;;
   1) if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL:-0}" != 1 ]; then
@@ -154,6 +174,13 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
   if [ "${A04BR3_POWERVR_METAL:-0}" = 1 ]; then A04BR3_POWERVR_VULKAN=1; fi
   PROBE_VULKAN=()
   if [ "${A04BR3_POWERVR_VULKAN:-0}" = 1 ]; then
+    # Mesa's host tools (the a04br3-ssh.yml step "Install PowerVR Vulkan host tools"), for the generic macos.yml, which
+    # installs only the kernel's tools; build-pvr-darwin.py finds the keg-only formulae itself.
+    if command -v brew >/dev/null; then
+      for formula in pkgconf bison flex spirv-llvm-translator spirv-tools; do
+        brew list --formula "$formula" >/dev/null 2>&1 || brew install "$formula"
+      done
+    fi
     python3 "$DEVICE_DIR/scripts/build-pvr-darwin.py" --target ios
     PROBE_VULKAN=(--vulkan)
   fi
@@ -196,9 +223,26 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
     --trust-base "$RUNNER_TEMP/trustcache" --trust-out "$RUNNER_TEMP/trustcache-owner" ${METAL_TRUST[@]+"${METAL_TRUST[@]}"}
   python3 "$DEVICE_DIR/scripts/a04br3-seed-powervr-probe.py" --tree "$TREE" --probe-dir "$RUNNER_TEMP/powervr-probe" \
     ${METAL_SEED[@]+"${METAL_SEED[@]}"} ${MEMORY_SEED[@]+"${MEMORY_SEED[@]}"} ${SEED_IDENTITY[@]+"${SEED_IDENTITY[@]}"} "$SEED_INPUT" "$SEED_OUTPUT"
+  if [ "${A04BR3_GPU_ADDON:-0}" = 1 ]; then
+    # The NGPUADD2 addon of the same signed files (scripts/make-a04br3-gpu-addon.py), from the original pinned bundle
+    # ($RUNNER_TEMP/trustcache is not replaced yet). Its trust output is not used: the owner bundle of the seed above
+    # already carries the same CDHashes.
+    ADDON_SCRATCH=$(mktemp -d "$RUNNER_TEMP/a04br3-gpu-addon.XXXXXX")
+    python3 "$DEVICE_DIR/scripts/make-a04br3-gpu-addon.py" --probe-dir "$RUNNER_TEMP/powervr-probe" \
+      --metal-plugin "$RUNNER_TEMP/powervr-metal" --trust-base "$RUNNER_TEMP/trustcache" \
+      --trust-out "$ADDON_SCRATCH/trustcache-addon" --out "$ADDON_SCRATCH/gpu-addon"
+    mv -f "$ADDON_SCRATCH/gpu-addon" "$RUNNER_TEMP/gpu-addon"
+    rm -rf "$ADDON_SCRATCH"
+  else
+    rm -f "$RUNNER_TEMP/gpu-addon"
+  fi
   mv "$SEED_OUTPUT" "$RUNNER_TEMP/data.dbr"
   mv "$RUNNER_TEMP/trustcache-owner" "$RUNNER_TEMP/trustcache"
+  # The generic macos.yml takes a trust cache next to this marker as an owner bundle (as owner_trust_cache = true).
+  : > "$RUNNER_TEMP/trustcache.owner"
   echo "PowerVR probe staged; the payload step needs owner_trust_cache = true (--owner-trust-cache)"
+else
+  rm -f "$RUNNER_TEMP/gpu-addon" "$RUNNER_TEMP/trustcache.owner"
 fi
 # The kernel's owner Data mount (CONFIG_XNU_OWNER_DATA_MOUNT) selects this seed's volume by UUID.
 DATA_UUID=$(read_seed_uuid)

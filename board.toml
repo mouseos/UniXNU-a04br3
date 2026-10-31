@@ -219,9 +219,10 @@ kernel_args = [
   # thread on the Cortex-A35); SpringBoard, backboardd and runningboardd wait on it, and 900 s reset before it finished.
   "a04br3-autoreset=7200",
   # After the PMGR bridge: the launchd-side arguments of UniXNU-tb128fu (board.toml) and UniXNU-sheng that need no display.
-  # No corpses for crashing processes (stock XNU osfmk/corpses/corpse.c): on tb128fu each corpse's footprint walk took half
-  # of all CPU samples while daemons without a GPU crashed in loops; a04br3 has one Cortex-A35.
-  "-no_corpses",
+  # -no_corpses (tb128fu: corpse footprint walks while daemons without a GPU crashed in loops) is left out: with the GPU
+  # those loops are gone, and every GPU image tested on this tablet ran with corpses enabled.
+  # VM compressor mode 2 (osfmk/vm/vm_compressor.c), as in every GPU image tested on this tablet (2 GiB DRAM, no swap).
+  "vm_compressor=2",
   # Stock XNU lock-panic timeout (osfmk/arm/locks_arm.c, 0xc00000 timebase ticks) times 40, as on tb128fu and sheng.
   "ml-timeout-lock-panic-scale=40",
   # The AppleKeyStore stand-in (package/KeyStoreProbe.cpp, UniXNU drivers/NativeKeyStoreEvents), started from
@@ -232,7 +233,7 @@ kernel_args = [
   # on the firmware frame buffer as the system display (phase 4) with one scanout pixel per point (800x1280 points), logical
   # power management, swap validation, the transfer to the frame buffer by the CPU (package/LegacyDisplayProbe.cpp,
   # UniXNU drivers/NativeMobileDisplay), and the HID input with a Home button (package/HidInputProbe.cpp). tb128fu's touch
-  # (sheng-touch-hid, tb128fu-touch), GPU (tb128fu-gpu, sheng-gpu-addon, sheng-fb-gpu) and CPU frequency arguments are left out.
+  # (sheng-touch-hid, tb128fu-touch) and the GPU arguments follow below; tb128fu's own GPU and CPU frequency arguments are left out.
   "offline-mobile-graphics-load=1",
   "offline-legacy-register=1",
   "offline-legacy-phase=4",
@@ -249,20 +250,22 @@ kernel_args = [
   # GPU bring-up (package/A04BR3Gpu.cpp, package/powervr/NativePowerVR.cpp): power the MFG domains, print the Rogue
   # BVNC and boot the upstream MIPS firmware (2), waiting for FWIF initialisation.
   "a04br3-gpu=2",
-  # The PowerVR user-space probe (package/powervr/user/powervrprobed.c): started once by the board launch hook before launchd
-  # (package/A04BR3ProbeLaunch.c), its lines "powervrprobed: ..." on UART through /dev/console. Needs the hook
-  # (CONFIG_XNU_BOARD_LAUNCH, upstream proposal native-board-launch-hook) and a seed and trust bundle that carry it
-  # (a04br3-pre-build.sh A04BR3_POWERVR_PROBE=1); without the binary the spawn prints ENOENT (2) and the boot goes on.
-  "a04br3-powervrprobed=1",
+  # The PowerVR user-space probe (package/powervr/user/powervrprobed.c) is staged by a04br3-pre-build.sh, but its one-shot
+  # run before launchd (package/A04BR3ProbeLaunch.c) is opt-in: a04br3-powervrprobed=1. Metal publication below needs no probe run.
   # The GPU addon union mounts of UniXNU (zzy-native-gpu-addon-mount): /private/var/ngpu/addons over /System/Library/Extensions,
   # where the platform sandbox allows the executable mapping of the Mesa PowerVR library.
   "sheng-gpu-addon=1",
   # The PowerVR Metal accelerator (package/powervr/NativePowerVRMetal.cpp): loads IOGPUFamily and publishes the accelerator; the
   # plugin runs its self-test unless the seed selects publish (scripts/a04br3-pre-build.sh A04BR3_POWERVR_METAL_MODE).
   "a04br3-gpu-metal=1",
-  # Bring-up diagnostics: record the CCCB packets and the PTE stream of the first fragments (package/powervr/
-  # NativePowerVRJobs.cpp); a first context fragment drops with fault address=0 while later ones succeed.
-  "a04br3-gpu-packet=1",
+  # The GPU copies the frame composited by backboardd into the LK frame buffer (NativeLegacyDisplay offers frames to
+  # NativeGOPPresenter, served by the plugin), paced at 60 Hz.
+  "sheng-fb-gpu=1",
+  "sheng-vsync=60",
+  # Run the Rogue core from the MMPLL that LK leaves at 380 MHz (package/A04BR3Gpu.cpp selectClockParent): only after the
+  # PLL and VCORE are read back as the supported state; no PLL or voltage writes. Without it the core stays at 26 MHz.
+  "a04br3-gpu-clock=380",
+  # Packet diagnostics (package/powervr/NativePowerVRJobs.cpp) are opt-in: a04br3-gpu-packet=1.
   # Restore the BO mapping and TQ heap policy of the qualified GE8300 ROA run.
   # This is a board bring-up selection, not proof of Metal UI correctness.
   "a04br3-gpu-bo-wc=1",
@@ -271,10 +274,8 @@ kernel_args = [
   "a04br3-input=1",
   # NativeHidInput registers its touch sink and digitizer collection only with this (UniXNU-tb128fu, UniXNU-qemu).
   "sheng-touch-hid=1",
-  # Bring-up: unattended Home presses (package/HidInputProbe.cpp), 60 s after the second presented frame, three times 20 s
-  # apart, to test the Home path from the lock screen without anyone at the tablet. Remove for a release image.
-  "offline-hid-auto-home=60",
-  "offline-hid-auto-home-count=3",
+  # Unattended Home presses for bring-up (package/HidInputProbe.cpp) are opt-in: offline-hid-auto-home=60 and
+  # offline-hid-auto-home-count=3.
   # Optional input bring-up: a04br3-input-selftest=<seconds> injects one swipe.
   # Leave it disabled during interactive use: it shares the real finger stream.
   # launchd's disabled jobs (package/BootWatchdogPolicy.c labels; written into the Data seed by

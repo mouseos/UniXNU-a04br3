@@ -127,6 +127,15 @@ repository secret UNIXNU_UNIQUE_CHIP_ID holds the platform seed. Then, with the 
 
     ./unixnu bootimg --uefi ../uefi-a04br3 --dtb ../uefi-a04br3/Resources/DTBs/a04br3.dtb
 
+By default this pre_build builds the GPU configuration that every GPU image of this tablet ran: Mesa's PowerVR driver,
+the PowerVR probe and the Metal plugin in publish mode (backboardd composites on the GPU), staged into the Data seed,
+and the GPU addon ($RUNNER_TEMP/gpu-addon). It marks the trust cache as an owner bundle ($RUNNER_TEMP/trustcache.owner);
+the macOS workflow then takes both without further inputs. board.toml selects the matching kernel arguments
+(a04br3-gpu-metal=1, sheng-fb-gpu=1, sheng-vsync=60, a04br3-gpu-clock=380 for the 380 MHz MMPLL). A04BR3_GPU=0 in
+pre_build builds the earlier CPU-only seed. board.toml keeps the unattended test cycle (a04br3-autoreset, the firmware
+define A04BR3_TEST_CYCLE); a user image omits it with payload_args = --omit-kernel-arg a04br3-autoreset and a firmware
+volume built with A04BR3_TEST_CYCLE=0.
+
 ## Partition layout
 
 `scripts/make-a04br3-gpt.py` writes both GPT copies from `scripts/a04br3-gpt.json`. Compared with the stock
