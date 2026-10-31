@@ -698,7 +698,9 @@ extern "C" bool a04br3_runtime_recovery_recheck(void)
 extern "C" void a04br3_autoreset_init(void)
 {
   unsigned seconds = 0;
-  if (!PE_parse_boot_argn("a04br3-autoreset", &seconds, sizeof(seconds)) || seconds == 0) { return; }
+  // Short alias ar=<seconds>: the boot-args string is limited to 1023 bytes.
+  if ((!PE_parse_boot_argn("a04br3-autoreset", &seconds, sizeof(seconds)) &&
+       !PE_parse_boot_argn("ar", &seconds, sizeof(seconds))) || seconds == 0) { return; }
 #if defined(A04BR3_PMUV3_EXPERIMENT) && A04BR3_PMUV3_EXPERIMENT
   unsigned experiment=0;
   if (PE_parse_boot_argn("aq", &experiment, sizeof(experiment)) && experiment==1) {

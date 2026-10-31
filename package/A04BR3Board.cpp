@@ -173,6 +173,9 @@ constexpr unsigned kProcAll = 0x1;       // PROC_ALLPROCLIST
 constexpr int kProcReturned = 0;         // PROC_RETURNED
 struct ProcLine { char text[480]; unsigned used; unsigned count; };
 unsigned gProcLogSeconds;
+// Started by mp=N alone (no a04br3-proclog/pl): every 10 s only the memory-pressure samples and the display line, no process walk
+// and none of the other periodic reports, so timing benchmarks running at the same time see as little extra work as possible.
+bool gProcLogQuiet;
 
 void procFlush(ProcLine &line)
 {
@@ -445,6 +448,10 @@ void procLogThread(void *, wait_result_t)
       boot_memory_tag_sample();
       if (&native_powervr_bo_owner_report) native_powervr_bo_owner_report();
     }
+    if (gProcLogQuiet) {
+      a04br3_display_report();
+      continue;
+    }
     if (perf != 1) {
       static ProcLine line;
       line = {};
@@ -485,8 +492,15 @@ static void a04br3_proclog_init(void)
 {
   if (!PE_parse_boot_argn("a04br3-proclog", &gProcLogSeconds, sizeof(gProcLogSeconds))) {
     // Short form frees boot-argument space for simultaneous diagnostics.
-    if (!PE_parse_boot_argn("pl", &gProcLogSeconds, sizeof(gProcLogSeconds))) return;
-    if (gProcLogSeconds == 1) gProcLogSeconds = 10;
+    if (!PE_parse_boot_argn("pl", &gProcLogSeconds, sizeof(gProcLogSeconds))) {
+      // mp=N with a wired-tag period (bits 0-7) and no process log: the quiet 10 s loop (gProcLogQuiet).
+      unsigned mp = 0;
+      if (!PE_parse_boot_argn("mp", &mp, sizeof(mp)) || !(mp & 0xff)) return;
+      gProcLogSeconds = 10;
+      gProcLogQuiet = true;
+    } else if (gProcLogSeconds == 1) {
+      gProcLogSeconds = 10;
+    }
   }
   if (!gProcLogSeconds) return;
   thread_t thread;

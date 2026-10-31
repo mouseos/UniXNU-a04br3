@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
 #include "NativeMetalBoard.h"
 #include "NativeBridgeMetalFrontend.h"
 
@@ -111,6 +112,37 @@ void noCopyFailure(unsigned sequence,uintptr_t pointer,uint64_t length,uint64_t 
 
 }  // namespace
 
+// Optional metal2vulkan pool block size from the kernel argument m2vp=<4|8|16|32|64|auto> (default absent: no change, the runtime's
+// 64 MiB blocks). PowerVR buffer objects are wired from creation, and the runtime keeps half a block free in each pool it places its
+// own resources in, so the block size sets a floor of wired memory per pool. The value goes to the runtime as NMB_POOL_BLOCK_MIB
+// (drivers/NativeMetal bridge patch 0008; "auto" is resolved from hw.memsize by the NativeMetal frontend). An explicit environment
+// value (scripts/build-a04br3-metal-plugin.py --pool-block-mib) takes precedence. Malformed values are ignored and reported.
+static void poolBlockFromBootArgs() {
+    if (getenv("NMB_POOL_BLOCK_MIB")) return;
+    char args[1024] = {};
+    size_t length = sizeof args - 1;
+    if (sysctlbyname("kern.bootargs", args, &length, nullptr, 0) != 0) return;
+    args[sizeof args - 1] = 0;
+    for (char *token = args; *token;) {
+        while (*token == ' ') ++token;
+        char *end = token;
+        while (*end && *end != ' ') ++end;
+        if (end - token > 5 && !strncmp(token, "m2vp=", 5)) {
+            const size_t valueLength = (size_t)(end - token - 5);
+            char value[8] = {};
+            if (valueLength < sizeof value) memcpy(value, token + 5, valueLength);
+            const bool valid = !strcmp(value, "4") || !strcmp(value, "8") || !strcmp(value, "16") || !strcmp(value, "32") ||
+                               !strcmp(value, "64") || !strcmp(value, "auto");
+            if (valid) setenv("NMB_POOL_BLOCK_MIB", value, 1);
+            char line[48];
+            snprintf(line, sizeof line, "M2VP %s %.8s", valid ? "set" : "ignored", valid ? value : "?");
+            native_metal_board_text(line);
+            return;
+        }
+        token = end;
+    }
+}
+
 extern "C" void native_metal_board_prepare(unsigned port) {
     static bool prepared;
     if (prepared) return;
@@ -124,6 +156,7 @@ extern "C" void native_metal_board_prepare(unsigned port) {
         if (auto retain = (RetainFn)dlsym(iokit, "IOObjectRetain")) retain(port);
     }
     gIOKit.port = port;
+    poolBlockFromBootArgs();
     const char *asyncCreation=getenv("PVR_METAL_ASYNC_CREATION");
     if(asyncCreation && !strcmp(asyncCreation,"1"))
         native_bridge_metal_set_async_creation(true);
