@@ -444,6 +444,18 @@ blockの半分を超える要求をdedicated allocationにする閾値も下が�
 個々の設定の寄与とUI描画改善は未確認です。
 builder検証は `python3 scripts/tests/check_powervr_metal_diagnostics.py` で実行できます。
 
+同じplugin（addon）のまま起動時に選ぶ場合は、カーネル引数 `m2vp=<4|8|16|32|64|auto>` を使います（既定は未指定で、64 MiBのまま）。
+boardの `native_metal_board_prepare` が `kern.bootargs` を読み、`NMB_POOL_BLOCK_MIB` に渡します。
+`auto` は物理メモリ（`hw.memsize`）の約1/128を2の累乗に丸めた値（4〜64 MiB）で、NativeMetalの `NativeMetalPoolSize.h` と同じ規則です。
+UARTには `M2VP set auto=8 mem=1344` のように実際の値が出ます。
+不正な値は `M2VP ignored`、sysctlの失敗は `M2VP sysctl errno=N` です。
+builderの `--pool-block-mib` で埋め込んだ値があれば、そちらが優先します。builderも `auto` を受け付けます。
+
+計時ベンチと同時にメモリを見る場合は、`mp=N` だけを指定します（`a04br3-proclog`/`pl` なし）。
+10秒ごとの静かなループになり、wiredtag・bo-ownerの集計、`native-msdc-iostat=1` のeMMC累積（同じ周期）、表示行だけを出します。
+プロセスの走査やほかの定期報告はしません。
+`ar=<秒>` は `a04br3-autoreset` の短縮形です（引数の1023バイト上限のため）。
+
 通常pageoutのメモリ圧縮を試す場合は、payload生成へ `--kernel-arg vm_compressor=2` を追加します。
 これは固定XNUソースの `VM_PAGER_COMPRESSOR_NO_SWAP` で、通常のin-core compressorを有効にし、
 active swapを有効にはしません。独自のメモリ管理patchや物理RAMサイズの変更ではありません。
