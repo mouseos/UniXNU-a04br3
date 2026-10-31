@@ -90,6 +90,9 @@ for n, l in enumerate(lines):
         cur['end_line'] = n; cur = None; continue
     if 'MetalPluginName read by Preferences' in l:
         cur['metal'].append(cur['last_t'])
+    mm = re.search(r'MetalPluginName read by (\S+) pid=(\d+)', l)
+    if mm:
+        cur.setdefault('metal_all', []).append((cur['last_t'], mm[1], int(mm[2])))
     if not l.startswith('a04br3 lt ') and ' a04br3 lt ' not in l:
         continue
     kv = dict(KV.findall(l))
@@ -164,6 +167,16 @@ for smp in samples:
         timeline.append(('first present', L['present_ms']))
     if L.get('last_ms'):
         timeline.append(('last frame before 15 s quiet', L['last_ms']))
+    # iconservicesagent (icons for SpringBoard and the apps): a new pid is a restart after its previous instance ended
+    # (Chandrasekhar, white-content-20261031.md: SIGSEGV at address 0). Its first Metal plug-in read and its "lt top ... new"
+    # sighting give the restart time to the 100 ms / 1 s sample before the line.
+    seen_pid = set()
+    for t, name, pid in smp.get('metal_all', []):
+        if name.startswith('iconservicesagen') and pid not in seen_pid:
+            seen_pid.add(pid); timeline.append((f'iconservicesagent p{pid} reads MetalPluginName (start/restart)', ms(t)))
+    for x in smp['top']:
+        if x['name'].startswith('iconservicesagen') and x['new'] and x['pid'] not in seen_pid:
+            seen_pid.add(x['pid']); timeline.append((f"iconservicesagent p{x['pid']} new (restart)", ms(x['t'])))
     timeline.sort(key=lambda x: x[1])
     cpu = collections.defaultdict(dict)
     for r in smp['p']:
