@@ -20,12 +20,13 @@
 // refused. Other types (the original IOGPU library opens with type 1 and an API value) are refused. A process may open at most
 // a04br3-gpu-metal-opens GPU connections per boot (default 40, 0 = unlimited), so a client that crashes on every launch cannot loop.
 //
-// a04br3-gpu-metal-hide=1 (default off): the two plugin keys (MetalPluginName, MetalPluginClassName) read as absent in every process
+// a04br3-gpu-metal=2, or =1 with a04br3-gpu-metal-hide=1 (default off): publish, and the two plugin keys (MetalPluginName, MetalPluginClassName) read as absent in every process
 // the grant does not name. Only the granted processes get a native device (the plugin returns nil elsewhere: NativeVulkanMetalPlugin.mm
 // deviceForPort serves backboardd and the .clients list), yet without this every process that looks for Metal loads the whole plugin
 // bundle before it learns that. With the keys absent, the original discovery (Metal _getMetalPluginClassForService returns no class
 // when MetalPluginName is missing) skips the accelerator, the process loads nothing of ours and takes its own no-GPU path, as on a board
-// without a Metal plugin. The first reads still go to the console, marked hidden.
+// without a Metal plugin. The first 64 refused reads go to the console ("MetalPluginName hidden from"). A process named in the plugin's
+// .clients but not in the grant is refused too (it could not open the accelerator through the sandbox anyway).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -61,7 +62,8 @@ void native_powervr_metal_publish(void);
 IOReturn native_powervr_metal_new_user_client(IOService *, task_t, void *, UInt32, OSDictionary *, IOUserClient **);
 bool native_powervr_metal_note_property_read(const char *);
 // Stages: 1 thread started, 2 NativePowerVRGpu published, 3 IOGPUFamily loaded, 4 class registered, 5 accelerator published.
-volatile uint32_t native_powervr_metal_stage, native_powervr_metal_opens, native_powervr_metal_refused, native_powervr_metal_name_reads;
+volatile uint32_t native_powervr_metal_stage, native_powervr_metal_opens, native_powervr_metal_refused, native_powervr_metal_name_reads,
+    native_powervr_metal_hidden_reads;
 volatile int native_powervr_metal_status;
 }
 
@@ -173,10 +175,10 @@ void publish(void)
   char grant[128] = "backboardd";
   PE_parse_boot_argn("a04br3-gpu-metal-grant", grant, sizeof grant);
   accelerator->setProperty("NativeSandboxGrantProcess", grant);
-  if (bootArg("a04br3-gpu-metal-hide", 0) == 1) {
+  if (bootArg("a04br3-gpu-metal", 0) == 2 || bootArg("a04br3-gpu-metal-hide", 0) == 1) {
     strlcpy(gPluginVisibleTo, grant, sizeof gPluginVisibleTo);
     __atomic_store_n(&gPluginHidden, true, __ATOMIC_RELEASE);
-    IOLog("powervr-metal: plugin keys visible only to %s (a04br3-gpu-metal-hide=1)\n", gPluginVisibleTo);
+    IOLog("powervr-metal: plugin keys visible only to %s\n", gPluginVisibleTo);
   }
   if (!accelerator->attach(IOService::getPlatform())) {
     accelerator->release();
@@ -195,11 +197,12 @@ void publishThread(void *, wait_result_t)
 }
 }  // namespace
 
-// a04br3-gpu-metal=1 (from unixnu_board_launch(), A04BR3Board.cpp): publish once, on its own thread.
+// a04br3-gpu-metal=1 or 2 (from unixnu_board_launch(), A04BR3Board.cpp): publish once, on its own thread.
 extern "C" void native_powervr_metal_publish(void)
 {
   static bool started;
-  if (started || bootArg("a04br3-gpu-metal", 0) != 1) return;
+  const unsigned mode = bootArg("a04br3-gpu-metal", 0);
+  if (started || (mode != 1 && mode != 2)) return;
   started = true;
   gLock = IOLockAlloc();
   if (!gLock) return;
@@ -223,6 +226,12 @@ extern "C" bool native_powervr_metal_note_property_read(const char *key)
     const uint32_t reads = native_powervr_metal_name_reads;
     native_powervr_metal_name_reads = reads + 1;
     if (reads < 32) IOLog("powervr-metal: MetalPluginName read by %s pid=%d%s\n", name, proc_selfpid(), visible ? "" : " (hidden)");
+    if (!visible) {
+      // Its own budget: the shared one above is spent by the first processes of a boot.
+      const uint32_t hidden = native_powervr_metal_hidden_reads;
+      native_powervr_metal_hidden_reads = hidden + 1;
+      if (hidden < 64) IOLog("powervr-metal: MetalPluginName hidden from %s pid=%d (%u)\n", name, proc_selfpid(), hidden + 1);
+    }
   }
   return visible;
 }

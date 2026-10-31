@@ -337,7 +337,8 @@ alone is not a successful accelerated frame.
   Optional: `a04br3-gpu-metal-grant=<names>` (default `backboardd`), `a04br3-gpu-metal-opens=<n>` (default 40).
   `a04br3-gpu-metal-hide=1` (default off) makes `MetalPluginName` and `MetalPluginClassName` read as absent in every user
   process the grant does not name: those processes skip the accelerator in the original discovery and never load the plugin bundle
-  (the plugin gives them no device anyway). `scripts/tests/test_powervr_metal_hide.py` checks the name-list rule.
+  (the plugin gives them no device anyway); `a04br3-gpu-metal=2` is the same as `=1` with this flag. Name every process of the
+  plugin's `.clients` in the grant too, or it is refused with the others. `scripts/tests/test_powervr_metal_hide.py` checks the name-list rule.
 - UART: `powervr-metal: ...` for the publication and every GPU connection, `powervr-metal[<process>]: <line>` for the plugin's
   lines: `M s.. c.. r.. i.. q.. k<ok>/<failed> p<ok>/<failed>` (self-test: compute, render, host import, QuartzCore kernels and
   render pairs), `P<step> e<hex>` and `PF <frames>/<failures> ...` (scanout), `ST..`/`PUB ..` (status every 20 s).
