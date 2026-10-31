@@ -493,7 +493,7 @@ extern "C" void unixnu_board_init(void)
     PE_parse_boot_argn("a04br3-home-perf", &gpuSubmitPerf, sizeof(gpuSubmitPerf));
     // The app launch breakdown (a04br3-input-latency=2, BootProcessProbe.c) reports the fence waits of these counters.
     unsigned launchTrace = 0;
-    if (PE_parse_boot_argn("a04br3-input-latency", &launchTrace, sizeof(launchTrace)) && launchTrace == 2) gpuSubmitPerf = 1;
+    if (PE_parse_boot_argn("a04br3-input-latency", &launchTrace, sizeof(launchTrace)) && (launchTrace == 2 || launchTrace == 3)) gpuSubmitPerf = 1;
   }
   native_powervr_submit_perf_enable(gpuSubmitPerf);
   unsigned gpuIoTrace = 0;
