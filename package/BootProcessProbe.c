@@ -680,8 +680,9 @@ extern vm_offset_t vm_kernel_slide;
 //  - send blocked on a full queue: the receiver of that port;
 //  - otherwise (a port set: a run loop or dispatch source) no owner: the thread waits asynchronously.
 // Every full sample also scans the IPC space of every process for receive rights with queued messages and prints the ones whose
-// first message came from a traced client or has stayed first for a second or more ("a04br3 lt q"): an asynchronous request a
-// server (or launchd, holding the port of a job it has not started) has not received yet.
+// first message came from or goes to a traced client (>= 1 s), or has stayed first for 3 s ("a04br3 lt q"): an asynchronous
+// request a server (or launchd, holding the port of a job it has not started) has not received yet. Send-once rights held for
+// >= 1 s on a traced client's port are replies that process owes the client ("a04br3 lt owe").
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
@@ -756,7 +757,7 @@ static void lt_thread_owner(thread_t th,struct lt_owner *o) {
    struct turnstile *ts=port->ip_waitq.waitq_ts;
    ip_mq_unlock(port);
    if(o->pid<0)lt_follow(ts,o);
-  } else ip_mq_unlock(port);
+  } else {o->flags|=32;ip_mq_unlock(port);}   // one ordinary port (a MIG reply port): owner unknown here, see "lt owe"
  } else if(hint==kThreadWaitPortSend && waitq_type(wq)==WQT_TURNSTILE) {
   lt_follow(waitq_to_turnstile(wq.wq_q),o);
  } else if(hint==kThreadWaitWorkloopSyncWait) {
@@ -765,8 +766,8 @@ static void lt_thread_owner(thread_t th,struct lt_owner *o) {
  }
 }
 // Queued messages of one IPC space (space unlocked; try-locks only).
-#define LT_Q 256
-struct lt_q { uint64_t port,kmsg; long long since; };
+#define LT_Q 2048
+struct lt_q { uint64_t port,kmsg; long long since,printed; };
 static struct lt_q lt_q_rows[LT_Q];
 static unsigned lt_q_count;
 static int lt_trace_pids[4];
@@ -776,11 +777,31 @@ static void lt_scan_space(task_t task,int pid,const char *name,long long now) {
  if(!is_active(space)){lck_ticket_unlock(&space->is_lock);return;}
  ipc_entry_table_t table=is_active_table(space);
  const unsigned count=ipc_entry_table_count(table);
- char lines[6][200];unsigned nl=0;
+ char lines[10][200];unsigned nl=0;
  for(unsigned i=1;i<count && i<16384;++i) {
   ipc_entry_t e=ipc_entry_table_get_nocheck(table,i);
-  if(!(IE_BITS_TYPE(e->ie_bits)&MACH_PORT_TYPE_RECEIVE) || !e->ie_object)continue;
+  const unsigned type=IE_BITS_TYPE(e->ie_bits);
+  if(!e->ie_object)continue;
   ipc_port_t port=ip_object_to_port(e->ie_object);
+  if(type&MACH_PORT_TYPE_SEND_ONCE) {
+   // A reply this process owes to a traced client: it holds the send-once right of the client's reply port.
+   if(!ip_mq_lock_try(port))continue;
+   int to=-1;
+   if(ip_active(port) && ip_in_a_space(port) && port->ip_receiver && port->ip_receiver!=ipc_space_kernel && port->ip_receiver->is_task)
+    to=pid_from_task(port->ip_receiver->is_task);
+   ip_mq_unlock(port);
+   bool traced=false;for(unsigned j=0;j<4;++j)if(lt_trace_pids[j]>0 && to==lt_trace_pids[j])traced=true;
+   if(!traced || to==pid)continue;
+   struct lt_q *q=NULL;
+   for(unsigned j=0;j<lt_q_count;++j)if(lt_q_rows[j].port==(uint64_t)e){q=&lt_q_rows[j];break;}
+   if(!q && lt_q_count<LT_Q){q=&lt_q_rows[lt_q_count++];q->port=(uint64_t)e;q->kmsg=0;q->printed=0;}
+   long long age=0;
+   if(q){if(q->kmsg!=(uint64_t)port){q->kmsg=(uint64_t)port;q->since=now;}age=now-q->since;}
+   if(age>=900000 && nl<10)
+    snprintf(lines[nl++],sizeof(lines[0]),"a04br3 lt owe t_us=%lld p%d %s idx=%u to=p%d age_ms=%lld\n",now,pid,name,i,to,age/1000);
+   continue;
+  }
+  if(!(type&MACH_PORT_TYPE_RECEIVE))continue;
   if(!port->ip_messages.imq_msgcount)continue;   // unlocked peek; rechecked under the lock
   if(!ip_mq_lock_try(port))continue;
   ipc_kmsg_t k=ipc_kmsg_queue_first(&port->ip_messages.imq_messages);
@@ -796,13 +817,20 @@ static void lt_scan_space(task_t task,int pid,const char *name,long long now) {
   ip_mq_unlock(port);
   struct lt_q *q=NULL;
   for(unsigned j=0;j<lt_q_count;++j)if(lt_q_rows[j].port==(uint64_t)port){q=&lt_q_rows[j];break;}
-  if(!q && lt_q_count<LT_Q){q=&lt_q_rows[lt_q_count++];q->port=(uint64_t)port;q->kmsg=0;}
-  long long age=0;
-  if(q){if(q->kmsg!=(uint64_t)k){q->kmsg=(uint64_t)k;q->since=now;}age=now-q->since;}
-  bool traced=false;for(unsigned j=0;j<4;++j)if(lt_trace_pids[j]>0 && from==lt_trace_pids[j])traced=true;
-  if((traced || age>=900000) && nl<6)
+  if(!q && lt_q_count<LT_Q){q=&lt_q_rows[lt_q_count++];q->port=(uint64_t)port;q->kmsg=0;q->printed=0;}
+  long long age=0;bool due=false;
+  if(q){
+   if(q->kmsg!=(uint64_t)k){q->kmsg=(uint64_t)k;q->since=now;q->printed=0;}
+   age=now-q->since;
+   // Other queues: once when the first message has waited 3 s, then every 10 s (idle notification queues are many).
+   due=age>=3000000 && (!q->printed || now-q->printed>=10000000);
+  }
+  bool traced=false;for(unsigned j=0;j<4;++j)if(lt_trace_pids[j]>0 && (from==lt_trace_pids[j] || pid==lt_trace_pids[j]))traced=true;
+  if((traced?age>=900000:due) && nl<10) {
+   if(q)q->printed=now;
    snprintf(lines[nl++],sizeof(lines[0]),"a04br3 lt q t_us=%lld p%d %s idx=%u svc=%s n=%u id=%d from=p%d age_ms=%lld\n",now,pid,name,
     i,svc[0]?svc:"-",n,id,from,age/1000);
+  }
  }
  lck_ticket_unlock(&space->is_lock);
  for(unsigned j=0;j<nl;++j)printf("%s",lines[j]);
@@ -921,7 +949,7 @@ void boot_launch_trace_sample(unsigned full) {
  }
  if(!full)return;
  lt_trace_pids[0]=lt_procs[0].present?lt_procs[0].pid:0;lt_trace_pids[1]=lt_procs[1].present?lt_procs[1].pid:0;
- lt_trace_pids[2]=lt_procs[2].present?lt_procs[2].pid:0;lt_trace_pids[3]=0;
+ lt_trace_pids[2]=lt_procs[2].present?lt_procs[2].pid:0;lt_trace_pids[3]=lt_procs[3].present?lt_procs[3].pid:0;
  boot_launch_trace_all(0);
  uint64_t v[18],d[18];lt_system(v);
  for(unsigned i=0;i<18;++i){d[i]=v[i]-lt_prev_sys[i];lt_prev_sys[i]=v[i];}
