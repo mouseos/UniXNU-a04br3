@@ -57,15 +57,23 @@ void native_powervr_submit_stage_enable(unsigned, unsigned);
 void native_powervr_io_trace_report(void);
 void native_powervr_metal_publish(void);   // package/powervr/NativePowerVRMetal.cpp (a04br3-gpu-metal=1)
 extern volatile uint64_t native_msdc_verified_cache_stats[3] __attribute__((weak_import));
+// Defined only by NativeMsdc built with NATIVE_MSDC_IRQ_WAIT=1 (XNU_MSDC_IRQ_WAIT=1). The kernel is a static link, where a
+// weak_import reference without any definition fails ("Undefined symbols"), so the default build does not reference them.
+// scripts/build-a04br3-board.py passes A04BR3_MSDC_IRQ_SYMBOLS and A04BR3_CS_TRACE_SYMBOL from the same build switches.
+#if !defined(A04BR3_MSDC_IRQ_SYMBOLS) || A04BR3_MSDC_IRQ_SYMBOLS
 extern volatile uint64_t native_msdc_irq_stats[4] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_worker_stats[4] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_irq_mask_failures __attribute__((weak_import));
+#endif
 extern volatile uint32_t native_msdc_iostat_enabled __attribute__((weak_import));
 extern volatile uint64_t native_msdc_transport_stats[36] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_block_offer_stats[12] __attribute__((weak_import));
 extern volatile uint64_t native_msdc_block_queue_stats[3] __attribute__((weak_import));
 void native_root_timing_snapshot(uint64_t out[6]) __attribute__((weak_import));
+// Defined only by the XNU I/O overlap patch with XNU_IO_OVERLAP_TRACE=1 and XNU_ROOT_TIMING=1.
+#if !defined(A04BR3_CS_TRACE_SYMBOL) || A04BR3_CS_TRACE_SYMBOL
 void native_cs_trace_report(void) __attribute__((weak_import));
+#endif
 extern volatile uint32_t native_keyevents_stage;
 extern volatile int native_keyevents_status;
 // Existing kern_exec.c addon installer and union-mount diagnostics.
@@ -78,6 +86,18 @@ extern volatile int native_gpu_addon3_stage, native_gpu_addon3_status;
 // does not link: the rows go to this zero-initialised storage instead. Weak, so a real page linked later takes precedence.
 __attribute__((weak)) char boot_progress_ext[8][48];
 }
+
+// Not built: the reporters below see absent counters and an absent trace reporter, as with an unresolved weak_import.
+#if defined(A04BR3_MSDC_IRQ_SYMBOLS) && !A04BR3_MSDC_IRQ_SYMBOLS
+static volatile uint64_t *a04br3_absent_msdc_counters = nullptr;
+#define native_msdc_irq_stats a04br3_absent_msdc_counters
+#define native_msdc_worker_stats a04br3_absent_msdc_counters
+#define native_msdc_irq_mask_failures (*a04br3_absent_msdc_counters)
+#endif
+#if defined(A04BR3_CS_TRACE_SYMBOL) && !A04BR3_CS_TRACE_SYMBOL
+static void (*a04br3_absent_cs_trace_report)(void) = nullptr;
+#define native_cs_trace_report a04br3_absent_cs_trace_report
+#endif
 
 // a04br3-proclog=<seconds>: every <seconds>, one UART line per batch of processes ("a04br3 procs: pid:name ..."). Without a
 // display this is the only view of userland progress after launchd; off by default.

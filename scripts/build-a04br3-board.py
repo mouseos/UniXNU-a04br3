@@ -125,6 +125,11 @@ for name in CXX_SOURCES:
     extra = ['-DA04BR3_PMUV3_EXPERIMENT=1'] if pmuv3 == '1' and name == 'A04BR3AutoReset.cpp' else []
     if rtc_ref == '1' and name == 'A04BR3AutoReset.cpp':
         extra += ['-DA04BR3_RTC_REF=1']
+    if name == 'A04BR3Board.cpp':
+        # Diagnostic symbols exist only in builds with these switches (NativeMsdc IRQ wait; XNU I/O overlap trace).
+        msdc_irq = os.environ.get('XNU_MSDC_IRQ_WAIT') == '1'
+        cs_trace = os.environ.get('XNU_IO_OVERLAP_TRACE') == '1' and os.environ.get('XNU_ROOT_TIMING') == '1'
+        extra += [f'-DA04BR3_MSDC_IRQ_SYMBOLS={int(msdc_irq)}', f'-DA04BR3_CS_TRACE_SYMBOL={int(cs_trace)}']
     objects.append(compile_one(cxx_record, KIT / name, CXX_FLAGS + extra))
 c_record = record('bsd/DEVELOPMENT/kern_exec.o.json')
 for name in C_SOURCES:
