@@ -752,10 +752,12 @@ static void lt_system(uint64_t v[18]) {
  }
  if(native_powervr_wait_snapshot){uint64_t g[10];native_powervr_wait_snapshot(g);for(unsigned i=0;i<10;++i)v[8+i]=g[i];}
 }
+void boot_launch_trace_all(unsigned reset);
 void boot_launch_trace_begin(uint64_t rx) {
  lt_rx=rx;lt_seen_count=0;lt_pref_uid=lt_pref_dyld=lt_pref_threads=0;
  memset(lt_prev_uid,0,sizeof(lt_prev_uid));
  lt_system(lt_prev_sys);
+ boot_launch_trace_all(1);
  uint64_t ns=0;absolutetime_to_nanoseconds(rx,&ns);
  printf("a04br3 lt begin rx_ns=%llu kslide=%llx msdc=%u gpu=%u\n",(unsigned long long)ns,(unsigned long long)vm_kernel_slide,
   native_msdc_transport_stats!=NULL,native_powervr_wait_snapshot!=NULL);
@@ -778,6 +780,7 @@ void boot_launch_trace_sample(unsigned full) {
   lt_pref_threads=1;printf("a04br3 lt ev t_us=%lld pref_threads pid=%d threads=%u\n",t,pref->pid,pref->threads);
  }
  if(!full)return;
+ boot_launch_trace_all(0);
  uint64_t v[18],d[18];lt_system(v);
  for(unsigned i=0;i<18;++i){d[i]=v[i]-lt_prev_sys[i];lt_prev_sys[i]=v[i];}
  uint64_t rdns=d[6],bbns=0,otns=0;   // NativeMsdc adds nanoseconds; the GPU counters are mach ticks
@@ -806,5 +809,46 @@ void boot_launch_trace_sample(unsigned full) {
   }
   if(quiet)printf("a04br3 lt th t_us=%lld p%d unchanged=%u\n",t,r->pid,quiet);
  }
+}
+
+
+// Every process (a04br3-input-latency=2, full samples): the ones that used >= 20 ms of CPU, faulted >= 50 times or paged in since
+// the previous full sample ("a04br3 lt top"), so that a launch waiting on a process outside the six above still shows who works.
+#define LT_ALL 320
+struct lt_all { uint64_t uid,cpu,faults,pageins; int pid; char name[20]; unsigned seen; };
+static struct lt_all lt_all_rows[LT_ALL];
+static unsigned lt_all_count,lt_all_pass;
+static int lt_all_capture(proc_t p,void *unused) {
+ (void)unused;
+ const uint64_t uid=proc_uniqueid(p);
+ task_t task=proc_task(p);
+ if(!uid || !task)return PROC_RETURNED;
+ struct lt_all *r=NULL;
+ for(unsigned i=0;i<lt_all_count;++i)if(lt_all_rows[i].uid==uid){r=&lt_all_rows[i];break;}
+ const uint64_t cpu=get_task_cpu_time(task),faults=counter_load(&task->faults),pageins=counter_load(&task->pageins);
+ if(!r) {
+  if(lt_all_count>=LT_ALL)return PROC_RETURNED;
+  r=&lt_all_rows[lt_all_count++];memset(r,0,sizeof(*r));r->uid=uid;r->pid=proc_pid(p);
+  strlcpy(r->name,proc_best_name(p),sizeof(r->name));
+  r->cpu=cpu;r->faults=faults;r->pageins=pageins;r->seen=lt_all_pass;
+  if(lt_all_pass>1) {   // started during the trace: its totals so far
+   uint64_t ns=0;absolutetime_to_nanoseconds(cpu,&ns);
+   printf("a04br3 lt top t_us=%lld p%d %s new cpu_ms=%llu faults=%llu pageins=%llu\n",lt_us(mach_absolute_time()),r->pid,r->name,
+    (unsigned long long)(ns/1000000),(unsigned long long)faults,(unsigned long long)pageins);
+  }
+  return PROC_RETURNED;   // first sight before the trace: baseline only
+ }
+ uint64_t dcpu=cpu-r->cpu,ns=0;absolutetime_to_nanoseconds(dcpu,&ns);
+ const uint64_t df=faults-r->faults,dp=pageins-r->pageins;
+ r->cpu=cpu;r->faults=faults;r->pageins=pageins;r->seen=lt_all_pass;
+ if(ns>=20000000 || df>=50 || dp)
+  printf("a04br3 lt top t_us=%lld p%d %s cpu_ms=%llu faults=%llu pageins=%llu\n",lt_us(mach_absolute_time()),r->pid,r->name,
+   (unsigned long long)(ns/1000000),(unsigned long long)df,(unsigned long long)dp);
+ return PROC_RETURNED;
+}
+void boot_launch_trace_all(unsigned reset) {
+ if(reset){lt_all_count=0;lt_all_pass=0;}
+ ++lt_all_pass;
+ proc_iterate(PROC_ALLPROCLIST|PROC_NOWAITTRANS,lt_all_capture,NULL,NULL,NULL);
 }
 
