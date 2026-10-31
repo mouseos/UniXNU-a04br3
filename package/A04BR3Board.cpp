@@ -173,8 +173,9 @@ constexpr unsigned kProcAll = 0x1;       // PROC_ALLPROCLIST
 constexpr int kProcReturned = 0;         // PROC_RETURNED
 struct ProcLine { char text[480]; unsigned used; unsigned count; };
 unsigned gProcLogSeconds;
-// Started by mp=N alone (no a04br3-proclog/pl): every 10 s only the memory-pressure samples and the display line, no process walk
-// and none of the other periodic reports, so timing benchmarks running at the same time see as little extra work as possible.
+// Started by mp=N alone (no a04br3-proclog/pl): every 10 s only the memory-pressure samples (with the eMMC transfer counters of
+// native-msdc-iostat=1 at their period) and the display line, no process walk and none of the other periodic reports, so timing
+// benchmarks running at the same time see as little extra work as possible.
 bool gProcLogQuiet;
 
 void procFlush(ProcLine &line)
@@ -449,6 +450,8 @@ void procLogThread(void *, wait_result_t)
       if (&native_powervr_bo_owner_report) native_powervr_bo_owner_report();
     }
     if (gProcLogQuiet) {
+      // The cumulative eMMC transfer counters (native-msdc-iostat=1) at the same period as the memory samples.
+      if (wiredTag && (round == 1 || round % wiredTag == 0)) msdcIoReport(msdcPerf);
       a04br3_display_report();
       continue;
     }
