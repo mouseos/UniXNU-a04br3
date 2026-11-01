@@ -14,7 +14,7 @@ paths = ["board.toml","configs/**",".gitmodules","unixnu.lock","drivers/**","pat
 inputs = ["mouseos/UniXNU fork (main), NativeMsdc (mouseos/NativeMsdc) and ArmCpu (mouseos/ArmCpu fork) for MT8167 storage, GICv2 and board integration","iPad7,1 iPadOS 17.7.11 21H461 restore image"]
 configuration = ["board.toml [board] name a04br3, soc MT8167, kit a04br3; [kernel] defconfig a04br3_defconfig; [firmware.defines] A04BR3_TEST_CYCLE, A04BR3_EMMC_HS200, A04BR3_CPU_1300, A04BR3_CHARGER_OWNER, A04BR3_RAMDISK_RECLAIMABLE"]
 procedure = ["macOS workflow of mouseos/UniXNU: device_repository mouseos/UniXNU-a04br3, defconfig a04br3_defconfig, steps kernel userdata payload, pre_build bash \\\"$DEVICE_DIR/scripts/a04br3-pre-build.sh\\\""]
-findings = ["The board builds against the maintainer's UniXNU fork; its generic changes stay behind default-off build switches (XNU_* environment) and driver macros."]
+findings = ["The board builds against the maintainer's UniXNU fork; its generic changes stay behind default-off build switches (XNU_* environment) and driver macros.","a04br3_defconfig sets CONFIG_XNU_LOW_GLOBALS_BELOW (diagnostic defconfigs without it boot with the floor raised); board.toml keeps memory_floor 0x52000000 and kernel arguments at 959 bytes."]
 completion = ["A clean clone of the published mains builds kernel, userdata and payload in the macOS workflow without local inputs except the platform seed secret."]
 limits = ["board.toml is format 1; no porting.toml-driven profiles, feeds.toml or dts/ yet."]
 next_action = ["Migrate to format 2 (SoC and OS profiles, canonical component names, feeds.toml, dts/a04br3.dts, scripts/package.sh) following the migration guide."]
@@ -65,20 +65,26 @@ revision = "7d9ad270cbc3b583cd913746daccc52eb77ac9b7"
 
 [[area]]
 id = "memory"
-status = "implemented"
+status = "device-verified"
 components = []
-paths = ["scripts/make-a04br3-adt.py"]
+paths = ["scripts/make-a04br3-adt.py","scripts/tests/test_ram_layout.py","scripts/a04br3-memory-payload.sh"]
 inputs = ["2 GiB DRAM at 0x40000000; LK frame buffer at 0xBE9C0000; payload FAT at 0x60000000"]
-configuration = ["[payload] dram_size 0x80000000; [payload.adt] owned_memory_size and memory_floor (the XNU window and the memory below it handed back to XNU); firmware define A04BR3_RAMDISK_RECLAIMABLE"]
-procedure = ["unixnu build payload writes the ADT memory description; DarwinBoot allocates the window from the EFI memory map"]
-findings = ["iPadOS reads pages back from eMMC under memory pressure (about 7 GB in 12 minutes on first boots); the window and floor were raised to give XNU more DRAM."]
+configuration = ["[payload] dram_size 0x80000000; [payload.adt] owned_memory_size and memory_floor (the XNU window and the memory below it handed back to XNU); firmware define A04BR3_RAMDISK_RECLAIMABLE; CONFIG_XNU_LOW_GLOBALS_BELOW in a04br3_defconfig (UniXNU patches/xnu/zzzzz-low-globals-below.patch: the low globals 512 MiB lower, so the kernel's static region may start far below the kernel)"]
+procedure = ["unixnu build payload writes the ADT memory description; DarwinBoot allocates the window from the EFI memory map, reads the kernel's __DATA_CONST,__lowglo_base and hands XNU the memory from memory_floor up to the window"]
+findings = ["iPadOS reads pages back from eMMC under memory pressure (about 7 GB in 12 minutes on first boots); the window and floor were raised to give XNU more DRAM.","With the stock low globals DarwinBoot had to raise the floor to 0x64600000 (1440.5 MiB); with them moved it accepts 0x52000000 and hands XNU 0x6C67C000 (1734.5 MiB)."]
 completion = ["Every handoff region is reserved once and XNU receives the remaining DRAM."]
 limits = ["Memory pressure on first boot of a new Data seed remains."]
-next_action = ["Measure free memory and page-ins with the current window on the home screen."]
+next_action = ["Measure free memory, eMMC page-ins and the first app launch with the floor at 0x52000000 against 0x64600000."]
 [[area.evidence]]
 kind = "source"
 reference = "https://github.com/mouseos/UniXNU-a04br3/blob/efaf8b5d7a8541573dcc166e9b6478368138cfec/board.toml"
 result = "window and memory floor configuration of the current main"
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/lowglo-branch-uart.md"
+result = "low globals at 0xFFFFFFEFE0000000; memory floor 0x52000000 accepted, total 0x6C67C000; no panic; GPU composition presented 509 frames"
+command = "macos.yml run 41360286449 (UniXNU 61451ae, a04br3_defconfig) + unixnu build firmware (uefi-a04br3 215b0635, DarwinBoot 023daa9); fastboot flash boot; UART0"
+revision = "73cc3ef2ac19eb12d9c81639502fd3514c337710"
 
 [[area]]
 id = "storage"
@@ -225,7 +231,7 @@ paths = ["scripts/tests/**","tests/**","README.md","scripts/make-a04br3-adt.py",
 inputs = ["XNU 10063 (Darwin 23.6) source kernel, iPadOS 17.7.11 21H461 IPSW, boot partition 128 MiB"]
 configuration = ["[payload] volume A04BR3ESP, size_mib 126, loader firmware; [payload.adt] tool scripts/make-a04br3-adt.py, packed_data_ramdisk, ipad_identity"]
 procedure = ["macOS workflow (kernel, userdata, payload) -> unixnu build firmware -> unixnu bootimg -> scripts/make-a04br3-flash.py --bundle"]
-findings = ["The boot image must pass scripts/check-a04br3-bootimg.py (the stock LK needs the ramdisk at 0x60000000 and a complete header page)."]
+findings = ["The boot image must pass scripts/check-a04br3-bootimg.py (the stock LK needs the ramdisk at 0x60000000 and a complete header page).","scripts/tests/test_memory_iostat_profile.py and test_memory_payload.py check the memory profile command line (mb=1, 1022 of 1023 bytes); test_ram_layout.py checks the window, the memory floor and the low-globals defconfigs against the uefi-a04br3 checkout."]
 completion = ["One directory holds boot, userdata, root policy, both GPT copies, the mtkclient script and checksums."]
 limits = ["The first installation needs mtkclient in BROM mode once; later images go through LK fastboot."]
 next_action = ["Add scripts/package.sh and .github/workflows/package.yml of the format 2 template."]

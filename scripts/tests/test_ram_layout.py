@@ -88,6 +88,26 @@ class RamLayoutTest(unittest.TestCase):
             base, size, _ = self.regions[name]
             self.assertLessEqual(base + size, floor, name)
 
+    def test_memory_floor_reaches_the_kernel_static_region_limit(self):
+        # DarwinBoot hands XNU [floor, window) only if VirtualBase = kernel VA - (window PA - floor) stays at or above the
+        # static region floor: the low globals plus their 8 MiB reservation (pmap_virtual_region); otherwise it raises the
+        # floor. a04br3_defconfig moves the low globals (CONFIG_XNU_LOW_GLOBALS_BELOW, UniXNU
+        # patches/xnu/zzzzz-low-globals-below.patch), which DarwinBoot reads from __DATA_CONST,__lowglo_base.
+        floor = self.board['payload']['adt'].get('memory_floor')
+        if floor is None:
+            self.skipTest('no memory floor in board.toml')
+        floor = int(floor, 0)
+        kernel_va = 0xFFFFFFF00427C000        # lowest kernel segment (__PRELINK_TEXT, [kernel.prelink] slide), UART
+        default_limit = 0xFFFFFFF000000000 + 0x800000
+        moved_limit = 0xFFFFFFEFE0000000 + 0x800000
+        window_pa = self.regions['DDR High'][0] + 0x1FFFFF   # the largest VA alignment offset AllocateWindow adds
+        below = window_pa - floor
+        self.assertGreater(below, kernel_va - default_limit)   # the stock low globals would raise the floor
+        self.assertLessEqual(below, kernel_va - moved_limit)  # the moved ones admit it, with any offset
+        # The official defconfig; a diagnostic one without the option still boots (DarwinBoot raises the floor).
+        config = (DEVICE / 'configs' / 'a04br3_defconfig').read_text().splitlines()
+        self.assertIn('CONFIG_XNU_LOW_GLOBALS_BELOW=y', config)
+
 
 if __name__ == '__main__':
     unittest.main()

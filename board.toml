@@ -308,8 +308,10 @@ chip_id = "8167"
 # kernel VA's low 21 bits that AllocateWindow adds (current kernels: 0x7C000). Allocation still checks the actual EFI map.
 owned_memory_size = "0x56600000"
 # Below the window, DarwinBoot also hands XNU the memory from this floor when the final EFI map shows it as the OS's (with
-# A04BR3_RAMDISK_RECLAIMABLE the payload FAT is). It raises the floor above XNU's low globals itself (0x64600000 for the
-# current kernels, trial E2). Not lower than 0x52000000: the DXE heap (UEFI runtime) and the preloader's reserved memory.
+# A04BR3_RAMDISK_RECLAIMABLE the payload FAT is). a04br3_defconfig sets CONFIG_XNU_LOW_GLOBALS_BELOW, so the kernel's
+# static region may start this far below the kernel; with a kernel built without it, DarwinBoot raises the floor above
+# XNU's low globals instead (0x64600000 for the current kernels, trial E2). Not lower than 0x52000000: the DXE heap (UEFI
+# runtime) and the preloader's reserved memory.
 memory_floor = "0x52000000"
 # The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
