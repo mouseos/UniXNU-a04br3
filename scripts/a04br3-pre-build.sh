@@ -229,6 +229,15 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
       --vulkan "$DEVICE_DIR/build/mesa-pvr-ios/src/imagination/vulkan/libvulkan_powervr_mesa.dylib"
     METAL_TRUST=(--extra-trust "$RUNNER_TEMP/powervr-metal/trust.json")
     METAL_SEED=(--metal-plugin "$RUNNER_TEMP/powervr-metal" --metal-mode "${A04BR3_POWERVR_METAL_MODE:-selftest}")
+    # Processes besides backboardd that get their own Metal device (the plugin's NativePowerVRMetal.clients, in the seed and
+    # the addon). iconservicesagent by default in publish mode: iPadOS 17's CoreImage has no CPU renderer and, without a
+    # device, crashes the agent at PC 0 on every symbol icon (README, "iconservicesagent"). Set it empty for none.
+    if [ "${A04BR3_POWERVR_METAL_MODE:-selftest}" = publish ]; then
+      METAL_CLIENTS=${A04BR3_POWERVR_METAL_CLIENTS-iconservicesagent}
+    fi
+    if [ -n "${METAL_CLIENTS:-}" ]; then
+      METAL_SEED+=(--metal-clients "$METAL_CLIENTS")
+    fi
   fi
   MEMORY_SEED=()
   if [ "${A04BR3_MEMORY_BENCH:-0}" = 1 ]; then
@@ -248,7 +257,7 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
     ADDON_SCRATCH=$(mktemp -d "$RUNNER_TEMP/a04br3-gpu-addon.XXXXXX")
     python3 "$DEVICE_DIR/scripts/make-a04br3-gpu-addon.py" --probe-dir "$RUNNER_TEMP/powervr-probe" \
       --metal-plugin "$RUNNER_TEMP/powervr-metal" --trust-base "$RUNNER_TEMP/trustcache" \
-      --trust-out "$ADDON_SCRATCH/trustcache-addon" --out "$ADDON_SCRATCH/gpu-addon"
+      --trust-out "$ADDON_SCRATCH/trustcache-addon" --out "$ADDON_SCRATCH/gpu-addon" --metal-clients "${METAL_CLIENTS:-}"
     mv -f "$ADDON_SCRATCH/gpu-addon" "$RUNNER_TEMP/gpu-addon"
     rm -rf "$ADDON_SCRATCH"
   else

@@ -350,7 +350,12 @@ alone is not a successful accelerated frame.
   the CPU renderer; `publish` makes backboardd composite on the GPU. The step fetches the pinned metal2vulkan and Rust 1.98.0.
 - Kernel arguments (not in board.toml yet): `a04br3-gpu-metal=1` publishes the accelerator; `sheng-fb-gpu=1` lets the GPU copy
   the composited frame into the LK frame buffer (NativeLegacyDisplay offers frames to NativeGOPPresenter, which the plugin serves).
-  Optional: `a04br3-gpu-metal-grant=<names>` (default `backboardd`), `a04br3-gpu-metal-opens=<n>` (default 40).
+  Optional: `a04br3-gpu-metal-grant=<names>` (default `backboardd,iconservicesagent`), `a04br3-gpu-metal-opens=<n>` (default 40).
+  iconservicesagent needs its own device: iPadOS 17's CoreImage has no CPU renderer (REA: `-[CIContext initWithOptions:]` falls back
+  to OpenGL ES and `CIGLIsUsable()` is always true), and without a Metal device the agent crashes at PC 0 in `CI::GLContext::init`
+  on every symbol icon, so Settings stays on its launch screen. `a04br3-pre-build.sh` lists it in the plugin's
+  `NativePowerVRMetal.clients` (seed and addon) in publish mode; `A04BR3_POWERVR_METAL_CLIENTS=<names>` changes the list (empty:
+  none). `scripts/a04br3-gpu-addon-clients.py IN OUT NAME...` adds the list to an existing addon without touching the Data seed.
 - UART: `powervr-metal: ...` for the publication and every GPU connection, `powervr-metal[<process>]: <line>` for the plugin's
   lines: `M s.. c.. r.. i.. q.. k<ok>/<failed> p<ok>/<failed>` (self-test: compute, render, host import, QuartzCore kernels and
   render pairs), `P<step> e<hex>` and `PF <frames>/<failures> ...` (scanout), `ST..`/`PUB ..` (status every 20 s).

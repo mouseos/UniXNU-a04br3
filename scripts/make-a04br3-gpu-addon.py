@@ -71,6 +71,9 @@ def main():
     parser.add_argument('--trust-out', type=Path, required=True)
     parser.add_argument('--board', type=Path, default=ROOT / 'board.toml')
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--metal-clients', default='',
+                        help='processes besides backboardd with their own Metal device (comma separated; '
+                             'addons/NativePowerVRMetal.clients, scripts/a04br3-gpu-addon-clients.py)')
     args = parser.parse_args()
     if args.out.resolve() == args.trust_out.resolve():
         parser.error('Addon and trust bundle must use different output paths')
@@ -83,6 +86,12 @@ def main():
     files = collect(args.probe_dir, args.metal_plugin)
     blob = helper.pack_addon(files)
     helper.unpack_addon(blob)
+    clients = [c for c in args.metal_clients.split(',') if c]
+    if clients:
+        spec = importlib.util.spec_from_file_location('gpu_addon_clients', ROOT / 'scripts/a04br3-gpu-addon-clients.py')
+        lister = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(lister)
+        blob = lister.with_clients(blob, clients, helper)
     helper.write_trust(args, sorted(hashes))
     args.out.write_bytes(blob)
     print('PASS: GPU addon %s: %d files, %d compressed bytes; Data seed unchanged' % (args.out, len(files), len(blob)))
