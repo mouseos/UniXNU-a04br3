@@ -31,7 +31,11 @@ set -euo pipefail
 # CPU-only seed of earlier images.
 if [ -z "${A04BR3_POWERVR_PROBE+x}" ] && [ -z "${A04BR3_POWERVR_METAL+x}" ]; then
   case "${A04BR3_GPU:-1}" in
+    # COLOR ROA and buffer rows as in the baseline addon of the GPU images (35a77e01: its plugin carries
+    # PVR_DARWIN_ROA_COLOR and PVR_DARWIN_BUFFER_ROWS). Without them backboardd exits "Metal failed to build render
+    # pipeline" (status 6) and restarts in a loop.
     1) export A04BR3_POWERVR_PROBE=1 A04BR3_POWERVR_METAL=1 A04BR3_POWERVR_METAL_MODE="${A04BR3_POWERVR_METAL_MODE:-publish}"
+       export A04BR3_POWERVR_METAL_ROA_COLOR="${A04BR3_POWERVR_METAL_ROA_COLOR:-1}" A04BR3_POWERVR_METAL_BUFFER_ROWS="${A04BR3_POWERVR_METAL_BUFFER_ROWS:-1}"
        export A04BR3_GPU_ADDON="${A04BR3_GPU_ADDON:-1}" ;;
     0) ;;
     *) echo "A04BR3_GPU must be 0 or 1" >&2; exit 1 ;;
@@ -70,6 +74,17 @@ case "${A04BR3_POWERVR_METAL_ROA_COLOR:-0}" in
     fi
     ;;
   *) echo "A04BR3_POWERVR_METAL_ROA_COLOR must be 0 or 1" >&2; exit 1 ;;
+esac
+# A04BR3_POWERVR_METAL_BUFFER_ROWS=1: the plugin's PVR_DARWIN_BUFFER_ROWS (build-a04br3-metal-plugin.py --buffer-rows).
+case "${A04BR3_POWERVR_METAL_BUFFER_ROWS:-0}" in
+  0) ;;
+  1)
+    if [ "${A04BR3_POWERVR_PROBE:-0}" != 1 ] || [ "${A04BR3_POWERVR_METAL:-0}" != 1 ]; then
+      echo "Metal buffer rows require A04BR3_POWERVR_PROBE=1 and A04BR3_POWERVR_METAL=1" >&2
+      exit 1
+    fi
+    ;;
+  *) echo "A04BR3_POWERVR_METAL_BUFFER_ROWS must be 0 or 1" >&2; exit 1 ;;
 esac
 case "${A04BR3_MEMORY_BENCH:-0}" in
   0) ;;
@@ -206,6 +221,9 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
     fi
     if [ "${A04BR3_POWERVR_METAL_ROA_COLOR:-0}" = 1 ]; then
       METAL_DIAGNOSTICS+=(--roa-color)
+    fi
+    if [ "${A04BR3_POWERVR_METAL_BUFFER_ROWS:-0}" = 1 ]; then
+      METAL_DIAGNOSTICS+=(--buffer-rows)
     fi
     python3 "$TREE/scripts/build-a04br3-metal-plugin.py" ${METAL_DIAGNOSTICS[@]+"${METAL_DIAGNOSTICS[@]}"} --out "$RUNNER_TEMP/powervr-metal" \
       --vulkan "$DEVICE_DIR/build/mesa-pvr-ios/src/imagination/vulkan/libvulkan_powervr_mesa.dylib"
