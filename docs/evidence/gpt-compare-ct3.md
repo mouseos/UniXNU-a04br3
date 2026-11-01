@@ -1,0 +1,25 @@
+| partition | stock first LBA | stock MiB | a04br3 first LBA | a04br3 MiB | change |
+| --- | --- | --- | --- | --- | --- |
+| proinfo | 1024 | 3 | 1024 | 3 | kept |
+| nvram | 7168 | 5 | 7168 | 5 | kept |
+| protect1 | 17408 | 10 | 17408 | 10 | kept |
+| protect2 | 37888 | 10 | 37888 | 10 | kept |
+| persist | 58368 | 48 | 58368 | 48 | kept |
+| seccfg | 156672 | 0.25 | 156672 | 0.25 | kept |
+| lk | 157184 | 0.375 | 157184 | 0.375 | kept |
+| lk2 | 157952 | 0.375 | 157952 | 0.375 | kept |
+| boot | 158720 | 16 | 294912 | 128 | moved/resized |
+| recovery | 191488 | 16 | 191488 | 16 | kept |
+| para | 224256 | 0.5 | 224256 | 0.5 | kept |
+| logo | 225280 | 8 | 225280 | 8 | kept |
+| expdb | 241664 | 10 | 241664 | 10 | kept |
+| tee1 | 262144 | 5 | 262144 | 5 | kept |
+| tee2 | 272384 | 5 | 272384 | 5 | kept |
+| kb | 282624 | 2 | 282624 | 2 | kept |
+| dkb | 286720 | 4 | 286720 | 4 | kept |
+| factory | 294912 | 16 | - | - | removed |
+| metadata | 327680 | 32 | - | - | removed |
+| system | 393216 | 2048 | - | - | removed |
+| cache | 4587520 | 1024 | - | - | removed |
+| userdata | 6684672 | 11629.5 | 557056 | 14621.5 | moved/resized |
+| flashinfo | 30501888 | 16 | 30501888 | 16 | kept |

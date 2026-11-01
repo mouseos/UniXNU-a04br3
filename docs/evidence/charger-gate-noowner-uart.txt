@@ -1,0 +1,10 @@
+# UART excerpt: firmware without A04BR3_CHARGER_OWNER, charger maintain gate fix (trials/charger-gate-a4b0918-noowner-1, 2026-10-31 14:13 JST)
+# Firmware FD 013ba5e7 (no charger owner), payload of UniXNU-a04br3 a4b0918; before the fix 2 of 2 boots reset by watchdog after the GPU power message.
+RGU STA:      40000000
+a04br3 gpu: MFG status 0x7400a24c/0xa24c, powering the Rogue domains
+a04br3 gpu clock: active parent 7 core 380000062 Hz
+a04br3 charger: maintain I2C2 initialize result=0 (0 ready)
+a04br3 charger: maintain periodic t=30s kept stat=5 fault=0 raw=50,00,8c,a4,45,51,00,38 valid=ff kicks=1 worstgap=0ms repairs=0 rerr=0 werr=0 history=01
+a04br3 charger: maintain periodic t=692s kept stat=5 fault=0 raw=50,00,8c,a4,45,51,00,38 valid=ff kicks=67 worstgap=10010ms repairs=0 rerr=0 werr=0 history=01
+a04br3-autoreset: 720 s elapsed, resetting into fastboot
+RGU STA:      40000000

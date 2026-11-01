@@ -1,0 +1,24 @@
+# UART excerpt: official GPU image, second of two boots (trials/official-gpu2-pair-2, 2026-11-02 05:21 JST)
+# Image: macos.yml run 41334686796 (mouseos/UniXNU 9842b70, UniXNU-a04br3 1ab464d, a04br3_defconfig, default pre_build)
+# + firmware: unixnu build firmware, mouseos/uefi-a04br3 3bc3bfbc (A04BR3_TEST_CYCLE/EMMC_HS200/CPU_1300/CHARGER_OWNER=1).
+# Collected on UART0 921600 8N1. Lines selected with grep; device identifiers (serial number, LK command line) left out.
+RGU STA:      40000000
+A04BR3 SEC: cpu-1300 before: armpll pcw=9A000 (1001 MHz) vproc ctrl=0003 en=3001 vosel=0050 vosel_on=0050 active=VOSEL_ON 1200 mV
+A04BR3 SEC: cpu-1300 guard cleared (spar0=0000)
+A04BR3 SEC: cpu-1300 after: armpll pll1=800C8000 pcw=C8000 (1300 MHz) vproc VOSEL_ON=0060 1300 mV other=0060 hp_en=00000100 (register values; measure the clock with the PMU)
+[A04BR3 eMMC] mode=hs200 clk=188000000 width=8 cmd=rise:10 map=3FFFFFFF/00000000 data=rise:10 map=FFFFFFFF/00000000 iocon=00000000 pad=002A2A00 pb=403C0046/FFFF0609/540A180F verify=ok
+a04br3-autoreset: fastboot flag set, reset after 7200 s, watchdog 31 s
+NativeMsdc: published SystemOS
+a04br3 gpu clock: active parent 7 core 380000062 Hz
+a04br3 gpu: BVNC 22.40.54.30 (raw 0x1600280036001e) revision 0x8470000
+NativeMsdc: published OS
+a04br3 input: BU21025 i2c0@48 init 0
+a04br3: GPU addon before probe: files 6 written 0 same 6 failed 0 error 0; mount extensions stage 4 status 2, daemons stage 1 status 2, wallpaper stage 1 status 2
+com.apple.xpc.launchd|1969-12-31 16:02:07.400305 <Notice>: boot-args = -v serial=1 debug=0x14e kt_fixed_zones=120 -apfs_shared_datavolume -no_slto_panic native-msdc-root=1 native-msdc-persist=2 native-msdc-dma=1 sheng-pmgr=2 sheng-smp=1 a04
+powervr-metal[backboardd]: PUB tex x0 s0/0 p0 f80 43 
+powervr-metal[backboardd]: PUB tex x0 s4/0 p0 f80 43 23 25 55 105 
+a04br3 display: stage 10 meta 0 start 1 gop be9c0000+3e8000 800x1280 reg 1 surface 0 pm 0 client pid 80 calls 2 swaps 53 reason 0 transfers 53 status 0 presented 53 retired 53
+a04br3 gpu scanout: offers=53 completed=53 failed=0 abandoned=0 waits=298 timeouts=244 last_timeout_ns=501055923
+a04br3 charger: maintain periodic t=331s kept stat=3 fault=0 raw=30,00,8c,a4,45,51,00,38 valid=ff kicks=31 worstgap=10010ms repairs=0 rerr=0 werr=0 history=01
+a04br3 battery: t=331s vbat=4312mV rsoc=94% ite=94.0% temp=29.9C
+a04br3-autoreset: reset requested on UART, resetting into fastboot

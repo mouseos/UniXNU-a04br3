@@ -8,6 +8,8 @@ name = "a04br3"
 soc = "MT8167"
 description = "Benesse TAB-A04-BR3"
 kit = "a04br3"                     # the package/ of this repository appears as kits/a04br3 in the build tree
+# OS profile name of the format 2 catalog (porting.toml identity); this format 1 board selects the IPSW below directly.
+os_profile = "ipados-17.7.11-21H461"
 
 # The target OS image: the unchanged iPad7,1 iPadOS 17.7.11 restore image, the UniXNU default target (Darwin 23,
 # matching the xnu-10063 source kernel). Give --ipsw PATH to use a local file.

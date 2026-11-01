@@ -1,0 +1,256 @@
+schema_version = 1
+
+[device]
+name = "a04br3"
+soc = "MT8167"
+os_profile = "ipados-17.7.11-21H461"
+summary = "Benesse TAB-A04-BR3 (MediaTek MT8167, 4x Cortex-A35, GIC-400, 2 GiB DRAM, eMMC). iPadOS 17.7.11 boots to the home screen with GPU (PowerVR GE8300) composition, eMMC HS200 and the CPU at 1.3 GHz. Built with the maintainer's UniXNU fork (format 1 board.toml); migration to format 2 profiles and component names is pending."
+
+[[area]]
+id = "configuration"
+status = "host-verified"
+components = []
+paths = ["board.toml","configs/**",".gitmodules","unixnu.lock","drivers/**","patches/**"]
+inputs = ["mouseos/UniXNU fork (main), NativeMsdc (mouseos/NativeMsdc) and ArmCpu (mouseos/ArmCpu fork) for MT8167 storage, GICv2 and board integration","iPad7,1 iPadOS 17.7.11 21H461 restore image"]
+configuration = ["board.toml [board] name a04br3, soc MT8167, kit a04br3; [kernel] defconfig a04br3_defconfig; [firmware.defines] A04BR3_TEST_CYCLE, A04BR3_EMMC_HS200, A04BR3_CPU_1300, A04BR3_CHARGER_OWNER, A04BR3_RAMDISK_RECLAIMABLE"]
+procedure = ["macOS workflow of mouseos/UniXNU: device_repository mouseos/UniXNU-a04br3, defconfig a04br3_defconfig, steps kernel userdata payload, pre_build bash \\\"$DEVICE_DIR/scripts/a04br3-pre-build.sh\\\""]
+findings = ["The board builds against the maintainer's UniXNU fork; its generic changes stay behind default-off build switches (XNU_* environment) and driver macros."]
+completion = ["A clean clone of the published mains builds kernel, userdata and payload in the macOS workflow without local inputs except the platform seed secret."]
+limits = ["board.toml is format 1; no porting.toml-driven profiles, feeds.toml or dts/ yet."]
+next_action = ["Migrate to format 2 (SoC and OS profiles, canonical component names, feeds.toml, dts/a04br3.dts, scripts/package.sh) following the migration guide."]
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/mouseos/UniXNU/actions/runs/41348517100"
+result = "success: kernel, userdata (userdata-root.img 9382658048 bytes) and payload from a fresh clone of the mains"
+command = "gh workflow run macos.yml -f device_repository=mouseos/UniXNU-a04br3 -f defconfig=a04br3_defconfig -f steps=kernel userdata payload"
+revision = "efaf8b5d7a8541573dcc166e9b6478368138cfec"
+
+[[area]]
+id = "firmware"
+status = "device-verified"
+components = []
+paths = ["package/root-key/**","scripts/check-a04br3-bootimg.py","scripts/a04br3-verify-recorded-fd.py"]
+inputs = ["Stock MediaTek preloader and LK (bootloader-unlocked, Orange State); mouseos/uefi-a04br3 (Platforms/Benesse/a04br3Pkg) built by unixnu build firmware"]
+configuration = ["Android boot image v0: BootShim + SILICIUM_UEFI.fd at 0x40080000, payload FAT ramdisk at 0x60000000, tags 0x4E000000; DarwinBoot in the firmware volume"]
+procedure = ["unixnu build firmware -D UniXNU-a04br3 --uefi uefi-a04br3","unixnu bootimg --uefi uefi-a04br3 --fd SILICIUM_UEFI.fd --dtb Resources/DTBs/a04br3.dtb --ramdisk payload.img"]
+findings = ["LK keeps ARMPLL at 1001 MHz and the I2C2 clock gated; board code must not read gated controllers (a read stalls the bus until the TOPRGU watchdog resets)."]
+completion = ["LK loads the image, UEFI SEC/DXE run, DarwinBoot exits boot services and the kernel reaches bsd_init and launchd."]
+limits = ["The firmware volume is DEBUG/CLANGPDB; the release image sets A04BR3_TEST_CYCLE=0."]
+next_action = ["Keep the release and test-cycle firmware volumes recorded with their defines."]
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/official-gpu2-pair-2-uart.txt"
+result = "SEC, DXE, DarwinBoot and the kernel up to the home screen; no panic"
+command = "macos.yml run 41334686796 (mouseos/UniXNU 9842b70, a04br3_defconfig, default pre_build) + unixnu build firmware (uefi-a04br3 3bc3bfbc) + unixnu bootimg; fastboot flash boot; two boots, UART0 921600 8N1"
+revision = "1ab464d47f861708111b9535577e20b69fa88906"
+
+[[area]]
+id = "cpu"
+status = "device-verified"
+components = []
+paths = ["package/A04BR3AutoReset.cpp","package/A04BR3PmuLease.h","configs/a04br3_pmu_defconfig"]
+inputs = ["4x Cortex-A35 (MPIDR 0..3), PSCI smc, GIC-400 (GICv2), generic timer 13 MHz; ARMPLL and VPROC (MT6392) for the 1.3 GHz OPP of the stock CT3 kernel"]
+configuration = ["[payload.adt] cpu_regs 0,1,2,3, psci_method smc; kernel argument sheng-smp=1; firmware define A04BR3_CPU_1300 (VPROC 1.20 -> 1.30 V, then ARMPLL 1001 -> 1300 MHz, once in SEC, RTC_SPAR0 bit 12 re-entry guard)"]
+procedure = ["Boot with a04br3_pmu_defconfig and cc=1; ArmCpu cycle-clock counts PMU cycles over 13001 ticks of the 13 MHz timer on each secondary CPU"]
+findings = ["The measured clock was 1001 MHz before the switch; after it the PMU gives about 1,300,000 cycles per 13001 ticks. A reset between the voltage raise and the clock switch is caught by the RTC_SPAR0 guard."]
+completion = ["All four CPUs run; the PMU confirms the configured frequency."]
+limits = ["No DVFS; the clock is set once at boot."]
+next_action = ["Thermal monitoring under sustained load at 1.3 GHz."]
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/cpu1300-reentry-retry-uart.txt"
+result = "guard cleared, pcw C8000, VPROC 1300 mV, PMU 1300074-1300409 cycles per 13002 ticks"
+command = "uefi-a04br3 3bc3bfbc test-cycle firmware + payload of 7d9ad27 (a04br3_pmu_defconfig, cc=1); fastboot flash boot; UART0"
+revision = "7d9ad270cbc3b583cd913746daccc52eb77ac9b7"
+
+[[area]]
+id = "memory"
+status = "implemented"
+components = []
+paths = ["scripts/make-a04br3-adt.py"]
+inputs = ["2 GiB DRAM at 0x40000000; LK frame buffer at 0xBE9C0000; payload FAT at 0x60000000"]
+configuration = ["[payload] dram_size 0x80000000; [payload.adt] owned_memory_size and memory_floor (the XNU window and the memory below it handed back to XNU); firmware define A04BR3_RAMDISK_RECLAIMABLE"]
+procedure = ["unixnu build payload writes the ADT memory description; DarwinBoot allocates the window from the EFI memory map"]
+findings = ["iPadOS reads pages back from eMMC under memory pressure (about 7 GB in 12 minutes on first boots); the window and floor were raised to give XNU more DRAM."]
+completion = ["Every handoff region is reserved once and XNU receives the remaining DRAM."]
+limits = ["Memory pressure on first boot of a new Data seed remains."]
+next_action = ["Measure free memory and page-ins with the current window on the home screen."]
+[[area.evidence]]
+kind = "source"
+reference = "https://github.com/mouseos/UniXNU-a04br3/blob/efaf8b5d7a8541573dcc166e9b6478368138cfec/board.toml"
+result = "window and memory floor configuration of the current main"
+
+[[area]]
+id = "storage"
+status = "device-verified"
+components = []
+paths = ["scripts/a04br3-gpt.json","scripts/make-a04br3-gpt.py","scripts/check-a04br3-gpt.py","scripts/make-a04br3-root-policy.py","scripts/make-a04br3-flash.py","package/root-key/**"]
+inputs = ["eMMC on MSDC0 (512-byte sectors, 30535680 sectors); NativeMsdc (mouseos/NativeMsdc); uefi-a04br3 SdCardBlockIoDxe HS200 tuning"]
+configuration = ["Kernel arguments native-msdc-root=1, native-msdc-persist=2, native-msdc-dma=1; firmware define A04BR3_EMMC_HS200; GPT from scripts/a04br3-gpt.json (factory, metadata, system, cache removed; boot 128 MiB; userdata from LBA 557056 to flashinfo)"]
+procedure = ["python3 scripts/check-a04br3-gpt.py --stock CT3-01.06.000.bin","python3 scripts/make-a04br3-flash.py --boot boot.img --userdata userdata-root.img --root-policy DIR --out DIR --bundle (mtkclient, first installation only)"]
+findings = ["The OS and SystemOS windows are authenticated per 4096-byte block against envelopes signed with the owner key; HS200 at 188 MHz cut the signed root policy read from 1757 ms to 508 ms."]
+completion = ["Root volumes mount read-only and authenticated; Data persists in the store window at the end of userdata."]
+limits = ["Building with another owner key needs a new key pair and package/root-key/owner-public.pem."]
+next_action = ["Verify the bundled first installation on a second tablet."]
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/official-gpu2-pair-2-uart.txt"
+result = "HS200 188 MHz verify=ok; NativeMsdc published SystemOS and OS"
+command = "macos.yml run 41334686796 (mouseos/UniXNU 9842b70, a04br3_defconfig, default pre_build) + unixnu build firmware (uefi-a04br3 3bc3bfbc) + unixnu bootimg; fastboot flash boot; two boots, UART0 921600 8N1"
+revision = "1ab464d47f861708111b9535577e20b69fa88906"
+
+[[area.evidence]]
+kind = "host"
+reference = "docs/evidence/gpt-compare-ct3.md"
+result = "PASS: stock GPT copies and CRCs, kept partitions in place, only the Android partitions removed, both new copies verified"
+command = "python3 scripts/check-a04br3-gpt.py --stock CT3-01.06.000.bin --markdown docs/evidence/gpt-compare-ct3.md"
+revision = "6fe0e47dee00d1db9207546932422ec95b5072c9"
+
+[[area]]
+id = "display"
+status = "device-verified"
+components = []
+paths = ["package/LegacyDisplayProbe.cpp","scripts/build-a04br3-legacy-display.py"]
+inputs = ["LK frame buffer 800x1280, 32 bpp, stride 3200 at 0xBE9C0000 (GOP)"]
+configuration = ["offline-legacy-* kernel arguments (NativeLegacyDisplay on the GOP), sheng-fb-gpu=1 and sheng-vsync=60 for the GPU copy into the frame buffer"]
+procedure = ["Boot the official image and read 'a04br3 display' and 'a04br3 gpu scanout' from the UART process log (a04br3-proclog=60)"]
+findings = ["backboardd composites on the GPU; NativeGOPPresenter takes the GPU frames into the LK frame buffer."]
+completion = ["Frames are presented and retired by the GPU path without failures."]
+limits = ["No panel driver or backlight control beyond the LK state."]
+next_action = ["Measure frame pacing on the home screen."]
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/official-gpu2-pair-2-uart.txt"
+result = "presented 53, gpu scanout offers 53 completed 53 failed 0"
+command = "macos.yml run 41334686796 (mouseos/UniXNU 9842b70, a04br3_defconfig, default pre_build) + unixnu build firmware (uefi-a04br3 3bc3bfbc) + unixnu bootimg; fastboot flash boot; two boots, UART0 921600 8N1"
+revision = "1ab464d47f861708111b9535577e20b69fa88906"
+
+[[area]]
+id = "input"
+status = "device-verified"
+components = []
+paths = ["package/A04BR3Input.cpp","package/HidInputProbe.cpp"]
+inputs = ["BU21025 touch controller on I2C0 address 0x48 (VGP1 supply), Home and volume up keys"]
+configuration = ["Kernel arguments a04br3-input=1, sheng-touch-hid=1, offline-hid-input=1, offline-hid-home=1"]
+procedure = ["Boot and check 'a04br3 input: BU21025 i2c0@48 init 0'; touch and Home through NativeHidInput"]
+findings = ["The VGP1 enable write is read back (bit 15 of PMIC 0x50a) because ignored PWRAP writes are reported as completed."]
+completion = ["Touch and Home reach iPadOS."]
+limits = ["Volume down and power key handling are not mapped."]
+next_action = ["Map the remaining keys."]
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/official-gpu2-pair-2-uart.txt"
+result = "BU21025 i2c0@48 init 0"
+command = "macos.yml run 41334686796 (mouseos/UniXNU 9842b70, a04br3_defconfig, default pre_build) + unixnu build firmware (uefi-a04br3 3bc3bfbc) + unixnu bootimg; fastboot flash boot; two boots, UART0 921600 8N1"
+revision = "1ab464d47f861708111b9535577e20b69fa88906"
+
+[[area]]
+id = "gpu"
+status = "device-verified"
+components = []
+paths = ["package/A04BR3Gpu.cpp","package/powervr/**","scripts/a04br3-pre-build.sh","scripts/build-a04br3-metal-plugin.py","scripts/make-a04br3-gpu-addon.py","scripts/build-pvr-darwin.py","patches/mesa/**"]
+inputs = ["PowerVR GE8300 (BVNC 22.40.54.30), MFG power domains, MMPLL at 380 MHz left by LK, Mesa PowerVR Vulkan, metal2vulkan bridge"]
+configuration = ["Kernel arguments a04br3-gpu=2, a04br3-gpu-metal=1, sheng-gpu-addon=1, a04br3-gpu-clock=380, a04br3-gpu-bo-wc=1, a04br3-gpu-bo-map=1, a04br3-gpu-tq-low=1; pre_build defaults PowerVR probe, Metal plugin in publish mode with COLOR ROA and buffer rows, GPU addon"]
+procedure = ["The default pre_build builds Mesa, the probe, the Metal plugin and the GPU addon; the macOS workflow passes the addon and the owner trust bundle"]
+findings = ["Without the plugin's COLOR ROA and buffer rows backboardd exits 'Metal failed to build render pipeline' and restarts in a loop."]
+completion = ["backboardd composites on the GPU at 380 MHz without restarts."]
+limits = ["Firmware 1.1 for BVNC 22.67.54.30 runs on the 22.40.54.30 core; some app content still renders slowly."]
+next_action = ["Profile the remaining slow app rendering paths."]
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/official-gpu2-pair-2-uart.txt"
+result = "gpu clock active parent 7 core 380000062 Hz; GPU addon files 6 failed 0; powervr-metal[backboardd] PUB"
+command = "macos.yml run 41334686796 (mouseos/UniXNU 9842b70, a04br3_defconfig, default pre_build) + unixnu build firmware (uefi-a04br3 3bc3bfbc) + unixnu bootimg; fastboot flash boot; two boots, UART0 921600 8N1"
+revision = "1ab464d47f861708111b9535577e20b69fa88906"
+
+[[area]]
+id = "network"
+status = "planned"
+components = []
+paths = ["package/**"]
+inputs = ["MT8167 board Wi-Fi/Bluetooth combo (connsys); no driver yet"]
+configuration = ["None selected; CommCenter and bluetoothd are disabled jobs"]
+procedure = ["Identify the connsys interface and firmware loading of the stock kernel"]
+findings = ["iPadOS boots without network; radio daemons are disabled to avoid respawn loops."]
+completion = ["Association and packet transfer on Wi-Fi."]
+limits = ["No network support."]
+next_action = ["Inventory the connsys registers and firmware of the stock CT3 kernel."]
+evidence = []
+
+[[area]]
+id = "audio"
+status = "planned"
+components = []
+paths = ["package/**"]
+inputs = ["MT8167 audio front end and the board codec; no driver yet"]
+configuration = ["None selected"]
+procedure = ["Identify the codec and the stock kernel audio routes"]
+findings = ["No audio service is published; iPadOS runs without audio output."]
+completion = ["Playback through the speaker."]
+limits = ["No audio support."]
+next_action = ["Inventory the codec and routes of the stock CT3 kernel."]
+evidence = []
+
+[[area]]
+id = "power"
+status = "device-verified"
+components = []
+paths = ["package/A04BR3Charger.cpp","package/A04BR3ChargerMaintain.h","package/A04BR3ChargerCore.h","package/A04BR3ChargerBoardCore.h","package/A04BR3GaugeCore.h","package/A04BR3RegisterLock.cpp"]
+inputs = ["BQ24160 charger and LC709203F gauge on I2C2, MT6392 PMIC through PWRAP, TOPRGU watchdog"]
+configuration = ["Kernel argument a04br3-cm=1 (stock charge limits as a ceiling, BQ24160 watchdog kick every 10 s, gauge log every 60 s); firmware define A04BR3_CHARGER_OWNER"]
+procedure = ["Boot and check 'a04br3 charger: maintain periodic' kicks and 'a04br3 battery' lines"]
+findings = ["LK hands over with the I2C2 clock gated; the maintain loop reads the controller only while the gate is open (a gated read stalled the bus until the watchdog reset)."]
+completion = ["The battery stays charged over long boots; kicks increase every 10 s without errors."]
+limits = ["No sleep or suspend; the CPU clock is fixed."]
+next_action = ["Measure battery drain on long idle boots."]
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/official-gpu2-pair-2-uart.txt"
+result = "maintain kicks 31 at 331 s, battery 4312 mV 94 % 29.9 C"
+command = "macos.yml run 41334686796 (mouseos/UniXNU 9842b70, a04br3_defconfig, default pre_build) + unixnu build firmware (uefi-a04br3 3bc3bfbc) + unixnu bootimg; fastboot flash boot; two boots, UART0 921600 8N1"
+revision = "1ab464d47f861708111b9535577e20b69fa88906"
+
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/charger-gate-noowner-uart.txt"
+result = "firmware without the charger owner: maintain I2C2 initialize result 0, kicks 67 at 692 s, no watchdog reset"
+command = "firmware FD 013ba5e7 (no A04BR3_CHARGER_OWNER) + payload of a4b0918; fastboot flash boot; UART0"
+revision = "a4b09182fc29c1a41b0a4cd5a6691e705bf976a8"
+
+[[area]]
+id = "packaging"
+status = "host-verified"
+components = []
+paths = ["scripts/make-a04br3-adt.py","scripts/make-a04br3-flash.py","scripts/check-a04br3-bootimg.py","scripts/a04br3-pre-build.sh","scripts/build-a04br3-trust-cache.py"]
+inputs = ["XNU 10063 (Darwin 23.6) source kernel, iPadOS 17.7.11 21H461 IPSW, boot partition 128 MiB"]
+configuration = ["[payload] volume A04BR3ESP, size_mib 126, loader firmware; [payload.adt] tool scripts/make-a04br3-adt.py, packed_data_ramdisk, ipad_identity"]
+procedure = ["macOS workflow (kernel, userdata, payload) -> unixnu build firmware -> unixnu bootimg -> scripts/make-a04br3-flash.py --bundle"]
+findings = ["The boot image must pass scripts/check-a04br3-bootimg.py (the stock LK needs the ramdisk at 0x60000000 and a complete header page)."]
+completion = ["One directory holds boot, userdata, root policy, both GPT copies, the mtkclient script and checksums."]
+limits = ["The first installation needs mtkclient in BROM mode once; later images go through LK fastboot."]
+next_action = ["Add scripts/package.sh and .github/workflows/package.yml of the format 2 template."]
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/mouseos/UniXNU/actions/runs/41348517100"
+result = "kernel, userdata and payload artifacts; bundled into an mtkclient package (sha256sum -c OK)"
+command = "python3 scripts/make-a04br3-flash.py --boot boot.img --userdata userdata-root.img --root-policy rootpolicy --out package --bundle"
+revision = "6fe0e47dee00d1db9207546932422ec95b5072c9"
+
+[[area]]
+id = "diagnostics"
+status = "device-verified"
+components = []
+paths = ["scripts/run-a04br3-unattended.sh","scripts/a04br3-reset.sh","scripts/a04br3-screenshot.py","scripts/a04br3-home.sh","package/A04BR3AutoReset.cpp"]
+inputs = ["UART0 (0x11005000) 921600 8N1, PMIC RTC_PDN1 bit 13 (LK fastboot flag), TOPRGU watchdog"]
+configuration = ["Firmware define A04BR3_TEST_CYCLE; kernel arguments a04br3-autoreset=<seconds>, serial=1, a04br3-proclog=60"]
+procedure = ["scripts/run-a04br3-unattended.sh BOOT_IMAGE: fastboot flash boot, reboot, wait for the return to fastboot, keep the UART log of each round; scripts/a04br3-reset.sh sends A04BR3!RST"]
+findings = ["Every reset (UART request, timer, watchdog or panic) returns to LK fastboot, so images are written without mtkclient or touching the tablet."]
+completion = ["Each round leaves its UART log and returns to fastboot."]
+limits = ["No persistent storage log region or QR firmware log; UART is the log transport."]
+next_action = ["Add a storage log region and reader following the log capture guide."]
+[[area.evidence]]
+kind = "device"
+reference = "docs/evidence/official-gpu2-pair-2-uart.txt"
+result = "autoreset armed; reset requested on UART; next preloader RGU STA 40000000 and LK fastboot"
+command = "macos.yml run 41334686796 (mouseos/UniXNU 9842b70, a04br3_defconfig, default pre_build) + unixnu build firmware (uefi-a04br3 3bc3bfbc) + unixnu bootimg; fastboot flash boot; two boots, UART0 921600 8N1"
+revision = "1ab464d47f861708111b9535577e20b69fa88906"

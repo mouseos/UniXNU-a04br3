@@ -1,0 +1,25 @@
+# UART excerpt: CPU 1300 MHz re-entry guard, retry boot (trials/reentry-3bc3-3-retry, 2026-10-31 12:43 JST)
+# Firmware mouseos/uefi-a04br3 3bc3bfbc (A04BR3_TEST_CYCLE=1, A04BR3_CPU_1300=1), payload of UniXNU-a04br3 7d9ad27 (a04br3_pmu_defconfig, cc=1).
+# ArmCpu cycle-clock: PMU cycles over 13002 ticks of the 13 MHz generic timer (1 ms).
+A04BR3 SEC: cpu-1300 before: armpll pcw=9A000 (1001 MHz) vproc ctrl=0003 en=3001 vosel=0050 vosel_on=0050 active=VOSEL_ON 1200 mV
+A04BR3 SEC: cpu-1300 guard cleared (spar0=0000)
+A04BR3 SEC: cpu-1300 after: armpll pll1=800C8000 pcw=C8000 (1300 MHz) vproc VOSEL_ON=0060 1300 mV other=0060 hp_en=00000100 (register values; measure the clock with the PMU)
+[A04BR3 eMMC] mode=hs200 clk=188000000 width=8 cmd=rise:10 map=7FFFFFFF/00000000 data=rise:10 map=FFFFFFFF/00000000 iocon=00000000 pad=002A2A00 pb=403C0046/FFFF0609/540A180F verify=ok
+ArmCpu: cycle-clock-start cpu=1 result=0 irq_before=1 irq_after=1
+ArmCpu: cycle-clock-start cpu=2 result=0 irq_before=1 irq_after=1
+ArmCpu: cycle-clock cpu=2 mpidr=80000002 status=0 cntfrq=13000000 ticks=13002 cycles=1300255
+ArmCpu: cycle-clock-pmu cpu=2 pmcr=410a3000 filter=0 interrupts=0 overflow=0 after=0
+ArmCpu: cycle-clock-window cpu=2 outer=13004 begin=1 end=3
+ArmCpu: cycle-clock-time cpu=2 before=414637246 after=414637247 end_before=414650247 end_after=414650250
+ArmCpu: cycle-clock-source cpu=2 source=1 ctl_before=1 ctl_after=1 cntkctl=3f
+ArmCpu: cycle-clock-start cpu=3 result=0 irq_before=1 irq_after=1
+ArmCpu: cycle-clock cpu=3 mpidr=80000003 status=0 cntfrq=13000000 ticks=13002 cycles=1300074
+ArmCpu: cycle-clock-pmu cpu=3 pmcr=410a3000 filter=0 interrupts=0 overflow=0 after=0
+ArmCpu: cycle-clock-window cpu=3 outer=13004 begin=4 end=0
+ArmCpu: cycle-clock-time cpu=3 before=414650337 after=414650341 end_before=414663341 end_after=414663341
+ArmCpu: cycle-clock-source cpu=3 source=1 ctl_before=1 ctl_after=1 cntkctl=3f
+ArmCpu: cycle-clock cpu=1 mpidr=80000001 status=0 cntfrq=13000000 ticks=13003 cycles=1300409
+ArmCpu: cycle-clock-pmu cpu=1 pmcr=410a3000 filter=0 interrupts=0 overflow=0 after=0
+ArmCpu: cycle-clock-window cpu=1 outer=13006 begin=2 end=4
+ArmCpu: cycle-clock-time cpu=1 before=414624157 after=414624159 end_before=414637159 end_after=414637163
+ArmCpu: cycle-clock-source cpu=1 source=1 ctl_before=1 ctl_after=1 cntkctl=3f
