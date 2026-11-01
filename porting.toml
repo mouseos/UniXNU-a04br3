@@ -10,7 +10,7 @@ summary = "Benesse TAB-A04-BR3 (MediaTek MT8167, 4x Cortex-A35, GIC-400, 2 GiB D
 id = "configuration"
 status = "host-verified"
 components = []
-paths = ["board.toml","configs/**",".gitmodules","unixnu.lock","drivers/**","patches/**"]
+paths = ["board.toml","configs/**",".gitmodules","unixnu.lock","drivers/**","patches/**",".github/**","porting.toml","AGENTS.md",".gitignore"]
 inputs = ["mouseos/UniXNU fork (main), NativeMsdc (mouseos/NativeMsdc) and ArmCpu (mouseos/ArmCpu fork) for MT8167 storage, GICv2 and board integration","iPad7,1 iPadOS 17.7.11 21H461 restore image"]
 configuration = ["board.toml [board] name a04br3, soc MT8167, kit a04br3; [kernel] defconfig a04br3_defconfig; [firmware.defines] A04BR3_TEST_CYCLE, A04BR3_EMMC_HS200, A04BR3_CPU_1300, A04BR3_CHARGER_OWNER, A04BR3_RAMDISK_RECLAIMABLE"]
 procedure = ["macOS workflow of mouseos/UniXNU: device_repository mouseos/UniXNU-a04br3, defconfig a04br3_defconfig, steps kernel userdata payload, pre_build bash \\\"$DEVICE_DIR/scripts/a04br3-pre-build.sh\\\""]
@@ -240,7 +240,7 @@ revision = "6fe0e47dee00d1db9207546932422ec95b5072c9"
 id = "diagnostics"
 status = "device-verified"
 components = []
-paths = ["scripts/run-a04br3-unattended.sh","scripts/a04br3-reset.sh","scripts/a04br3-screenshot.py","scripts/a04br3-home.sh","package/A04BR3AutoReset.cpp"]
+paths = ["docs/evidence/**","scripts/run-a04br3-unattended.sh","scripts/a04br3-reset.sh","scripts/a04br3-screenshot.py","scripts/a04br3-home.sh","package/A04BR3AutoReset.cpp"]
 inputs = ["UART0 (0x11005000) 921600 8N1, PMIC RTC_PDN1 bit 13 (LK fastboot flag), TOPRGU watchdog"]
 configuration = ["Firmware define A04BR3_TEST_CYCLE; kernel arguments a04br3-autoreset=<seconds>, serial=1, a04br3-proclog=60"]
 procedure = ["scripts/run-a04br3-unattended.sh BOOT_IMAGE: fastboot flash boot, reboot, wait for the return to fastboot, keep the UART log of each round; scripts/a04br3-reset.sh sends A04BR3!RST"]
