@@ -84,6 +84,40 @@ class FlashValidationTest(unittest.TestCase):
                         self.assertIn('nonnegative sector-aligned', result.stderr)
                         self.assertFalse((out / 'write.mtk').exists())
 
+    def test_bundle_is_self_contained(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            image = base / 'boot.img'
+            image.write_bytes(boot_fixture())
+            userdata = base / 'userdata-root.img'
+            userdata.write_bytes(b'u' * 4096)
+            out = base / 'package'
+            result = self.run_script('make-a04br3-flash.py', '--boot', image, '--userdata', userdata,
+                                     '--out', out, '--bundle')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = (out / 'write.mtk').read_text().splitlines()
+            # Inputs first, the backup GPT, the primary GPT last, then the reset.
+            self.assertEqual([line.split()[3] for line in lines[:-1]],
+                             ['boot.img', 'userdata-root.img', 'gpt-secondary.bin', 'gpt-primary.bin'])
+            self.assertEqual(lines[-1], 'reset')
+            for line in lines[:-1]:
+                name = line.split()[3]
+                self.assertNotIn('/', name)
+                self.assertEqual(int(line.split()[2], 16), (out / name).stat().st_size)
+            sums = dict(reversed(row.split('  ')) for row in (out / 'SHA256SUMS').read_text().splitlines())
+            self.assertEqual(set(sums), {'boot.img', 'userdata-root.img', 'gpt-secondary.bin', 'gpt-primary.bin',
+                                         'write.mtk', 'flash.json'})
+            for name, digest in sums.items():
+                self.assertEqual(hashlib.sha256((out / name).read_bytes()).hexdigest(), digest)
+            self.assertIn('mtk script write.mtk', (out / 'FLASH.md').read_text())
+            again = self.run_script('make-a04br3-flash.py', '--boot', image, '--out', base / 'other', '--bundle')
+            self.assertEqual(again.returncode, 0, again.stderr)
+            (base / 'third').mkdir()
+            (base / 'third' / 'boot.img').write_bytes(b'stale')
+            refused = self.run_script('make-a04br3-flash.py', '--boot', image, '--out', base / 'third', '--bundle')
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('refuse to overwrite', refused.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

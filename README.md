@@ -143,6 +143,13 @@ layout, the Android partitions `factory`, `metadata`, `system` and `cache` are r
 128 MiB and `userdata` runs from LBA 557056 to the start of `flashinfo`. The bootloader partitions,
 `logo` (the LK splash) and the calibration partitions keep their stock positions.
 
+`scripts/check-a04br3-gpt.py --stock DUMP --markdown TABLE.md` checks this against the stock table of a full eMMC
+user-area dump (for example the CT3 service image `CT3-01.06.000.bin`, 30535680 sectors): both stock GPT copies and their
+CRCs, the same usable range, every kept partition at its stock place with its stock GUID and attributes, only the four
+Android partitions removed, both new copies verified. It reads the two tables only and writes nothing to the dump.
+The old 16 MiB `boot` range (LBA 158720-191487) stays unallocated; the new `boot` takes the place of `factory` and
+`metadata`.
+
 ## eMMC
 
 [NativeMsdc](https://github.com/mouseos/NativeMsdc) (`drivers/NativeMsdc` of the UniXNU base, `CONFIG_XNU_NATIVE_MSDC=y`) drives the eMMC on
@@ -172,7 +179,7 @@ the root authorization query of the verified NativeVirtioBlock for windows whose
 The tablet must be bootloader-unlocked (LK shows "Orange State"); a locked LK refuses the unsigned boot image and
 fastboot writes.
 
-`scripts/make-a04br3-flash.py --boot <out>/a04br3/boot/boot.img --userdata <userdata-root.img> --out DIR` checks the
+`scripts/make-a04br3-flash.py --boot <out>/a04br3/boot/boot.img --userdata <userdata-root.img> --out DIR [--bundle]` checks the
 boot image (`scripts/check-a04br3-bootimg.py`) and writes `DIR/write.mtk`: boot, userdata, both GPT copies, then a
 reset. Run it once with mtkclient (`mtk script DIR/write.mtk`, tablet powered off and connected in BROM/preloader
 mode); paths must not contain spaces. `<out>` is the `--out` of `unixnu bootimg`, the userdata image is the
