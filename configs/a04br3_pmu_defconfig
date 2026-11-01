@@ -55,3 +55,7 @@ CONFIG_XNU_BOARD_LAUNCH=y
 # CONFIG_XNU_NATIVE_MSDC_BLOCK=y adds the userdata windows as block devices, bound to the original IOBlockStorageDevice (board.toml).
 CONFIG_XNU_NATIVE_MSDC=y
 CONFIG_XNU_NATIVE_MSDC_BLOCK=y
+# Low globals 512 MiB lower (UniXNU patches/xnu zzzzz-low-globals-below.patch): the kernel's static region may then start
+# far below the kernel, so DarwinBoot hands XNU all the memory from board.toml [payload.adt] memory_floor (0x52000000)
+# instead of raising the floor to 0x64600000. The kernel records the address in __DATA_CONST,__lowglo_base for DarwinBoot.
+CONFIG_XNU_LOW_GLOBALS_BELOW=y

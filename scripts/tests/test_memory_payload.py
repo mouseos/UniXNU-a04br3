@@ -125,7 +125,7 @@ esac
         assert f'build kernel -D {device} uuid={UUID}' in calls
         assert f'build payload -D {device}' in calls
         payload_call = next(line for line in calls.splitlines() if line.startswith('build payload '))
-        assert 'native-msdc-iostat=1' in payload_call and 'a04br3-membench=1' in payload_call
+        assert 'native-msdc-iostat=1' in payload_call and 'mb=1' in payload_call.split()
         assert 'sheng-fb-gpu=1' in payload_call
         active = (runner/'current').resolve()
         assert active.is_dir()
