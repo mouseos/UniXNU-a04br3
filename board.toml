@@ -310,7 +310,7 @@ owned_memory_size = "0x56600000"
 # static region may start this far below the kernel; with a kernel built without it, DarwinBoot raises the floor above
 # XNU's low globals instead (0x64600000 for the current kernels, trial E2). Not lower than 0x52000000: the DXE heap (UEFI
 # runtime) and the preloader's reserved memory.
-memory_floor = "0x52000000"
+memory_floor = "0x64600000"
 # The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 # All four Cortex-A35 cores (MPIDR Aff0 0..3, boot CPU 0 first). ArmCpu starts the others with PSCI CPU_ON under
