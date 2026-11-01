@@ -164,6 +164,10 @@ A04BR3_CPU_1300 = "1"
 # Charger owner (A04BR3ChargerDxe holds the BQ24160 from firmware and hands it to the kernel): every image verified on
 # hardware tonight was built with it. An official FD without it reset by watchdog while the kernel powered the Rogue GPU.
 A04BR3_CHARGER_OWNER = "1"
+# Payload FAT (0x60000000, 128 MiB) as boot services data: UEFI never allocates it, and after ExitBootServices DarwinBoot
+# hands it and the free DDR below it to XNU ([payload.adt] memory_floor). On hardware (memory-pressure trial E2) XNU managed
+# 1297.6 MiB instead of 1199.8 MiB, with no panic.
+A04BR3_RAMDISK_RECLAIMABLE = "1"
 
 # The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
 # trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
@@ -286,6 +290,10 @@ kernel_args = [
   # iconservicesagent, which is enabled again here: the iOS 16 bring-up of this tablet drew icons without a GPU).
   "sheng-disable-watchdogd=1",
   "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
+  # metal2vulkan pool blocks sized from the memory (NativeMetal NMB_POOL_BLOCK_MIB=auto: 8 MiB at 1344 MiB instead of 64 MiB).
+  # PowerVR buffer objects are wired from creation; on hardware (memory-pressure trial F, ABBA x2) backboardd's BOs went from
+  # 224 to 104 MiB, wired at 12 min from about 655 to 540 MiB and eMMC reads by about 7%, with the same number of BOs made.
+  "m2vp=auto",
 ]
 
 [payload.adt]
@@ -294,10 +302,13 @@ chip_id = "8167"
 # The XNU window (DarwinBoot AllocateWindow, first fit from low addresses): one contiguous run of conventional memory.
 # The matching uefi-a04br3 config loads the FAT at 0x60000000 and reserves through 0x68000000.
 # This preserves DXE Heap (0x4E240000-0x52000000), leaving DDR High 0x68000000-0xBE9C0000.
-# Trial request: 1344 MiB. AllocateWindow adds the kernel VA's low 21 bits (packet10: 0x7C000),
-# giving candidate 0x6807C000 and end 0xBC07C000, below the display reservation. Allocation
-# still checks the actual EFI map; relocation and the larger window need hardware qualification.
-owned_memory_size = "0x54000000"
+# 1382 MiB: the largest 2 MiB aligned request that still ends below the display reservation (0xBE9C0000) with any of the
+# kernel VA's low 21 bits that AllocateWindow adds (current kernels: 0x7C000). Allocation still checks the actual EFI map.
+owned_memory_size = "0x56600000"
+# Below the window, DarwinBoot also hands XNU the memory from this floor when the final EFI map shows it as the OS's (with
+# A04BR3_RAMDISK_RECLAIMABLE the payload FAT is). It raises the floor above XNU's low globals itself (0x64600000 for the
+# current kernels, trial E2). Not lower than 0x52000000: the DXE heap (UEFI runtime) and the preloader's reserved memory.
+memory_floor = "0x52000000"
 # The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 # All four Cortex-A35 cores (MPIDR Aff0 0..3, boot CPU 0 first). ArmCpu starts the others with PSCI CPU_ON under

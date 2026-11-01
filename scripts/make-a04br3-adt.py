@@ -77,6 +77,9 @@ def main():
                         help='Actual observed DRAM size, e.g. 0x230000000')
     parser.add_argument('--owned-memory-size', type=lambda value: int(value, 0), default=None,
                         help='Explicit DarwinBoot contiguous window request, 256 MiB..8 GiB in 2 MiB steps')
+    parser.add_argument('--memory-floor', type=lambda value: int(value, 0), default=None,
+                        help='/chosen/darwinboot-memory-floor (UniXNU [payload.adt] memory_floor): DarwinBoot also hands XNU the '
+                             'memory from here up to the window when the final EFI map shows it as the OS\'s; 0x52000000..0x68000000')
     parser.add_argument('--root-match-volume-uuid', default=None,
                         help='/chosen/root-matching: select the root by the UUID of an IOMedia (the standard source mechanism)')
     parser.add_argument('--unique-chip-id', type=lambda value: int(value, 16), default=None,
@@ -108,6 +111,12 @@ def main():
             not 0x10000000 <= args.owned_memory_size <= 0x200000000
             or args.owned_memory_size % 0x200000):
         parser.error('Owned memory must be 256 MiB to 8 GiB, aligned to 2 MiB')
+    # The floor may not go below 0x52000000: the DXE heap below it holds the UEFI runtime code/data, and lower still lie the
+    # LK DTB, ram_console/pstore/minirdump (read by the preloader across resets), the ATF (secure 0x43000000-0x4302FFFF) and
+    # the UEFI FD. The payload FAT at 0x60000000 is reclaimable only with the uefi-a04br3 A04BR3_RAMDISK_RECLAIMABLE=1 FD;
+    # otherwise DarwinBoot stops at the reserved FAT. DarwinBoot raises the floor above XNU's low globals by itself.
+    if args.memory_floor is not None and (args.memory_floor % 0x200000 or not 0x52000000 <= args.memory_floor < 0x68000000):
+        parser.error('--memory-floor must be 2 MiB aligned in 0x52000000..0x68000000')
 
     try:
         cpu_regs = [int(value, 0) for value in args.cpu_regs.split(',')]
@@ -154,6 +163,8 @@ def main():
                           if (args.data_ramdisk or args.packed_data_ramdisk) and not args.persistent_data else []),
                         *( [('darwinboot-memory-size', struct.pack('<Q', args.owned_memory_size))]
                            if args.owned_memory_size else [] ),
+                        *( [('darwinboot-memory-floor', struct.pack('<Q', args.memory_floor))]
+                           if args.memory_floor is not None else [] ),
                         ('dram-base', struct.pack('<Q', DRAM_BASE)),
                         ('dram-size', struct.pack('<Q', args.dram_size)),
                         # Image4 hash algorithm. The target iPad's DT specifies sha2-384 in /chosen; this

@@ -73,7 +73,7 @@ int main(){
  # Keep the full independent flag matrix with no pool override. Then exercise
  # every accepted pool size both alone and with all flags, including exact 16.
  cases=[(bits,None) for bits in itertools.product((False,True),repeat=len(flags))]
- cases += [(bits,pool) for bits in ((False,)*len(flags),(True,)*len(flags)) for pool in (4,8,16,32,64)]
+ cases += [(bits,pool) for bits in ((False,)*len(flags),(True,)*len(flags)) for pool in (4,8,16,32,64,'auto')]
  cases += [(tuple(flag=='--async-creation' for flag in flags),16)] # async + pool16 + skip-bridge
  cases += [((False,)*len(flags),None)] # stale pool constructor must not be reused
  for bits,pool in cases:
@@ -149,4 +149,4 @@ int main(){
   except SystemExit as error:assert 'requires a NativeMetal frontend' in str(error)
   else:raise AssertionError('old NativeMetal accepted for latency diagnostics')
   build.assert_not_called()
-print('PASS actual Metal command preparation: 512 independent flag combinations; all 5 pool sizes alone/combined, exact pool16 constructor, pool16+async+skip-bridge, default absent/inherited unchanged, stale pool input unused, 10 invalid pool forms rejected before generation/build; OUT cleanup survival, skip-bridge preserved, strict board async gate; no GPU/build execution')
+print('PASS actual Metal command preparation: 512 independent flag combinations; all 5 pool sizes and auto alone/combined, exact pool16 constructor, pool16+async+skip-bridge, default absent/inherited unchanged, stale pool input unused, 10 invalid pool forms rejected before generation/build; OUT cleanup survival, skip-bridge preserved, strict board async gate; no GPU/build execution')

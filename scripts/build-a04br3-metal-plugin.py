@@ -73,8 +73,9 @@ def main():
                         help='opt in to experimental Darwin GE8300 COLOR ROA in this bundle (default off)')
     parser.add_argument('--async-creation', action='store_true',
                         help='opt in to frontend asynchronous creation with separate completion delivery (default off)')
-    parser.add_argument('--pool-block-mib', type=int, choices=(4, 8, 16, 32, 64),
-                        help='opt in to a Metal runtime pool block size in MiB (default: upstream 64)')
+    parser.add_argument('--pool-block-mib', choices=('4', '8', '16', '32', '64', 'auto'),
+                        help='opt in to a Metal runtime pool block size in MiB, or auto (from hw.memsize, NativeMetal frontend) '
+                             '(default: upstream 64; the kernel argument m2vp= selects it at boot instead)')
     args = parser.parse_args()
     if args.runtime_commit_trace and not args.ui_latency:
         parser.error('--runtime-commit-trace requires --ui-latency')

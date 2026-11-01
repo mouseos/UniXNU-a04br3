@@ -453,6 +453,19 @@ blockの半分を超える要求をdedicated allocationにする閾値も下が�
 個々の設定の寄与とUI描画改善は未確認です。
 builder検証は `python3 scripts/tests/check_powervr_metal_diagnostics.py` で実行できます。
 
+既定のboard.tomlは `m2vp=auto` を指定します（NativeMetalの `NMB_POOL_BLOCK_MIB=auto`、1344 MiBの端末では8 MiB）。
+boardの `native_metal_board_prepare` が `kern.bootargs` を読み、UARTに `M2VP set auto=8 mem=1344` のように実際の値を出します。
+不正な値は `M2VP ignored`、sysctlの失敗は `M2VP sysctl errno=N` です。値は4・8・16・32・64・autoで、外すと64 MiBに戻ります。
+builderの `--pool-block-mib` で埋め込んだ値があれば、そちらが優先します。
+実機（ABBA、各2回）では、backboarddのBOが224→104 MiB、12分時点のwiredが約655→540 MiB、eMMC読込みが約7%減り、BOの作成数は変わりませんでした。
+
+XNUへ渡すメモリは、窓 `[payload.adt] owned_memory_size = "0x56600000"` と床 `memory_floor = "0x52000000"` で決まります。
+床はUniXNUの `memory_floor` → `make-a04br3-adt.py --memory-floor` → `/chosen/darwinboot-memory-floor` で渡ります。
+DarwinBootは、最終的なEFIマップでOSのものになっている範囲だけを渡し、XNUのlow globalsより上へ床を自動で引き上げます（いまのカーネルでは0x64600000）。
+payload FAT（0x60000000）を含めるため、`[firmware.defines] A04BR3_RAMDISK_RECLAIMABLE = "1"` が必要です。
+組合せは `scripts/tests/test_ram_layout.py` で照合します（uefi-a04br3のcheckoutを隣に置くか `A04BR3_UEFI` で指定）。
+実機では、XNUの管理メモリが1199.8→1297.6 MiBになりました（試験E2）。
+
 通常pageoutのメモリ圧縮を試す場合は、payload生成へ `--kernel-arg vm_compressor=2` を追加します。
 これは固定XNUソースの `VM_PAGER_COMPRESSOR_NO_SWAP` で、通常のin-core compressorを有効にし、
 active swapを有効にはしません。独自のメモリ管理patchや物理RAMサイズの変更ではありません。

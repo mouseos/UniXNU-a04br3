@@ -13,14 +13,17 @@
 // IOKit is used through dlsym, as the Adreno plugin does (the iPhoneOS SDK has no IOKit headers).
 #import <Foundation/Foundation.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <mach/mach.h>
 #include <mach-o/dyld.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
 #include "NativeMetalBoard.h"
 #include "NativeBridgeMetalFrontend.h"
+#include "NativeMetalPoolSize.h"
 
 extern "C" void native_metal_set_exception_output(void (*output)(const char *));
 
@@ -111,6 +114,51 @@ void noCopyFailure(unsigned sequence,uintptr_t pointer,uint64_t length,uint64_t 
 
 }  // namespace
 
+// Optional metal2vulkan pool block size from the kernel argument m2vp=<4|8|16|32|64|auto> (default absent: no change, the runtime's
+// 64 MiB blocks). PowerVR buffer objects are wired from creation, and the runtime keeps half a block free in each pool it places its
+// own resources in, so the block size sets a floor of wired memory per pool. The value goes to the runtime as NMB_POOL_BLOCK_MIB
+// (drivers/NativeMetal bridge patch 0008). "auto" is resolved here from hw.memsize with the NativeMetal frontend's rule
+// (NativeMetalPoolSize.h), so that the UART line shows the size the runtime gets. An explicit environment value
+// (scripts/build-a04br3-metal-plugin.py --pool-block-mib) takes precedence. Malformed values and a refused sysctl are reported.
+static void poolBlockFromBootArgs() {
+    if (getenv("NMB_POOL_BLOCK_MIB")) return;
+    char args[2048] = {};
+    size_t length = sizeof args - 1;
+    char line[48];
+    if (sysctlbyname("kern.bootargs", args, &length, nullptr, 0) != 0) {
+        snprintf(line, sizeof line, "M2VP sysctl errno=%d", errno);
+        native_metal_board_text(line);
+        return;
+    }
+    args[sizeof args - 1] = 0;
+    for (char *token = args; *token;) {
+        while (*token == ' ') ++token;
+        char *end = token;
+        while (*end && *end != ' ') ++end;
+        if (end - token > 5 && !strncmp(token, "m2vp=", 5)) {
+            const size_t valueLength = (size_t)(end - token - 5);
+            char value[8] = {};
+            if (valueLength < sizeof value) memcpy(value, token + 5, valueLength);
+            const bool valid = !strcmp(value, "4") || !strcmp(value, "8") || !strcmp(value, "16") || !strcmp(value, "32") ||
+                               !strcmp(value, "64") || !strcmp(value, "auto");
+            if (!valid) {
+                native_metal_board_text("M2VP ignored");
+                return;
+            }
+            setenv("NMB_POOL_BLOCK_MIB", value, 1);
+            uint64_t memsize = 0;
+            size_t memsizeLength = sizeof memsize;
+            if (sysctlbyname("hw.memsize", &memsize, &memsizeLength, nullptr, 0) != 0 || memsizeLength != sizeof memsize) memsize = 0;
+            nmb_pool_block_resolve_auto(memsize);   // an explicit size stays as it is
+            snprintf(line, sizeof line, "M2VP set %s=%s mem=%llu", value, getenv("NMB_POOL_BLOCK_MIB"),
+                     (unsigned long long)(memsize >> 20));
+            native_metal_board_text(line);
+            return;
+        }
+        token = end;
+    }
+}
+
 extern "C" void native_metal_board_prepare(unsigned port) {
     static bool prepared;
     if (prepared) return;
@@ -124,6 +172,7 @@ extern "C" void native_metal_board_prepare(unsigned port) {
         if (auto retain = (RetainFn)dlsym(iokit, "IOObjectRetain")) retain(port);
     }
     gIOKit.port = port;
+    poolBlockFromBootArgs();
     const char *asyncCreation=getenv("PVR_METAL_ASYNC_CREATION");
     if(asyncCreation && !strcmp(asyncCreation,"1"))
         native_bridge_metal_set_async_creation(true);
