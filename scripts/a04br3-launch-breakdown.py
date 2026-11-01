@@ -59,7 +59,7 @@ def sym(addr, slide):
 
 KV = re.compile(r'(\w+)=([-\w/.]+)')
 BEGIN = re.compile(r'a04br3 lt begin rx_ns=(\d+) kslide=([0-9a-f]+)')
-LAT = re.compile(r'a04br3 latency: seq=(\d+) kind=tap (ok|timeout) rx_ns=(\d+) hid_ms=([\d.]+) swap_ms=([\d.]+) present_ms=([\d.]+)')
+LAT = re.compile(r'a04br3 latency: seq=(\d+) kind=(?:\w+) (ok|timeout) rx_ns=(\d+) hid_ms=([\d.]+) swap_ms=([\d.]+) present_ms=([\d.]+)')
 TAP = re.compile(r'a04br3 latency: seq=(\d+) tap frames=(\d+) last_ms=([\d.]+) times_ms=([\d,]*)')
 UIL = re.compile(r'UIL p(\d+) e(\d+) i(\d+) t([0-9a-f]+)')
 TH = re.compile(r'a04br3 lt th t_us=(-?\d+) p(\d+) t(\d+) s=([0-9a-f]+) pri=(-?\d+) cpu_us=(\d+) e=([0-9a-f]+) c=([0-9a-f]+) u=([0-9a-f]+) k=([0-9a-f]+)/([0-9a-f]+)/([0-9a-f]+)')
