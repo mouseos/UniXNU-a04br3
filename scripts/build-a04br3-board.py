@@ -211,7 +211,7 @@ objects.append(compile_one(c_record, KIT / 'powervr' / 'kernel' / 'pvr_device_in
 # UniXNU-tb128fu's process pass (BootProcessProbe.c) needs the Mach-private task and thread layout: the osfmk record, as
 # tb128fu's build-boot-progress.py compiles it. Its rows go to UART through a04br3-proclog (A04BR3Board.cpp).
 osfmk_record = record('osfmk/DEVELOPMENT/startup.o.json')
-for name in ('BootProcessProbe.c', 'BootUiTraceProbe.c'):
+for name in ('BootProcessProbe.c', 'BootUiTraceProbe.c', 'A04BR3BootLog.c'):
     objects.append(compile_one(osfmk_record, KIT / name, C_FLAGS))
 # processor.h exposes processor layout and processor_cpu_load_info only to
 # MACH_KERNEL_PRIVATE. Use the kernel's osfmk compilation record (not the

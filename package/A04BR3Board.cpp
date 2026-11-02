@@ -483,8 +483,10 @@ static void a04br3_cpu_load_init(void)
 
 #include "A04BR3EarlyCopy.h"
 
+extern "C" void a04br3_bootlog_start(void); // A04BR3BootLog.c, opt-in a04br3-bootlog=1
 extern "C" void unixnu_board_init(void)
 {
+  a04br3_bootlog_start(); // persistent boot log writer (waits for the NativeMsdc window)
   a04br3_cpu_load_init();
   a04br3_autoreset_init();
   a04br3_early_copy_probe(); // opt-in, bounded; before root mount and launchd
