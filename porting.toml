@@ -292,11 +292,11 @@ revision = "f66e9799f06bd0ba0e7128afec960905aa7508bc"
 id = "diagnostics"
 status = "device-verified"
 components = []
-paths = ["docs/evidence/**","scripts/run-a04br3-unattended.sh","scripts/a04br3-reset.sh","scripts/a04br3-screenshot.py","scripts/a04br3-home.sh","package/A04BR3AutoReset.cpp","package/BootProcessProbe.c"]
+paths = ["docs/evidence/**","scripts/run-a04br3-unattended.sh","scripts/a04br3-reset.sh","scripts/a04br3-screenshot.py","scripts/a04br3-home.sh","package/A04BR3AutoReset.cpp","package/BootProcessProbe.c","scripts/read-a04br3-log.py","package/A04BR3BootLog.c"]
 inputs = ["UART0 (0x11005000) 921600 8N1, PMIC RTC_PDN1 bit 13 (LK fastboot flag), TOPRGU watchdog"]
 configuration = ["Firmware define A04BR3_TEST_CYCLE; kernel arguments a04br3-autoreset=<seconds>, serial=1, a04br3-proclog=60"]
 procedure = ["scripts/run-a04br3-unattended.sh BOOT_IMAGE: fastboot flash boot, reboot, wait for the return to fastboot, keep the UART log of each round; scripts/a04br3-reset.sh sends A04BR3!RST"]
-findings = ["Format 2: BootProcessProbe.c carries a weak native_irq_pc_hook_compiled default so the kernel links without the optional IRQ PC patch.","Every reset (UART request, timer, watchdog or panic) returns to LK fastboot, so images are written without mtkclient or touching the tablet."]
+findings = ["Persistent boot log (UniXNU log-capture guide): native-msdc-log=1 opens the last 8 MiB of userdata (LBA 30485504..30501887, NativeMsdc a04br3/boot-log), package/A04BR3BootLog.c keeps the last 4 boots in 8 slots, the uefi-a04br3 reader (A04BR3_LOG_READER) prints the newest verified slot on UART at the next boot and scripts/read-a04br3-log.py decodes it. Host-tested (scripts/tests/test_bootlog.py); hardware trial pending.","Format 2: BootProcessProbe.c carries a weak native_irq_pc_hook_compiled default so the kernel links without the optional IRQ PC patch.","Every reset (UART request, timer, watchdog or panic) returns to LK fastboot, so images are written without mtkclient or touching the tablet."]
 completion = ["Each round leaves its UART log and returns to fastboot."]
 limits = ["No persistent storage log region or QR firmware log; UART is the log transport."]
 next_action = ["Add a storage log region and reader following the log capture guide."]
