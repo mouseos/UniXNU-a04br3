@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject a prelinked kernel containing the first-pass PMGR/display stubs."""
+"""Reject a prelinked kernel containing the first-pass PMGR, display, presenter or HID stubs."""
 import argparse
 import shutil
 import subprocess
@@ -12,6 +12,9 @@ REQUIRED = {
     '__ZTV18ShengPlatformPower',
     '_sheng_original_pmgr_nub_create',
     '_native_legacy_display_probe',
+    # Only the real builds globalise these late initializers (build-a04br3-legacy-display.py, build-sheng-hid-input.py).
+    '__GLOBAL__sub_I_NativeGOPPresenter.cpp',
+    '__GLOBAL__sub_I_NativeHidInput.cpp',
 }
 
 

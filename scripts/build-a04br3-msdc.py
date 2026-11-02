@@ -31,10 +31,10 @@ block_devices = os.environ.get('XNU_NATIVE_MSDC_BLOCK') == '1'
 if args.verified_root and not block_devices:
     parser.error('--verified-root needs the window block devices (CONFIG_XNU_NATIVE_MSDC_BLOCK=y)')
 # The driver is not a catalog component, so the build tree does not link it: it is read from the device checkout that
-# "unixnu build kernel" passes as UNIXNU_DEVICE (drivers/NativeMsdc, a submodule), or from NATIVE_MSDC_DIR.
-if not os.environ.get('NATIVE_MSDC_DIR') and not os.environ.get('UNIXNU_DEVICE'):
-    raise SystemExit('Run from "unixnu build kernel" (UNIXNU_DEVICE) or set NATIVE_MSDC_DIR')
-source = Path(os.environ.get('NATIVE_MSDC_DIR') or Path(os.environ['UNIXNU_DEVICE']) / 'drivers/NativeMsdc') / 'NativeMsdc.cpp'
+# "unixnu build kernel" passes as UNIXNU_DEVICE (drivers/NativeMsdc, a submodule).
+if not os.environ.get('UNIXNU_DEVICE'):
+    raise SystemExit('Run from "unixnu build kernel" (UNIXNU_DEVICE names the device checkout)')
+source = Path(os.environ['UNIXNU_DEVICE']).resolve() / 'drivers/NativeMsdc/NativeMsdc.cpp'
 if not source.is_file():
     raise SystemExit(f'{source} missing: run "git submodule update --init drivers/NativeMsdc" in the device repository')
 out = ROOT / 'build/native-msdc'

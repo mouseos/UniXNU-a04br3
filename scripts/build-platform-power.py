@@ -36,7 +36,8 @@ def require(value, message):
         raise SystemExit(message)
 
 
-reference = ROOT.parent / 'kernel/kernel.macho'
+# The final pass reads the saved first-pass kernel that unixnu build kernel names (source_reference_bootstrap).
+reference = (Path(os.environ['UNIXNU_SOURCE_REFERENCE_KERNEL']) if os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')=='final' and os.environ.get('UNIXNU_SOURCE_REFERENCE_KERNEL') else ROOT.parent / 'kernel/kernel.macho')
 reference_pass = os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')
 require(reference_pass in ('bootstrap', 'final'),
         'PMGR requires the source-reference-aware UniXNU kernel build driver')

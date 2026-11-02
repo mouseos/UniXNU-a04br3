@@ -47,7 +47,8 @@ def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 FAMILY='com.apple.iokit.IOMobileGraphicsFamily'
 KIT=ROOT/'kits/a04br3'
 archive=OUT/'libNativeLegacyDisplay.late.a'
-board_kernel=ROOT.parent/'kernel/kernel.macho'
+# The final pass reads the saved first-pass kernel that unixnu build kernel names (source_reference_bootstrap).
+board_kernel=(Path(os.environ['UNIXNU_SOURCE_REFERENCE_KERNEL']) if os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')=='final' and os.environ.get('UNIXNU_SOURCE_REFERENCE_KERNEL') else ROOT.parent/'kernel/kernel.macho')
 
 def first_pass_stub(reason):
     stub=OUT/'FirstPassStub.c'
@@ -301,10 +302,11 @@ input_source=KIT/'A04BR3Input.cpp';input_obj=OUT/'A04BR3Input.o';compile_like_pr
 # The HID input is not a selected catalog component here (its catalog recipe pulls in the sheng touch and SPI drivers), so
 # the build tree does not link drivers/ShengHidInput: link the device's pinned submodule (UNIXNU_DEVICE) for the builder.
 hid_tree=ROOT/'drivers/ShengHidInput'
-if not hid_tree.exists():
+if hid_tree.is_symlink() or not hid_tree.exists():
     require(os.environ.get('UNIXNU_DEVICE'),'Run from "unixnu build kernel" (UNIXNU_DEVICE names the device checkout)')
-    hid_checkout=Path(os.environ['UNIXNU_DEVICE'])/'drivers/ShengHidInput'
+    hid_checkout=(Path(os.environ['UNIXNU_DEVICE'])/'drivers/ShengHidInput').resolve()
     require((hid_checkout/'NativeHidInput.cpp').is_file(),f'{hid_checkout} missing: git submodule update --init drivers/ShengHidInput')
+    if hid_tree.is_symlink():hid_tree.unlink()
     hid_tree.symlink_to(hid_checkout)
 print(run(['python3',ROOT/'scripts/build-sheng-hid-input.py'],text=True),end='')
 hid_dir=ROOT/'build/sheng-hid-input'
