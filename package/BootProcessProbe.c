@@ -305,9 +305,12 @@ static uint64_t home_irq_contended, home_irq_epoch, home_irq_epoch_overflow, hom
 static uint64_t home_irq_report_skipped;
 static unsigned home_irq_table_lock;
 int proc_getpid(proc_t);
-extern int native_irq_pc_hook_compiled(void) __attribute__((weak_import));
+/* The IRQ PC hook belongs to the optional XNU diagnostic patch (zz-p31-irq-pc-stats of the mouseos/UniXNU fork). The
+   kernel link is static and refuses an undefined weak import, so the board carries a weak default: a kernel with the
+   patch overrides it with its strong definition, any other kernel reports the hook as absent. */
+__attribute__((weak)) int native_irq_pc_hook_compiled(void) { return 0; }
 unsigned boot_home_irq_hook_available(void) {
- return native_irq_pc_hook_compiled ? (unsigned)native_irq_pc_hook_compiled() : 0u;
+ return (unsigned)native_irq_pc_hook_compiled();
 }
 void boot_home_irq_init(unsigned pid) {
  __atomic_store_n(&home_irq_pid,pid,__ATOMIC_RELEASE);
