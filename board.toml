@@ -119,6 +119,9 @@ packages = [
   "{uefi}/Silicium-ACPI",
 ]
 
+# The device tree the stock LK passes on, staged into the build tree for the boot image (pinned by SHA-256 in the script).
+preflight = ["scripts/stage-a04br3-boot-dtb.py"]
+
 [firmware.defines]
 DEVICE_MODEL = "a04br3"
 BUILDID_STRING = "a04br3-bringup"
@@ -142,6 +145,9 @@ A04BR3_RAMDISK_RECLAIMABLE = "1"
 
 # The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
 # trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
+[bootimg]
+dtb = "build/a04br3-boot/a04br3.dtb"
+
 [payload]
 # The OS profile's dyld cache and audio text fixups were never part of a hardware-verified a04br3 image; keep them off
 # until a separate trial (format 2 stage 2 review P1-6).
