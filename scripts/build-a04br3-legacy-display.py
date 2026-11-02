@@ -6,7 +6,7 @@ UniXNU-sheng's). The checks of the original IOMobileFramebufferLegacy class and 
 (the block from "audit=" to the late object). a04br3 differs in its inputs and in what the archive carries:
 
   - The reference candidate is this board's previous prelinked kernel (out/a04br3/kernel/kernel.macho and its .json), staged as
-    build/native-prelink/native-owner-ufs-cpu-desktop-a04br3-candidate.macho. UniXNU scripts/audit-mobile-graphics-legacy.py and
+    build/xnu-prelink/native-owner-ufs-cpu-desktop-a04br3-candidate.macho. UniXNU scripts/audit-mobile-graphics-legacy.py and
     scripts/build-native-hid-input.py take such a candidate when theirs are pruned: it is built from the same original
     kernelcache, so it carries the same original IOMobileGraphicsFamily and IOHIDFamily, and both scripts check their
     instruction hashes. Nothing of UniXNU-qemu's tree is read, so a new tree (the macOS workflow) builds it.
@@ -38,7 +38,7 @@ import struct
 import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/native-legacy-display';OUT.mkdir(parents=True,exist_ok=True)
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset,exports
 def run(cmd,**kw):return subprocess.check_output([str(x) for x in cmd],timeout=90,**kw)
 def require(v,why):
@@ -80,7 +80,7 @@ if not any(e['module']==FAMILY for e in board_plan.get('extents',[])):
     first_pass_stub(f'the previous kernel was prelinked without {FAMILY} ([kernel.prelink] roots)')
 
 # The reference candidate: this board's previous kernel, under the name the audit and the HID builder look for.
-reference=ROOT/'build/native-prelink/native-owner-ufs-cpu-desktop-a04br3-candidate.macho'
+reference=ROOT/'build/xnu-prelink/native-owner-ufs-cpu-desktop-a04br3-candidate.macho'
 reference.parent.mkdir(parents=True,exist_ok=True)
 shutil.copyfile(board_kernel,reference);shutil.copyfile(board_kernel.with_suffix('.json'),reference.with_suffix('.json'))
 # The recorded hash of the QEMU observation, for the audit's path without gdb-stop.json.
@@ -187,9 +187,9 @@ for segment in image['segments']:
 compiled=[relocations.get(vtable+16+i*8) for i in range(358)]
 require(all(compiled) and vtable+16+358*8 not in relocations,'Exact owned 358-entry vtable')
 candidate=(board_kernel if os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')=='final'
-           else ROOT/'build/native-prelink/native-owner-mobile-graphics-candidate.macho')
+           else ROOT/'build/xnu-prelink/native-owner-mobile-graphics-candidate.macho')
 if not candidate.exists() and os.environ.get('UNIXNU_SOURCE_REFERENCE_PASS')!='final':  # pruned: same fallback as scripts/audit-mobile-graphics-legacy.py (identical original family executable)
-    later=sorted((ROOT/'build/native-prelink').glob('native-owner-ufs-cpu-desktop-*-candidate.macho'),key=lambda f:f.stat().st_mtime)
+    later=sorted((ROOT/'build/xnu-prelink').glob('native-owner-ufs-cpu-desktop-*-candidate.macho'),key=lambda f:f.stat().st_mtime)
     require(later,'No reference candidate available');candidate=later[-1]
 old=candidate.read_bytes();old_image=macho(old)
 names={n:v for v,group in exports(old,old_image).items() for n in group}
@@ -298,8 +298,16 @@ touch_source=KIT/'TouchState.cpp';touch_obj=OUT/'TouchState.o';compile_like_prob
 # The board's touch panel and keys (package/A04BR3Input.cpp, a04br3-input=1), from the iOS 16 bring-up of this tablet.
 input_source=KIT/'A04BR3Input.cpp';input_obj=OUT/'A04BR3Input.o';compile_like_probe(input_source,input_obj)
 # NativeHidInput against the original IOHIDDevice (UniXNU scripts/build-native-hid-input.py), with the staged candidate.
-print(run(['python3',ROOT/'scripts/build-native-hid-input.py'],text=True),end='')
-hid_dir=ROOT/'build/native-hid-input'
+# The HID input is not a selected catalog component here (its catalog recipe pulls in the sheng touch and SPI drivers), so
+# the build tree does not link drivers/ShengHidInput: link the device's pinned submodule (UNIXNU_DEVICE) for the builder.
+hid_tree=ROOT/'drivers/ShengHidInput'
+if not hid_tree.exists():
+    require(os.environ.get('UNIXNU_DEVICE'),'Run from "unixnu build kernel" (UNIXNU_DEVICE names the device checkout)')
+    hid_checkout=Path(os.environ['UNIXNU_DEVICE'])/'drivers/ShengHidInput'
+    require((hid_checkout/'NativeHidInput.cpp').is_file(),f'{hid_checkout} missing: git submodule update --init drivers/ShengHidInput')
+    hid_tree.symlink_to(hid_checkout)
+print(run(['python3',ROOT/'scripts/build-sheng-hid-input.py'],text=True),end='')
+hid_dir=ROOT/'build/sheng-hid-input'
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeGOPPresenter'],text=True),end='')
 gop=ROOT/'build/native-gop-presenter';gop_late=gop/'NativeGOPPresenter.late.o'
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_NativeGOPPresenter.cpp',
@@ -339,9 +347,9 @@ for name in unresolved:print('WARNING: the display archive needs '+name+', defin
 print(f'Static link check: {len(own_defined)} definitions, none also in the board archive; {len(own_undefined)} imports, '
       f'{len(unresolved)} unresolved; weak imports {sorted(own_weak_imports)}')
 
-sources=[ROOT/'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp',ROOT/'drivers/NativeMobileDisplay/NativeLegacyRequest.h',source,
-         hid_source,touch_source,ROOT/'drivers/NativeHidInput/NativeHidInput.cpp',ROOT/'scripts/build-native-hid-input.py',
-         ROOT/'drivers/NativeMobileDisplay/NativeGOPPresenter.cpp',ROOT/'drivers/NativeMobileDisplay/NativeGOPWire.h',
+sources=[ROOT/'drivers/GopFramebuffer/NativeLegacyDisplay.cpp',ROOT/'drivers/GopFramebuffer/NativeLegacyRequest.h',source,
+         hid_source,touch_source,ROOT/'drivers/ShengHidInput/NativeHidInput.cpp',ROOT/'scripts/build-sheng-hid-input.py',
+         ROOT/'drivers/GopFramebuffer/NativeGOPPresenter.cpp',ROOT/'drivers/GopFramebuffer/NativeGOPWire.h',
          ROOT/'scripts/audit-mobile-graphics-legacy.py',ROOT/'scripts/build-a04br3-legacy-display.py']
 (OUT/'build-report.json').write_text(json.dumps(dict(
     source_sha256={str(p.relative_to(ROOT)):sha(p) for p in sources},generated_abi_sha256=sha(OUT/'OriginalLegacyFramebufferABI.h'),

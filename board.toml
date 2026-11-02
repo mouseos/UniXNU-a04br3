@@ -24,13 +24,16 @@ windows = [
 ]
 
 [kernel]
+# The original-ABI audits (legacy display, HID input) run against this configuration's own first-pass kernel
+# (UniXNU source_reference_bootstrap), checked by the board validator.
+source_reference_bootstrap = true
+candidate_validator = "scripts/validate-a04br3-kernel.py"
 defconfig = "a04br3_defconfig"
 # ARM64, MT8167 and iPadOS fragments, then configs/a04br3_defconfig (applied last).
 config_fragments = ["arch:configs/common.config", "soc:configs/mt8167.config", "os:configs/ipados.config"]
 patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
-# The complete archive plan (arrays replace the inherited plan). Catalog recipes as component:<ID>; the MSDC driver, the
-# verified block bindings, the root key, the board package, the PowerVR accelerator, the platform power bridge and the
-# legacy display are board builders in scripts/ of this repository.
+# The complete archive plan (arrays replace the inherited plan): catalog recipes as component:<ID>, UniXNU scripts, and the
+# board builders of scripts/ (root key, MSDC driver, board package, platform power bridge, legacy display with the HID input).
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
@@ -38,17 +41,21 @@ archives = [
   "component:ArmCpu",
   "component:SoftwareAES",
   "build-software-aes-bindings.py",
+  "component:VirtioMmioBlock",
+  # The root image windows are verified against the owner-signed policy (VerifiedRoot) by the verified block variant.
   "build-arm-driver.py VirtioMmioBlock --verified-root",
   "build-virtio-mmio-bindings.py --component VirtioMmioBlock --directory build/virtio-mmio-block-verified",
   "build-a04br3-root-key.py",
   "component:RamBlock",
   "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block",
+  # NativeMsdc (MT8167 MSDC eMMC, drivers/NativeMsdc): a community driver outside the catalog, built by this repository.
   "build-a04br3-msdc.py --verified-root",
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",
   "component:AppleKeyStoreState",
   "build-a04br3-board.py",
-  "build-a04br3-accelerator.py",
+  # The PowerVR GE8300 accelerator (package/powervr/NativePowerVRAccelerator.cpp), staged into the board archive.
+  "build-adreno740-accelerator.py --source kits/a04br3/powervr/NativePowerVRAccelerator.cpp --into build/a04br3-board/libA04BR3Board.a",
   "build-platform-power.py",
   "build-a04br3-legacy-display.py",
 ]
@@ -172,7 +179,7 @@ kernel_args = [
   "sheng-pmgr=2",
   # Compact process/display heartbeat every 60 s. Full UI stacks require the
   # explicit a04br3-stacklog=1 diagnostic argument (package/A04BR3Board.cpp).
-  # Start the secondary CPUs listed in [payload.adt] cpu_regs (ArmCpu, PSCI CPU_ON), as on UniXNU-tb128fu. On one core the
+  # Start the secondary CPUs of the device tree (dts/a04br3.dts /cpus; ArmCpu, PSCI CPU_ON), as on UniXNU-tb128fu. On one core the
   # first-boot LaunchServices database build in lsd did not finish within 45 minutes and SpringBoard waits on it.
   "sheng-smp=1",
   "a04br3-proclog=60",
@@ -272,8 +279,11 @@ source = "device:dts/a04br3.dts"
 include_dirs = ["soc:dts"]
 
 [components]
+# ArmCpu, DarwinBoot and GopFramebuffer come from drivers/ of this repository (mouseos forks, pinned submodules). The HID
+# input (drivers/ShengHidInput, mouseos fork with the physical Home button) is built by build-a04br3-legacy-display.py with
+# the board touch panel instead of the catalog recipe, whose sheng touch and SPI dependencies this board does not have.
 include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot", "VirtioMmioBlock", "RamBlock",
-           "AppleKeyStoreState", "GopFramebuffer", "ShengHidInput", "VerifiedRoot"]
+           "AppleKeyStoreState", "GopFramebuffer", "VerifiedRoot"]
 
 # Board ADT additions to the OS profile and the generated hardware nodes.
 [adt.chosen.u64]

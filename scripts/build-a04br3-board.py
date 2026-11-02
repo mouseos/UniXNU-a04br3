@@ -75,7 +75,7 @@ def check_object(path):
 
 
 def text_section(path):
-    sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
+    sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
     from native_prelink import macho
     data = path.read_bytes()
     section = next(s for g in macho(data)['segments'] for s in g['sections'] if s['name'] == '__text')
@@ -222,9 +222,9 @@ if not any(arg == '-DMACH_KERNEL_PRIVATE' or arg.startswith('-DMACH_KERNEL_PRIVA
     cpu_load_flags += ['-DMACH_KERNEL_PRIVATE=1']
 objects.append(compile_one(osfmk_record, KIT / 'A04BR3CpuLoad.c', cpu_load_flags))
 
-events = ROOT / 'build/native-keystore-events/NativeKeyStoreEvents.o'
+events = ROOT / 'build/apple-key-store-state/NativeKeyStoreEvents.o'
 if not events.is_file():
-    raise SystemExit(f'Missing {events}: board.toml must run "build-arm-driver.py NativeKeyStoreEvents" before this script')
+    raise SystemExit(f'Missing {events}: board.toml must run component:AppleKeyStoreState before this script')
 events_late = out / 'NativeKeyStoreEvents.late.o'
 subprocess.run([llvm_objcopy(), '--remove-section=__DATA,__mod_init_func',
                 '--globalize-symbol=__GLOBAL__sub_I_NativeKeyStoreEvents.cpp', str(events), str(events_late)], check=True)
