@@ -59,8 +59,10 @@ if not reference.is_file():
 # The contract audit reads the original kernelcache from .cache/firmware; take it from the IPSW cache of the driver.
 original = ROOT / '.cache/firmware/kernelcache.macho/kernelcache.release.ipad7.decompressed'
 if not original.exists():
-    cached = [path for path in ROOT.parents[1].glob('ipsw/*/kernelcache.decompressed')
-              if hashlib.sha256(path.read_bytes()).hexdigest() == ORIGINAL_KERNELCACHE_SHA256]
+    # The IPSW cache is out/ipsw/<build>/ of the driver: out/<device>/tree (format 1) or
+    # out/<device>/<os_profile>/<config>/tree (format 2) below it.
+    cached = [path for parent in ROOT.parents for path in parent.glob('ipsw/*/kernelcache.decompressed')
+              if hashlib.sha256(path.read_bytes()).hexdigest() == ORIGINAL_KERNELCACHE_SHA256][:1]
     require(cached, 'The original kernelcache is not in the IPSW cache; run "unixnu ipsw fetch"')
     original.parent.mkdir(parents=True, exist_ok=True)
     original.symlink_to(cached[0])
