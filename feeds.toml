@@ -3,4 +3,4 @@
 kind = "soc"
 name = "mt8167"
 git = "https://github.com/mouseos/UniXNU-mt8167-common.git"
-commit = "d8c1d66b2a6ad9b11922d238d8bc1d5f376efb2a"
+commit = "e92874dda3676f65b4c4ee83b4305466ad3547aa"

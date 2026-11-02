@@ -1,6 +1,2 @@
-# Board-carried copies of the mouseos/UniXNU patches that upstream does not have yet (each is default-off and is
-# proposed upstream; see port records). Remove an entry when its upstream pull request is merged.
-native-ns16550-serial.patch
-native-board-init-hook.patch
-native-msdc-personality.patch
-zz-native-board-launch-hook.patch
+# Board patch paths, one per line in application order. None: the NS16550 console and the board hooks are UniXNU pull
+# requests (upstream/ns16550-console, upstream/board-hooks), the MSDC personality is in UniXNU-mt8167-common.
