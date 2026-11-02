@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Persistent boot log of the a04br3 board (UniXNU log-capture guide, "persistent logs"), opt-in: a04br3-bootlog=1.
+// Persistent boot log of the a04br3 board (UniXNU log-capture guide, "persistent logs"), opt-in: native-msdc-log=1 (one
+// kernel argument for the NativeMsdc window and this writer; the command line is near its 1000-byte limit).
 //
 // Writer side. The NativeMsdc boot log window (native-msdc-log=1, the last blocks of userdata; NativeMsdc.h logWindow) receives
 // the kernel message buffer, linearised oldest first, every A04BR3_BOOTLOG_PERIOD seconds and once the window opens. Data
@@ -113,7 +114,7 @@ static void a04br3_bootlog_thread(void *arg __unused, wait_result_t wr __unused)
 void a04br3_bootlog_start(void)
 {
 	unsigned enabled = 0;
-	if (!PE_parse_boot_argn("a04br3-bootlog", &enabled, sizeof(enabled)) || enabled != 1) return;
+	if (!PE_parse_boot_argn("native-msdc-log", &enabled, sizeof(enabled)) || enabled != 1) return;
 	clock_sec_t seconds = 0;
 	clock_usec_t micros = 0;
 	clock_get_calendar_microtime(&seconds, &micros);

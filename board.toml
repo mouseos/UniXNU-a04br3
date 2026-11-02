@@ -142,6 +142,9 @@ A04BR3_CHARGER_OWNER = "1"
 # hands it and the free DDR below it to XNU ([payload.adt] memory_floor). On hardware (memory-pressure trial E2) XNU managed
 # 1297.6 MiB instead of 1199.8 MiB, with no panic.
 A04BR3_RAMDISK_RECLAIMABLE = "1"
+# Persistent boot log reader (uefi-a04br3 A04BR3BootLogReaderDxe): prints the previous kernel's boot log window on UART at
+# ReadyToBoot; scripts/read-a04br3-log.py decodes it. Read-only.
+A04BR3_LOG_READER = "1"
 
 # The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
 # trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
@@ -184,6 +187,9 @@ kernel_args = [
   # Descriptor DMA for eMMC reads (NativeMsdc), enabled only after it reads the same bytes as PIO. PIO kept launchd's
   # first children about 5 minutes away.
   "native-msdc-dma=1",
+  # Persistent boot log (UniXNU log-capture guide): NativeMsdc opens the last 8 MiB of userdata and package/A04BR3BootLog.c
+  # writes the kernel message buffer there every 60 s; the firmware reader (A04BR3_LOG_READER) prints it on the next boot.
+  "native-msdc-log=1",
   # Publish the original PMGR nub through the bridge (build-platform-power.py); it reads and writes no hardware.
   "sheng-pmgr=2",
   # Compact process/display heartbeat every 60 s. Full UI stacks require the
