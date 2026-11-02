@@ -59,3 +59,7 @@ CONFIG_XNU_NATIVE_MSDC_BLOCK=y
 # The Data seed of this installation (scripts/package.sh --data-ramdisk FILE; SHA-256 1013af98..., the seed of every
 # a04br3 hardware run since 2026-10-30). Its APFS volume UUID binds the owner Data mount.
 CONFIG_XNU_OWNER_DATA_VOLUME_UUID="CBB0DD3D-2FAC-4AC9-9C16-1D0F7D15CE36"
+# Low globals 512 MiB lower (UniXNU zzzzz-low-globals-below.patch): the kernel's static region may then start far below the
+# kernel, so DarwinBoot (023daa9) hands XNU all the memory from /chosen/darwinboot-memory-floor (0x52000000, board.toml
+# [adt.chosen.u64]) instead of raising the floor to 0x64600000. On hardware XNU managed 1734.5 MiB instead of 1440.5 MiB.
+CONFIG_XNU_LOW_GLOBALS_BELOW=y

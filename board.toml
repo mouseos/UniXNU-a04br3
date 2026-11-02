@@ -287,7 +287,8 @@ include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot",
 
 # Board ADT additions to the OS profile and the generated hardware nodes.
 [adt.chosen.u64]
-# DarwinBoot keeps XNU's window above this floor (the DXE heap with the UEFI runtime lies below 0x52000000).
+# DarwinBoot (drivers/DarwinBoot 023daa9) also hands XNU the memory from this floor up to its window; with
+# CONFIG_XNU_LOW_GLOBALS_BELOW the floor stays here. Not lower: the DXE heap (UEFI runtime) and the preloader reservations.
 darwinboot-memory-floor = 0x52000000
 
 [adt.chosen.bytes]
