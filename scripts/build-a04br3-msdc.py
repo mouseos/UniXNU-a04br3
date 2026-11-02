@@ -80,6 +80,21 @@ if block_devices:
     # Binds NativeMsdcBlock to the original IOBlockStorageDevice and writes libNativeMsdc.a with the bindings.
     subprocess.run([sys.executable, str(ROOT / 'scripts/build-virtio-mmio-bindings.py'), '--object', 'NativeMsdc',
                     '--block-class', 'NativeMsdcBlock', '--directory', str(out)], check=True)
+    # The verified VirtioMmioBlock archive (CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE) already defines the original storage
+    # aliases; a second definition would be a duplicate symbol. Link only the object, and only when every import of the
+    # window classes has the value the linked aliases have.
+    linked = ROOT / 'build/virtio-mmio-block-verified/bindings.json'
+    if os.environ.get('XNU_NATIVE_VIRTIO_BLOCK') == '1':
+        if not linked.is_file():
+            raise SystemExit(f'{linked} missing: the VirtioMmioBlock bindings run before this script (board.toml archives)')
+        mine = json.loads((out / 'bindings.json').read_text())['bindings']
+        theirs = json.loads(linked.read_text())['bindings']
+        differing = sorted(name for name, value in mine.items() if theirs.get(name) != value)
+        if differing:
+            raise SystemExit('NativeMsdc imports differ from the linked storage aliases: ' + ', '.join(differing))
+        (out / 'libNativeMsdc.a').unlink(missing_ok=True)
+        subprocess.run(['xcrun', 'ar', 'rcs', out / 'libNativeMsdc.a', destination], check=True)
+        print(f'NativeMsdc: {len(mine)} original storage imports resolved by the VirtioMmioBlock aliases')
 else:
     subprocess.run(['xcrun', 'ar', 'rcs', out / 'libNativeMsdc.a', destination], check=True)
 print(f'NativeMsdc: -Werror build and {TRIPLE} object audit passed')
