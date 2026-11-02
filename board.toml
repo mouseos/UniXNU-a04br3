@@ -290,8 +290,13 @@ kernel_args = [
   # and its exit is fatal. The jobs are tb128fu's set without a GPU: the SpringBoard wait cycle (identityservicesd,
   # locationd), radios (CommCenter, bluetoothd) and the respawn/crash loops (PerfPowerServices, iomfb_fdr_loader,
   # iconservicesagent, which is enabled again here: the iOS 16 bring-up of this tablet drew icons without a GPU).
+  # bluetoothd stays enabled: a disabled job is not loaded, so its services are unknown to launchd. On iPadOS 17
+  # audiomxd's Bluetooth audio HAL plugin then looks up com.apple.BTAudioHALPlugin.xpc, is disconnected and reconnects
+  # several hundred times a second, and launchd spends about one core on these failing endpoint lookups for the whole
+  # uptime (each one resolves the mobile user and reads /etc/group again; port/gsi/logs/ios-feasibility/
+  # launchd-spin-20261031.md). Loaded, the service accepts the lookup; launchd drops from about 5000 syscalls/s to 60-460.
   "sheng-disable-watchdogd=1",
-  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
   # metal2vulkan pool blocks sized from the memory (NativeMetal NMB_POOL_BLOCK_MIB=auto: 8 MiB at 1344 MiB instead of 64 MiB).
   # PowerVR buffer objects are wired from creation; on hardware (memory-pressure trial F, ABBA x2) backboardd's BOs went from
   # 224 to 104 MiB, wired at 12 min from about 655 to 540 MiB and eMMC reads by about 7%, with the same number of BOs made.
