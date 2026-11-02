@@ -43,6 +43,9 @@ def main():
     parser.add_argument('--unixnu-dir', type=Path, default=Path.cwd(), help='UniXNU checkout (default: working directory)')
     parser.add_argument('--kernel-arg', action='append', default=[], help='Explicit boot argument; overrides board default (repeatable)')
     parser.add_argument('--omit-kernel-arg', action='append', default=[], help='Omit a board default by name (repeatable)')
+    parser.add_argument('--metal-clients', default='iconservicesagent',
+                        help='processes besides backboardd with their own Metal device, written to the addon '
+                             '(comma separated; default matches a04br3-pre-build.sh)')
     args = parser.parse_args(sys.argv[2:])
     base = args.unixnu_dir.resolve()
     out = args.out.resolve()
@@ -101,7 +104,8 @@ def main():
     subprocess.run([sys.executable, str(device / 'scripts/make-a04br3-gpu-addon.py'),
                     '--probe-dir', str(args.probe_dir.resolve()), '--metal-plugin', str(args.metal_plugin.resolve()),
                     '--trust-base', str(args.trust_base), '--board', str(device / 'board.toml'),
-                    '--trust-out', str(trust), '--out', str(addon)], check=True, cwd=base)
+                    '--trust-out', str(trust), '--out', str(addon),
+                    '--metal-clients', args.metal_clients], check=True, cwd=base)
     command = [str(base / 'unixnu'), 'build', 'payload', '-D', str(device),
                '--kernel', str(args.kernel), '--owner-trust-cache', str(trust),
                '--gpu-addon', str(addon), '--data-ramdisk', str(args.prepared_data),

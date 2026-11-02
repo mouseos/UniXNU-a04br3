@@ -201,6 +201,7 @@ if [ "${A04BR3_POWERVR_PROBE:-0}" = 1 ]; then
   fi
   METAL_TRUST=()
   METAL_SEED=()
+  METAL_CLIENTS=
   if [ "${A04BR3_POWERVR_METAL:-0}" = 1 ]; then
     # The pinned translator (UniXNU scripts/data/gpu-metal-vulkan-inputs.json) where build-native-metal-bridge.py reads it.
     M2V=$TREE/.cache/gpu-reference/metal2vulkan

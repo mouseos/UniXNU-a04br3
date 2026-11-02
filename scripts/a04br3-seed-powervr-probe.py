@@ -100,7 +100,8 @@ def main():
     parser.add_argument('output', type=Path, nargs='?')
     args = parser.parse_args()
     clients = [c for c in (args.metal_clients or '').split(',') if c]
-    if any(not all(ch.isalnum() or ch in '._-*' for ch in c) for c in clients):
+    # Same rule as a04br3-gpu-addon-clients.py, so the seed and the addon accept the same list.
+    if any(len(c) > 32 or not all(ch.isalnum() or ch in '._-' for ch in c) for c in clients):
         sys.exit('--metal-clients takes process names separated by commas')
     if (clients or args.metal_mode != 'selftest') and not args.metal_plugin:
         sys.exit('--metal-mode and --metal-clients go with --metal-plugin')

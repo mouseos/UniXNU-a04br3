@@ -409,6 +409,8 @@ bash device/scripts/a04br3-build-gpu-update.sh \
 
 boot 引数は現在の `board.toml` を既定とし、必要なら公式 CLI と同じ
 `--kernel-arg=NAME=VALUE`・`--omit-kernel-arg NAME` を繰り返し指定します。
+addon の `NativePowerVRMetal.clients` は `--metal-clients`（既定 `iconservicesagent`、pre-build と同じ）で指定します。
+addon の展開は既存ファイルを消さないため、空にしても Data にある以前の一覧は残ります。
 旧 payload の引数は FAT 内 `EFI/UniXNU/unixnu.toml` で確認できます。
 `payload.json` は FAT に埋め込まれていないため、紛失した report の再作成や指定は要求しません。
 helper は Data を読み取り専用で mount して実 UUID を照合し、addon/trust の生成と公式
