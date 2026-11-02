@@ -100,10 +100,26 @@ def main():
             errors.append(f'{name}: not in the stock table')
     if 'logo' not in ours:
         errors.append('logo must be kept')
+    # The persistent boot log window (NativeMsdc.h logWindow, package/A04BR3BootLog.c, uefi-a04br3 A04BR3BootLogReaderDxe):
+    # the last 8 MiB of userdata, inside the Data store reserve (native-msdc-reserve, default 1 GiB). The writer refuses a
+    # userdata size that is not a whole number of 4 KiB blocks.
+    log_window = None
+    userdata = ours.get('userdata')
+    if userdata is None:
+        errors.append('userdata missing')
+    else:
+        log_sectors, reserve_sectors = 8 * 2048, 1024 * 2048
+        last = userdata['first_lba'] + userdata['sectors'] - 1
+        if userdata['sectors'] % 8:
+            errors.append('userdata is not a whole number of 4 KiB blocks (boot log window)')
+        if userdata['sectors'] <= reserve_sectors + log_sectors:
+            errors.append('userdata too small for the store reserve and the boot log window')
+        log_window = (last + 1 - log_sectors, last)
     used = sorted((p['first_lba'], p['first_lba'] + p['sectors'] - 1, p['name']) for p in layout['partitions'])
     gaps = [(a[1] + 1, b[0] - 1) for a, b in zip(used, used[1:]) if b[0] > a[1] + 1]
     report = {'stock': {k: v for k, v in stock.items() if k != 'partitions'}, 'rows': rows, 'errors': errors,
-              'a04br3': {'secondary_byte_offset': backup_offset, 'unallocated_ranges_lba': gaps}}
+              'a04br3': {'secondary_byte_offset': backup_offset, 'unallocated_ranges_lba': gaps,
+                         'boot_log_window_lba': log_window}}
     if args.json:
         args.json.write_text(json.dumps(report, indent=2) + '\n')
     if args.markdown:
@@ -118,6 +134,7 @@ def main():
         print(f"{r['name']:10} {r['state']:14} stock {r['stock_first_lba']:>9}+{r['stock_sectors']:<9} a04br3 "
               f"{r['a04br3_first_lba'] if r['a04br3_first_lba'] is not None else '-':>9}+{r['a04br3_sectors'] or '-'}")
     print('unallocated LBA ranges:', gaps)
+    print('boot log window LBA (last 8 MiB of userdata):', log_window)
     if errors:
         raise SystemExit('FAIL: ' + '; '.join(errors))
     print('PASS: a04br3 GPT matches the stock table except the documented changes; both copies verified')
