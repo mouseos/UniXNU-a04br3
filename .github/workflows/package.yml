@@ -1,10 +1,12 @@
 name: package
 
-# The example's copy of the packaging action (docs/porting/packaging.md). Replace the
-# firmware repository below with this board's; the device name appears in the artifact
-# paths. The platform seed comes from the repository secret UNIXNU_UNIQUE_CHIP_ID and is
-# baked into the images, so the run's artifacts belong to one device alone: download
-# them, then delete the run. Run it in a fork of the device repository.
+# The packaging action of this device (UniXNU docs/porting/packaging.md): scripts/package.sh on the pinned UniXNU tree and
+# the pinned uefi-a04br3 firmware checkout. The platform seed comes from the repository secret UNIXNU_UNIQUE_CHIP_ID and is
+# baked into the images, so the run's artifacts belong to one device alone: download them, then delete the run.
+#
+# An existing installation keeps its Data seed, GPU addon and owner trust bundle (packaging guide: --data-ramdisk,
+# --gpu-addon, --owner-trust-cache). Their URLs are inputs, each with a required SHA-256; the kernel binds the Data volume
+# UUID of configs/a04br3_defconfig (CONFIG_XNU_OWNER_DATA_VOLUME_UUID).
 
 on:
   workflow_dispatch:
@@ -14,6 +16,24 @@ on:
         type: choice
         options: ["17"]
         default: "17"
+      data_seed_url:
+        description: "Packed APFS Data seed of the installation (masked in the logs)"
+        required: true
+      data_seed_sha256:
+        description: "Required SHA-256 of the Data seed"
+        required: true
+      gpu_addon_url:
+        description: "GPU addon of the installation (masked in the logs)"
+        required: true
+      gpu_addon_sha256:
+        description: "Required SHA-256 of the GPU addon"
+        required: true
+      owner_trust_cache_url:
+        description: "Owner trust bundle that matches the GPU addon (masked in the logs)"
+        required: true
+      owner_trust_cache_sha256:
+        description: "Required SHA-256 of the owner trust bundle"
+        required: true
 
 permissions:
   contents: read
@@ -25,7 +45,7 @@ concurrency:
 jobs:
   package:
     runs-on: macos-26
-    timeout-minutes: 180
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,18 +53,24 @@ jobs:
           submodules: recursive
       - uses: actions/checkout@v4
         with:
-          repository: UniXNU/UniXNU
+          # UniXNU main with the a04br3 pull requests (format2/integration); replace with UniXNU/UniXNU once they are merged.
+          repository: mouseos/UniXNU
+          ref: 25a4567bb9584b536304a325bcf8c8c72be9bae9
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
         with:
           repository: mouseos/uefi-a04br3   # this board's firmware checkout
+          ref: 215b0635bb90b800b977d6bcc2c821c11e7f2088
           path: uefi-a04br3
           submodules: recursive   # the firmware volume builds from the checkout's submodules
+      - name: Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app
+          xcodebuild -version
       - name: tools
         run: |
           brew install dtc llvm lld cmake mtools blacktop/tap/ipsw
-          # Fail fast, naming the tool, before forty minutes of build.
           ok=1
           for t in clang xcodebuild make git ninja cmake dtc fdtget fdtput aea compression_tool \
                    mformat mcopy ipsw; do
@@ -58,16 +84,36 @@ jobs:
         env:
           seed: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
         run: |
-          if ! [[ "$seed" =~ ^[0-9a-fA-F]{8}$ ]]; then
-            echo 'Set the repository secret UNIXNU_UNIQUE_CHIP_ID: the platform seed of the device, 8 hex digits.' >&2
+          if ! [[ "$seed" =~ ^[0-9a-fA-F]{8,16}$ ]]; then
+            echo 'Set the repository secret UNIXNU_UNIQUE_CHIP_ID: the platform seed of the device (hex).' >&2
             exit 1
           fi
+      - name: installation inputs
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, urllib.request
+          inputs = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())['inputs']
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / 'installation'
+          out.mkdir(parents=True, exist_ok=True)
+          for name, file in (('data_seed', 'data.dbr'), ('gpu_addon', 'kernel.macho.gpuaddon'),
+                             ('owner_trust_cache', 'kernel.macho.trustcache')):
+              url, digest = inputs[name + '_url'], inputs[name + '_sha256'].strip().lower()
+              print(f'::add-mask::{url}')
+              data = urllib.request.urlopen(url, timeout=600).read()
+              if hashlib.sha256(data).hexdigest() != digest:
+                  raise SystemExit(f'{name}: SHA-256 differs from the input')
+              (out / file).write_bytes(data)
+              print(f'{name}: {len(data)} bytes, sha256 {digest}')
+          PY
       - name: package
         working-directory: device
         env:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: scripts/package.sh --os "${{ inputs.os }}" --uefi ../uefi-a04br3
+        run: |
+          I="$RUNNER_TEMP/installation"
+          scripts/package.sh --os "${{ inputs.os }}" --uefi ../uefi-a04br3 \
+            --data-ramdisk "$I/data.dbr" --gpu-addon "$I/kernel.macho.gpuaddon" --owner-trust-cache "$I/kernel.macho.trustcache"
       - name: images
         uses: actions/upload-artifact@v4
         with:
@@ -79,3 +125,4 @@ jobs:
             UniXNU/out/a04br3/*/*/payload/payload.img
             UniXNU/out/a04br3/*/*/kernel/kernel.macho
             UniXNU/out/a04br3/*/*/package.manifest.json
+
