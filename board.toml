@@ -272,8 +272,13 @@ kernel_args = [
   # and its exit is fatal. The jobs are tb128fu's set without a GPU: the SpringBoard wait cycle (identityservicesd,
   # locationd), radios (CommCenter, bluetoothd) and the respawn/crash loops (PerfPowerServices, iomfb_fdr_loader,
   # iconservicesagent, which is enabled again here: the iOS 16 bring-up of this tablet drew icons without a GPU).
+  # bluetoothd stays enabled: a disabled job is not loaded, so its services are unknown to launchd. On iPadOS 17
+  # audiomxd's Bluetooth audio HAL plugin then looks up com.apple.BTAudioHALPlugin.xpc, is disconnected and reconnects
+  # several hundred times a second, and launchd spends about one core on these failing endpoint lookups (each one
+  # resolves the mobile user and reads /etc/group again), delaying every other request it serves, app launches included
+  # (port/gsi/logs/ios-feasibility/launchd-spin-20261031.md). Loaded but not running, the service accepts the lookup.
   "sheng-disable-watchdogd=1",
-  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
 ]
 
 [payload.adt]
