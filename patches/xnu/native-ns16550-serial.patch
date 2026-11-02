@@ -1,0 +1,150 @@
+From: yuma shimizu <46545607+mouseos@users.noreply.github.com>
+Subject: [PATCH] native-ns16550-serial: 16550 serial console for non-Apple boards
+
+Adds a polled 16550-compatible console to pe_serial, built only with
+XNU_NS16550_UART=1 (CONFIG_XNU_NS16550_UART=y). It is selected by the arm-io
+child "uart0" whose compatible list holds "ns16550a"; reg-shift and
+reg-io-width describe the register layout. The firmware keeps the clock and
+divisor. Boards without the flag build the unchanged pe_serial.
+
+--- a/pexpert/pexpert/arm/protos.h
++++ b/pexpert/pexpert/arm/protos.h
+@@ -47,7 +47,8 @@
+ 	SERIAL_DOCKCHANNEL=0x2,
+ 	SERIAL_PI3_UART=0x4,
+ 	SERIAL_VMAPPLE_UART=0x8,
+-	SERIAL_DCC_UART=0x10
++	SERIAL_DCC_UART=0x10,
++	SERIAL_NS16550_UART=0x20
+ } serial_device_t;
+ 
+ kern_return_t serial_irq_enable(serial_device_t device);
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -632,6 +632,97 @@
+ 
+ /*****************************************************************************/
+ 
++#if defined(XNU_NS16550_UART) && XNU_NS16550_UART
++/*
++ * 16550-compatible UART left initialized by the firmware (clock, divisor, line
++ * settings), polled. Selected from the device tree: the arm-io child named
++ * "uart0" with "ns16550a" in its compatible list; "reg-shift" (default 0)
++ * gives the register spacing and "reg-io-width" 4 selects 32-bit accesses.
++ */
++static vm_offset_t ns16550_base_vaddr;
++static uint32_t ns16550_shift;
++static bool ns16550_io32;
++
++static uint32_t
++ns16550_read(unsigned int reg)
++{
++	vm_offset_t address = ns16550_base_vaddr + ((vm_offset_t)reg << ns16550_shift);
++	return ns16550_io32 ? *(volatile uint32_t *)address : *(volatile uint8_t *)address;
++}
++
++static void
++ns16550_write(unsigned int reg, uint32_t value)
++{
++	vm_offset_t address = ns16550_base_vaddr + ((vm_offset_t)reg << ns16550_shift);
++	if (ns16550_io32) {
++		*(volatile uint32_t *)address = value;
++	} else {
++		*(volatile uint8_t *)address = (uint8_t)value;
++	}
++}
++
++static unsigned int
++ns16550_tr0(void)
++{
++	return (ns16550_read(5) & 0x20) != 0;   /* LSR.THRE */
++}
++
++static void
++ns16550_td0(uint8_t c)
++{
++	ns16550_write(0, c);                    /* THR */
++}
++
++static unsigned int
++ns16550_rr0(void)
++{
++	return (ns16550_read(5) & 0x01) != 0;   /* LSR.DR */
++}
++
++static uint8_t
++ns16550_rd0(void)
++{
++	return (uint8_t)ns16550_read(0);        /* RBR */
++}
++
++static void
++ns16550_init(void)
++{
++	/* The firmware owns the clock and the divisor; keep them. Interrupts off. */
++	ns16550_write(1, 0);                    /* IER */
++}
++
++SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) ns16550_serial_functions =
++{
++	.init = ns16550_init,
++	.transmit_ready = ns16550_tr0,
++	.transmit_data = ns16550_td0,
++	.receive_ready = ns16550_rr0,
++	.receive_data = ns16550_rd0,
++	.device = SERIAL_NS16550_UART
++};
++
++static bool
++ns16550_compatible(DTEntry entry)
++{
++	char const *compatible = NULL;
++	unsigned int size = 0;
++	if (SecureDTGetProperty(entry, "compatible", (void const **)&compatible, &size) != kSuccess || compatible == NULL) {
++		return false;
++	}
++	for (unsigned int at = 0; at < size;) {
++		size_t length = strnlen(compatible + at, size - at);
++		if (length == strlen("ns16550a") && strncmp(compatible + at, "ns16550a", length) == 0) {
++			return true;
++		}
++		at += (unsigned int)length + 1;
++	}
++	return false;
++}
++#endif /* XNU_NS16550_UART */
++
++/*****************************************************************************/
++
+ #ifdef VMAPPLE_UART
+ 
+ static vm_offset_t vmapple_uart0_base_vaddr = 0;
+@@ -828,6 +921,28 @@
+ 
+ 	PE_parse_boot_argn("disable-uart-irq", &disable_uart_irq, sizeof(disable_uart_irq));
+ 
++#if defined(XNU_NS16550_UART) && XNU_NS16550_UART
++	if (SecureDTFindEntry("name", "uart0", &entryP) == kSuccess && ns16550_compatible(entryP) &&
++	    SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size) == kSuccess &&
++	    prop_size == 2 * sizeof(uintptr_t)) {
++		prop_value = NULL;
++		if (SecureDTGetProperty(entryP, "reg-shift", (void const **)&prop_value, &prop_size) == kSuccess &&
++		    prop_size == sizeof(uint32_t) && *prop_value <= 2) {
++			ns16550_shift = *prop_value;
++		}
++		prop_value = NULL;
++		if (SecureDTGetProperty(entryP, "reg-io-width", (void const **)&prop_value, &prop_size) == kSuccess &&
++		    prop_size == sizeof(uint32_t)) {
++			ns16550_io32 = *prop_value == 4;
++		}
++		prop_value = NULL;
++		ns16550_base_vaddr = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
++		if (ns16550_base_vaddr != 0) {
++			register_serial_functions(&ns16550_serial_functions);
++		}
++	}
++#endif /* XNU_NS16550_UART */
++
+ #ifdef PI3_UART
+ 	if (SecureDTFindEntry("name", "gpio", &entryP) == kSuccess) {
+ 		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);

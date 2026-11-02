@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+/dts-v1/;
+/include/ "mt8167.dtsi"
+
+/ {
+    model = "Benesse TAB-A04-BR3";
+    compatible = "benesse,a04br3", "mediatek,mt8167";
+
+    // 2 GiB of DRAM at 0x40000000 (MT8167 EMI, the memory node of the stock LK).
+    memory@40000000 {
+        device_type = "memory";
+        reg = <0 0x40000000 0 0x80000000>;
+    };
+
+    reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        ranges;
+        // The LK frame buffer (800x1280, 32 bpp, stride 3200) that the GOP and NativeLegacyDisplay present into.
+        framebuffer@be9c0000 {
+            reg = <0 0xbe9c0000 0 0x3e8000>;
+            no-map;
+        };
+    };
+};
+
+// UART0 at 921600 8N1 carries the console and the unattended test cycle (A04BR3!RST, !SHOT, !HOME).
+&uart0 { status = "okay"; };
+// MSDC0: the eMMC with the boot, userdata and the root windows (NativeMsdc).
+&mmc0 { status = "okay"; };

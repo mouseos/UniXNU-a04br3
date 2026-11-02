@@ -1,3 +1,5 @@
+schema_version = 2
+
 # Board description of the Benesse TAB-A04-BR3 (a04br3, MediaTek MT8167), read by the unixnu build driver.
 # Hardware values come from the earlier a04br3 ports by the same maintainer, which ran on this tablet:
 #   github.com/mouseos/xnu_kernel_benesse_a04br3, github.com/mouseos/xnu_bootshim_benesse_a04br3 (XNU on MT8167)
@@ -8,27 +10,10 @@ name = "a04br3"
 soc = "MT8167"
 description = "Benesse TAB-A04-BR3"
 kit = "a04br3"                     # the package/ of this repository appears as kits/a04br3 in the build tree
-# OS profile name of the format 2 catalog (porting.toml identity); this format 1 board selects the IPSW below directly.
+soc_source = "mt8167"              # feeds.toml [[source]] kind = "soc": UniXNU-mt8167-common
+# iPadOS 17.7.11 (21H461) for iPad7,1: IPSW, prelink inputs and the OS ADT come from this profile of UniXNU.
 os_profile = "ipados-17.7.11-21H461"
 
-# The target OS image: the unchanged iPad7,1 iPadOS 17.7.11 restore image, the UniXNU default target (Darwin 23,
-# matching the xnu-10063 source kernel). Give --ipsw PATH to use a local file.
-[ipsw]
-url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
-product = "iPad7,1"
-version = "17.7.11"
-build = "21H461"
-device_class = "j120ap"
-chip_id = 0x8011
-board_id = 12
-fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
-
-[ipsw.sha256]
-"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
-"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
-
-# The eMMC (MSDC0) uses 512-byte sectors. The userdata entry of the a04br3 GPT in scripts/make-a04br3-gpt.py:
-# the Android-only partitions (factory, metadata, system, cache) are removed and userdata runs to flashinfo.
 [userdata]
 first_lba = 557056
 last_lba = 30501887
@@ -39,61 +24,38 @@ windows = [
 ]
 
 [kernel]
-# The reference is produced from this source configuration on the first pass.
-source_reference_bootstrap = true
-candidate_validator = "scripts/validate-a04br3-kernel.py"
 defconfig = "a04br3_defconfig"
+# ARM64, MT8167 and iPadOS fragments, then configs/a04br3_defconfig (applied last).
+config_fragments = ["arch:configs/common.config", "soc:configs/mt8167.config", "os:configs/ipados.config"]
+patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
+# The complete archive plan (arrays replace the inherited plan). Catalog recipes as component:<ID>; the MSDC driver, the
+# verified block bindings, the root key, the board package, the PowerVR accelerator, the platform power bridge and the
+# legacy display are board builders in scripts/ of this repository.
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
-  "build-arm-driver.py ArmDTPlatform",
-  "build-arm-driver.py ArmCpu",
-  "build-arm-driver.py NativeAES",
-  "build-native-aes-bindings.py",
-  # NativeRamBlock (the Data RAM disk) and the NativeMsdc userdata windows (CONFIG_XNU_NATIVE_MSDC_BLOCK=y) subclass the original
-  # IOBlockStorageDevice. build-native-virtio-bindings.py binds them with build/storage-abi/interface-audit.json when present,
-  # otherwise with UniXNU scripts/data/native-storage-interface-audit.json (scripts/record-storage-interface.py), the static record
-  # of the kernelcache and slide of [kernel.prelink] below.
-  # Owner root chain (CONFIG_XNU_OWNER_ROOT_TRUST): iPadOS mounts the root only when it is authenticated. The verified
-  # NativeVirtioBlock carries native_verified_block_root_authorized(), which asks NativeMsdc about its windows; NativeMsdc
-  # verifies every block against the owner-signed envelopes in userdata (scripts/make-a04br3-root-policy.py); the root key
-  # archive carries the owner anchor, VerifiedRoot and the anchor self-test (CONFIG_XNU_VERIFIED_ROOT_ARCHIVE).
-  "build-arm-driver.py NativeVirtioBlock --verified-root",
-  "build-native-virtio-bindings.py --component NativeVirtioBlock --directory build/native-virtio-block-verified",
+  "component:ArmDTPlatform",
+  "component:ArmCpu",
+  "component:SoftwareAES",
+  "build-software-aes-bindings.py",
+  "build-arm-driver.py VirtioMmioBlock --verified-root",
+  "build-virtio-mmio-bindings.py --component VirtioMmioBlock --directory build/virtio-mmio-block-verified",
   "build-a04br3-root-key.py",
-  "build-arm-driver.py NativeRamBlock",
-  "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
-  # NativeMsdc: the eMMC (MSDC0) driver. Without CONFIG_XNU_NATIVE_MSDC_BLOCK it builds the persistent store only.
-  "build-arm-driver.py NativeMsdc --verified-root",
-  "build-native-virtio-bindings.py --component NativeMsdc --block-class NativeMsdcBlock --directory build/native-msdc",
+  "component:RamBlock",
+  "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block",
+  "build-a04br3-msdc.py --verified-root",
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",
-  # The AppleKeyStore stand-in of UniXNU (drivers/NativeKeyStoreEvents); build-a04br3-board.py stages it into the board
-  # archive with KeyStoreProbe.cpp (offline-key-events=1, sheng-aks=1).
-  "build-arm-driver.py NativeKeyStoreEvents",
+  "component:AppleKeyStoreState",
   "build-a04br3-board.py",
-  # The PowerVR accelerator for the original Metal discovery (package/powervr/NativePowerVRAccelerator.cpp): a subclass of the
-  # original IOAcceleratorES of IOGPUFamily, so its static initializer is staged (UniXNU build-native-adreno-accelerator.py with
-  # --source) and added to the board archive, where package/powervr/NativePowerVRMetal.cpp runs it after loading IOGPUFamily
-  # (kernel argument a04br3-gpu-metal=1). Without that argument the class is linked and never registered.
-  "build-native-adreno-accelerator.py --source kits/a04br3/powervr/NativePowerVRAccelerator.cpp --into build/a04br3-board/libA04BR3Board.a",
-  # The original-PMGR bridge (CONFIG_XNU_SHENG_PMGR, kernel argument sheng-pmgr=2): AMFI requires a published PMGR
-  # ("AMFI: No PMGR?" without it). Generic and hardware-free; from UniXNU-tb128fu/UniXNU-sheng.
+  "build-a04br3-accelerator.py",
   "build-platform-power.py",
-  # The display (CONFIG_XNU_NATIVE_LEGACY_DISPLAY): NativeLegacyDisplay, a subclass of the original IOMobileFramebufferLegacy, on
-  # the firmware frame buffer (uefi-a04br3's GOP, 800x1280, 32 bpp), QuartzCore's CPU renderer and the HID input with a Home
-  # button, as on UniXNU-tb128fu without its touch, GPU and RPM parts. It checks the original classes against this board's
-  # previous kernel (out/a04br3/kernel); without one it links no-op probes, like build-platform-power.py. After
-  # build-a04br3-board.py: it refuses symbols that the board archive also defines (the key store stand-in is there).
   "build-a04br3-legacy-display.py",
 ]
 
 [kernel.prelink]
-tool = "kits/NativePrelink/emit_prelink.py"
-kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
-kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
-slide = "-0x1000000"
-early_security_init = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
+# The OS profile supplies the prelink tool, kernel, kernelcache hash, slide and security init. The roots replace the
+# profile list: no AppleARMWatchdogTimer and no AppleEffaceableStorage on this board.
 roots = [
   # UniXNU-tb128fu's set (the same as UniXNU-sheng's) without com.apple.driver.AppleARMWatchdogTimer (no watchdog backend:
   # watchdogd is disabled below) and com.apple.driver.AppleEffaceableStorage (not needed by the display; the boot reached
@@ -299,24 +261,54 @@ kernel_args = [
 ]
 
 [payload.adt]
-tool = "scripts/make-a04br3-adt.py"
 chip_id = "8167"
-# The XNU window (DarwinBoot AllocateWindow, first fit from low addresses): one contiguous run of conventional memory.
-# The matching uefi-a04br3 config loads the FAT at 0x60000000 and reserves through 0x68000000.
-# This preserves DXE Heap (0x4E240000-0x52000000), leaving DDR High 0x68000000-0xBE9C0000.
-# 1382 MiB: the largest 2 MiB aligned request that still ends below the display reservation (0xBE9C0000) with any of the
-# kernel VA's low 21 bits that AllocateWindow adds (current kernels: 0x7C000). Allocation still checks the actual EFI map.
 owned_memory_size = "0x56600000"
-# Below the window, DarwinBoot also hands XNU the memory from this floor when the final EFI map shows it as the OS's (with
-# A04BR3_RAMDISK_RECLAIMABLE the payload FAT is). It raises the floor above XNU's low globals itself (0x64600000 for the
-# current kernels, trial E2). Not lower than 0x52000000: the DXE heap (UEFI runtime) and the preloader's reserved memory.
-memory_floor = "0x52000000"
-# The volume UUID of the OS window: the unchanged 21H461 OS disk image, the same value as UniXNU-sheng.
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
-# All four Cortex-A35 cores (MPIDR Aff0 0..3, boot CPU 0 first). ArmCpu starts the others with PSCI CPU_ON under
-# sheng-smp=1 (GICv2 path, CONFIG_XNU_ARMCPU_GICV2), as tb128fu does with its eight; "0" keeps the boot CPU only.
-cpu_regs = "0,1,2,3"
-psci_method = "smc"
 packed_data_ramdisk = true
-ipad_identity = true
 unique_chip_id = "required"          # the platform seed is not stored in any repository
+
+[device_tree]
+source = "device:dts/a04br3.dts"
+include_dirs = ["soc:dts"]
+
+[components]
+include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot", "VirtioMmioBlock", "RamBlock",
+           "AppleKeyStoreState", "GopFramebuffer", "ShengHidInput", "VerifiedRoot"]
+
+# Board ADT additions to the OS profile and the generated hardware nodes.
+[adt.chosen.u64]
+# DarwinBoot keeps XNU's window above this floor (the DXE heap with the UEFI runtime lies below 0x52000000).
+darwinboot-memory-floor = 0x52000000
+
+[adt.chosen.bytes]
+# Inline charger owner record (128 zero bytes): only the opt-in firmware charger owner seals it at ExitBootServices.
+a04br3-charger-owner = "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+[adt.defaults.u32]
+# CONFIG_VNODES=1024 clips desiredvnodes; XNU reads this before it clips: memory/64K + 1024 for 2 GiB.
+"kern.maxvnodes" = 33792
+sleep-disabled = 1
+
+[adt.product.string]
+model = "benesse,a04br3"
+
+[adt.product.u32]
+thin-bezel = 1
+
+[adt.buttons.string]
+compatible = "buttons"
+device_type = "buttons"
+
+[adt.buttons.strings]
+button-names = ["hold", "voldown", "volup"]
+
+[adt.buttons.u32]
+home-button-type = 2
+
+# Packaging (scripts/package.sh, the fixed template of UniXNU): the UniXNU checkout beside this repository.
+[package]
+unixnu = "../UniXNU"
+boot_partition_bytes = 134217728     # the 128 MiB boot partition of scripts/a04br3-gpt.json
+
+[package.defconfig]
+"ipados-17.7.11-21H461" = "a04br3_defconfig"

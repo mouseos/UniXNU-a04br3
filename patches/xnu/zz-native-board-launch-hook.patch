@@ -1,0 +1,31 @@
+From: yuma shimizu <46545607+mouseos@users.noreply.github.com>
+Subject: [PATCH] zz-native-board-launch-hook: optional board hook before launchd
+
+With XNU_BOARD_LAUNCH=1 (CONFIG_XNU_BOARD_LAUNCH=y) load_init_program calls unixnu_board_launch(p, scratch), which
+a device repository supplies in its board archive (XNU_EXTRA_LD_ARCHIVES), right before the default init programs
+(launchd) are executed, after the root, SystemOS and Data mounts. The scratch page is the user page load_init_program
+already maps for init's arguments. A nonzero result stops the boot. Boards without the flag build the unchanged
+function. The hook sits away from the hunks of the owner mount, AIR init and boot progress patches, so each of them
+still reverses and applies cleanly in the incremental passes of build-xnu-4k-baseline.sh.
+
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7470,6 +7470,18 @@
+ 	}
+ #endif
+ 
++#if defined(XNU_BOARD_LAUNCH) && XNU_BOARD_LAUNCH
++	/*
++	 * Board hook: a device repository links an archive (XNU_EXTRA_LD_ARCHIVES) that defines unixnu_board_launch().
++	 * It runs once, as init (pid 1) before launchd, with the root and the owner volumes mounted.
++	 */
++	{
++		extern int unixnu_board_launch(void *process, uint64_t scratch);
++		int board_error = unixnu_board_launch(p, (uint64_t)scratch_addr);
++		if (board_error) panic("board launch hook failed: %d", board_error);
++	}
++#endif
++
+ 	error = ENOENT;
+ 	for (i = 0; i < sizeof(init_programs) / sizeof(init_programs[0]); i++) {
+ 		printf("load_init_program: attempting to load %s\n", init_programs[i]);

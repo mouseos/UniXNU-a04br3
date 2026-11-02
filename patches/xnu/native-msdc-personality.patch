@@ -1,0 +1,17 @@
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -56,6 +56,13 @@
+     "     'IOProviderClass' = IOPlatformExpertDevice;"
+     "     'IOProbeScore'    = 0:32;"
+     "   },"
++#if defined(XNU_NATIVE_MSDC) && XNU_NATIVE_MSDC
++    "   {"
++    "     'IOClass'         = NativeMsdc;"
++    "     'IOProviderClass' = IOPlatformDevice;"
++    "     'IOProbeScore'    = 1000:32;"
++    "   },"
++#endif
+     "   {"
+     "     'IOClass'         = IOExclaveProxy;"
+     "     'IOProviderClass' = IOService;"
